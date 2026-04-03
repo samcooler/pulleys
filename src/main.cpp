@@ -23,7 +23,7 @@ void setup() {
 void loop() {
   for (int i = 0; i < RGB_COUNT; i++) {
     pixels.clear();
-    pixels.setPixelColor(i, pixels.Color(255, 0, 0));
+    pixels.setPixelColor(i, pixels.Color(0, 50, 0));
     pixels.show();
     Serial.printf("LED %d\n", i);
     delay(200);
