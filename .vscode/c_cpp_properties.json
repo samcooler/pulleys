@@ -10,6 +10,7 @@
             "includePath": [
                 "/home/sam/Documents/projects_git/pulleys/include",
                 "/home/sam/Documents/projects_git/pulleys/src",
+                "/home/sam/Documents/projects_git/pulleys/.pio/libdeps/esp32s3fh4r2/NimBLE-Arduino/src",
                 "/home/sam/Documents/projects_git/pulleys/.pio/libdeps/esp32s3fh4r2/Adafruit NeoPixel",
                 "/home/sam/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/newlib/platform_include",
                 "/home/sam/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/freertos/include",
@@ -250,6 +251,7 @@
                 "path": [
                     "/home/sam/Documents/projects_git/pulleys/include",
                     "/home/sam/Documents/projects_git/pulleys/src",
+                    "/home/sam/Documents/projects_git/pulleys/.pio/libdeps/esp32s3fh4r2/NimBLE-Arduino/src",
                     "/home/sam/Documents/projects_git/pulleys/.pio/libdeps/esp32s3fh4r2/Adafruit NeoPixel",
                     "/home/sam/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/newlib/platform_include",
                     "/home/sam/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/freertos/include",
@@ -493,6 +495,7 @@
                 "ARDUINO_EVENT_RUNNING_CORE=1",
                 "ARDUINO_USB_MODE=1",
                 "ARDUINO_USB_CDC_ON_BOOT=1",
+                "BOARD_HAS_PSRAM",
                 "HAVE_CONFIG_H",
                 "MBEDTLS_CONFIG_FILE=\"mbedtls/esp_config.h\"",
                 "UNITY_INCLUDE_CONFIG_H",
