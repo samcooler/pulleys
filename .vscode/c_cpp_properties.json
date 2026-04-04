@@ -10,8 +10,9 @@
             "includePath": [
                 "/home/sam/Documents/projects_git/pulleys/include",
                 "/home/sam/Documents/projects_git/pulleys/src",
-                "/home/sam/Documents/projects_git/pulleys/.pio/libdeps/esp32s3fh4r2/NimBLE-Arduino/src",
-                "/home/sam/Documents/projects_git/pulleys/.pio/libdeps/esp32s3fh4r2/Adafruit NeoPixel",
+                "/home/sam/Documents/projects_git/pulleys/lib/pulleys_protocol",
+                "/home/sam/Documents/projects_git/pulleys/.pio/libdeps/traveler/NimBLE-Arduino/src",
+                "/home/sam/Documents/projects_git/pulleys/.pio/libdeps/traveler/Adafruit NeoPixel",
                 "/home/sam/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/newlib/platform_include",
                 "/home/sam/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/freertos/include",
                 "/home/sam/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/freertos/include/esp_additions/freertos",
@@ -251,8 +252,9 @@
                 "path": [
                     "/home/sam/Documents/projects_git/pulleys/include",
                     "/home/sam/Documents/projects_git/pulleys/src",
-                    "/home/sam/Documents/projects_git/pulleys/.pio/libdeps/esp32s3fh4r2/NimBLE-Arduino/src",
-                    "/home/sam/Documents/projects_git/pulleys/.pio/libdeps/esp32s3fh4r2/Adafruit NeoPixel",
+                    "/home/sam/Documents/projects_git/pulleys/lib/pulleys_protocol",
+                    "/home/sam/Documents/projects_git/pulleys/.pio/libdeps/traveler/NimBLE-Arduino/src",
+                    "/home/sam/Documents/projects_git/pulleys/.pio/libdeps/traveler/Adafruit NeoPixel",
                     "/home/sam/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/newlib/platform_include",
                     "/home/sam/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/freertos/include",
                     "/home/sam/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/include/freertos/include/esp_additions/freertos",

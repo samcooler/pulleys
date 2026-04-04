@@ -1,10 +1,9 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <Adafruit_NeoPixel.h>
+#include <pulleys_protocol.h>
 #include <math.h>
 
-#define DEVICE_NAME        "pulleys"
-#define MANUFACTURER_ID    0xFFFF   // 0xFFFF = test/development use
 #define BEACON_INTERVAL_MS 500
 
 #define RGB_CONTROL_PIN    14
@@ -21,16 +20,11 @@ static uint32_t counter = 0;
 
 static void updatePayload() {
   NimBLEAdvertisementData data;
-  data.setName(DEVICE_NAME);
+  data.setName(PULLEYS_DEVICE_NAME);
 
-  // Manufacturer data: 2-byte company ID + 4-byte counter
-  uint8_t mfr[6];
-  mfr[0] = MANUFACTURER_ID & 0xFF;
-  mfr[1] = (MANUFACTURER_ID >> 8) & 0xFF;
-  mfr[2] = (counter >>  0) & 0xFF;
-  mfr[3] = (counter >>  8) & 0xFF;
-  mfr[4] = (counter >> 16) & 0xFF;
-  mfr[5] = (counter >> 24) & 0xFF;
+  PulleysPacket pkt = { counter };
+  uint8_t mfr[PULLEYS_MFR_LEN];
+  pulleys_serialize(&pkt, mfr);
   data.setManufacturerData(std::string((char*)mfr, sizeof(mfr)));
 
   pAdv->setAdvertisementData(data);
@@ -40,7 +34,7 @@ void setup() {
   Serial.begin(115200);
   Serial.println("BOOT OK");
 
-  NimBLEDevice::init(DEVICE_NAME);
+  NimBLEDevice::init(PULLEYS_DEVICE_NAME);
   pAdv = NimBLEDevice::getAdvertising();
   pAdv->setMinInterval(BLE_INTERVAL_UNITS);
   pAdv->setMaxInterval(BLE_INTERVAL_UNITS);
