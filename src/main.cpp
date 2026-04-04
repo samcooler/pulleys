@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <Adafruit_NeoPixel.h>
+#include <math.h>
 
 #define DEVICE_NAME        "pulleys"
 #define MANUFACTURER_ID    0xFFFF   // 0xFFFF = test/development use
@@ -8,7 +9,7 @@
 
 #define RGB_CONTROL_PIN    14
 #define RGB_COUNT          64
-#define MAX_BRIGHTNESS     25
+#define MAX_BRIGHTNESS     50
 
 Adafruit_NeoPixel pixels(RGB_COUNT, RGB_CONTROL_PIN, NEO_RGB + NEO_KHZ800);
 
@@ -45,9 +46,7 @@ void setup() {
   pAdv->setMaxInterval(BLE_INTERVAL_UNITS);
 
   pixels.begin();
-  pixels.setBrightness(MAX_BRIGHTNESS);
   pixels.clear();
-  pixels.setPixelColor(0, pixels.Color(0, 50, 100));
   pixels.show();
 
   updatePayload();
@@ -56,9 +55,28 @@ void setup() {
 }
 
 void loop() {
-  static uint32_t lastTx = 0;
+  static uint32_t lastTx  = 0;
+  static uint32_t lastLed = 0;
+  static uint16_t hueOffset = 0;
+  static float    phase     = 0.0f;
   uint32_t now = millis();
 
+  // Animate rainbow at ~20 fps
+  if (now - lastLed >= 50) {
+    lastLed = now;
+    hueOffset += 300;       // rolls hue across full wheel slowly
+    phase     += 0.18f;     // advances sine wave
+
+    for (int i = 0; i < RGB_COUNT; i++) {
+      uint16_t hue = hueOffset + (uint16_t)(i * 65536L / RGB_COUNT);
+      // Sine wave modulates brightness between 40% and 100% of MAX_BRIGHTNESS
+      float bri = MAX_BRIGHTNESS * (0.7f + 0.3f * sinf(i * 2.0f * (float)M_PI / 10.0f + phase));
+      pixels.setPixelColor(i, pixels.gamma32(pixels.ColorHSV(hue, 255, (uint8_t)bri)));
+    }
+    pixels.show();
+  }
+
+  // BLE beacon every 500 ms
   if (now - lastTx >= BEACON_INTERVAL_MS) {
     lastTx = now;
     counter++;
@@ -67,12 +85,6 @@ void loop() {
     updatePayload();
     pAdv->start();
 
-    // Advance lit LED on each beacon
-    uint8_t ledPos = counter % RGB_COUNT;
-    pixels.clear();
-    pixels.setPixelColor(ledPos, pixels.Color(0, 50, 100));
-    pixels.show();
-
-    Serial.printf("Beacon #%lu  LED %d\n", counter, ledPos);
+    Serial.printf("Beacon #%lu\n", counter);
   }
 }
