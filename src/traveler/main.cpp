@@ -16,7 +16,7 @@
   #define LED_COUNT 64
 #endif
 
-#define MAX_BRIGHTNESS     30
+#define MAX_BRIGHTNESS     15
 #define BEACON_INTERVAL_MS 500
 #define LED_FPS            30
 #define IMU_INTERVAL_MS    100
@@ -73,6 +73,7 @@ void setup() {
 
     // Identity
     NimBLEDevice::init("");
+    NimBLEDevice::setPower(-6);  // reduce TX power: saves battery, tightens proximity zones
     pulleys::identity_init(PULLEYS_TYPE_TRAVELER);
     pulleys::identity_print_banner(PULLEYS_TYPE_TRAVELER);
 
@@ -85,6 +86,25 @@ void setup() {
     // LEDs
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, LED_COUNT);
     FastLED.setBrightness(255);  // brightness controlled by PatternRenderer only
+
+    // Debug: show culture colors — centered rows: color A + color B, 1 sec
+    {
+        uint8_t cols = 8;  // 8x8 matrix
+        uint8_t rowA = (LED_COUNT / cols) / 2 - 1;  // row 3
+        uint8_t rowB = rowA + 1;                     // row 4
+        CRGB cA(myCulture.colorA.r, myCulture.colorA.g, myCulture.colorA.b);
+        CRGB cB(myCulture.colorB.r, myCulture.colorB.g, myCulture.colorB.b);
+        cA.nscale8(MAX_BRIGHTNESS);
+        cB.nscale8(MAX_BRIGHTNESS);
+        fill_solid(leds, LED_COUNT, CRGB::Black);
+        fill_solid(leds + rowA * cols, cols, cA);
+        fill_solid(leds + rowB * cols, cols, cB);
+        FastLED.show();
+        delay(1000);
+        fill_solid(leds, LED_COUNT, CRGB::Black);
+        FastLED.show();
+    }
+
     pattern.init(leds, LED_COUNT, MAX_BRIGHTNESS);
     pattern.setDensity(0.2f);  // sparse sparkle — ~20% of pixels lit
     pattern.setCulture(myCulture);

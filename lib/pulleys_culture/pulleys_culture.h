@@ -6,7 +6,7 @@
 #include <pulleys_protocol.h>
 
 // ── Culture: the living pattern a device carries ──────────────────────────────
-// Three colors + oscillation frequency. Cultures blend when devices meet.
+// Two colors + oscillation frequency. Cultures blend when devices meet.
 
 namespace pulleys {
 
@@ -47,15 +47,12 @@ static inline PulleysColor _hsv_to_rgb(uint16_t h, uint8_t s, uint8_t v) {
 // Generate a random culture with vivid, saturated colors
 inline PulleysCulture culture_random() {
     PulleysCulture c;
-    // Three random hues ~120 degrees apart
+    // Two random hues at least 72 degrees apart (20% of wheel)
     uint16_t hueA = random(0, 360);
-    uint16_t offsetB = random(100, 141);  // 100..140 degrees
-    uint16_t offsetC = random(220, 261);  // 220..260 degrees
-    uint16_t hueB = (hueA + offsetB) % 360;
-    uint16_t hueC = (hueA + offsetC) % 360;
+    uint16_t offset = random(72, 289);  // 72..288 degrees away
+    uint16_t hueB = (hueA + offset) % 360;
     c.colorA = _hsv_to_rgb(hueA, random(200, 256), 255);
     c.colorB = _hsv_to_rgb(hueB, random(200, 256), 255);
-    c.colorC = _hsv_to_rgb(hueC, random(200, 256), 255);
     c.oscillation = random(30, 226);  // ~0.7–4.4 Hz, avoiding extremes
     return c;
 }
@@ -76,9 +73,6 @@ inline PulleysCulture culture_blend(const PulleysCulture& a, const PulleysCultur
     out.colorB.r    = _lerp8(a.colorB.r, b.colorB.r, ratio);
     out.colorB.g    = _lerp8(a.colorB.g, b.colorB.g, ratio);
     out.colorB.b    = _lerp8(a.colorB.b, b.colorB.b, ratio);
-    out.colorC.r    = _lerp8(a.colorC.r, b.colorC.r, ratio);
-    out.colorC.g    = _lerp8(a.colorC.g, b.colorC.g, ratio);
-    out.colorC.b    = _lerp8(a.colorC.b, b.colorC.b, ratio);
     out.oscillation = _lerp8(a.oscillation, b.oscillation, ratio);
     return out;
 }
@@ -109,11 +103,10 @@ inline const char* color_name(const PulleysColor& c) {
 
 // Print culture to Serial for debugging
 inline void culture_print(const char* label, const PulleysCulture& c) {
-    Serial.printf("  %s: A=%-7s(%3d,%3d,%3d) B=%-7s(%3d,%3d,%3d) C=%-7s(%3d,%3d,%3d) osc=%d (%.2fHz)\n",
+    Serial.printf("  %s: A=%-7s(%3d,%3d,%3d) B=%-7s(%3d,%3d,%3d) osc=%d (%.2fHz)\n",
                   label,
                   color_name(c.colorA), c.colorA.r, c.colorA.g, c.colorA.b,
                   color_name(c.colorB), c.colorB.r, c.colorB.g, c.colorB.b,
-                  color_name(c.colorC), c.colorC.r, c.colorC.g, c.colorC.b,
                   c.oscillation, culture_osc_to_hz(c.oscillation));
 }
 

@@ -18,12 +18,16 @@
 #define MAX_BRIGHTNESS     80
 #define LED_FPS            30
 #define CULTURE_BLEND_RATIO 0.10f   // how much a visiting traveler influences us
+#define MATE_COOLDOWN_MS   30000    // min ms between culture exchanges with same traveler
 
 // ── Globals ───────────────────────────────────────────────────────────────────
 static CRGB leds[LED_COUNT];
 static pulleys::PatternRenderer pattern;
 static pulleys::ProximityTracker proximity;
 static PulleysCulture myCulture;
+static uint16_t cooldownIds[32];
+static uint32_t cooldownTimes[32];
+static uint8_t  cooldownCount = 0;
 
 // ── Culture exchange callback ─────────────────────────────────────────────────
 static void onZoneChange(const pulleys::TrackedDevice& dev,
@@ -32,6 +36,16 @@ static void onZoneChange(const pulleys::TrackedDevice& dev,
     if (dev.deviceType != PULLEYS_TYPE_TRAVELER) return;
 
     if (newZone == pulleys::ZONE_CLOSE) {
+        // Check per-traveler cooldown
+        uint32_t now = millis();
+        for (uint8_t i = 0; i < cooldownCount; i++) {
+            if (cooldownIds[i] == dev.deviceId && (now - cooldownTimes[i]) < MATE_COOLDOWN_MS) {
+                Serial.printf("\n☆ Traveler T-%04X CLOSE — cooldown (%lus left)\n",
+                              dev.deviceId, (MATE_COOLDOWN_MS - (now - cooldownTimes[i])) / 1000);
+                return;
+            }
+        }
+
         Serial.printf("\n★ Traveler T-%04X arrived CLOSE — absorbing culture!\n", dev.deviceId);
         pulleys::culture_print("theirs", dev.culture);
         pulleys::culture_print("mine  ", myCulture);
@@ -41,6 +55,17 @@ static void onZoneChange(const pulleys::TrackedDevice& dev,
 
         pulleys::culture_print("merged", myCulture);
         Serial.println();
+
+        // Record cooldown
+        bool found = false;
+        for (uint8_t i = 0; i < cooldownCount; i++) {
+            if (cooldownIds[i] == dev.deviceId) { cooldownTimes[i] = now; found = true; break; }
+        }
+        if (!found && cooldownCount < 32) {
+            cooldownIds[cooldownCount] = dev.deviceId;
+            cooldownTimes[cooldownCount] = now;
+            cooldownCount++;
+        }
     }
     if (newZone == pulleys::ZONE_GONE && oldZone >= pulleys::ZONE_NEAR) {
         Serial.printf("  Traveler T-%04X departed.\n", dev.deviceId);
