@@ -42,9 +42,9 @@ class ProximityTracker {
 public:
     static constexpr uint8_t  MAX_TRACKED    = 32;
     static constexpr float    RSSI_ALPHA     = 0.3f;    // smoothing factor (higher = more responsive)
-    static constexpr int      RSSI_CLOSE     = -55;     // dBm threshold for CLOSE
-    static constexpr int      RSSI_NEAR      = -75;     // dBm threshold for NEAR
-    static constexpr int      RSSI_FAR       = -90;     // dBm threshold for FAR
+    static constexpr int      RSSI_CLOSE     = -25;     // dBm threshold for CLOSE (~0.5 m)
+    static constexpr int      RSSI_NEAR      = -60;     // dBm threshold for NEAR  (~3 m)
+    static constexpr int      RSSI_FAR       = -85;     // dBm threshold for FAR   (~9 m)
     static constexpr int      HYSTERESIS     = 5;       // dBm hysteresis to prevent zone flickering
     static constexpr uint32_t TIMEOUT_MS     = 10000;   // remove device after 10s silence
 
@@ -114,6 +114,14 @@ public:
             if (_devices[i].active && _devices[i].zone == zone) n++;
         }
         return n;
+    }
+
+    // Iterate all active devices. Callback receives const ref.
+    template<typename Func>
+    void forEachActive(Func fn) const {
+        for (uint8_t i = 0; i < MAX_TRACKED; i++) {
+            if (_devices[i].active) fn(_devices[i]);
+        }
     }
 
 private:

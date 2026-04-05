@@ -105,6 +105,7 @@ void setup() {
 void loop() {
     static uint32_t lastLed   = 0;
     static uint32_t lastPrune = 0;
+    static uint32_t lastReport = 0;
     uint32_t now = millis();
 
     // LED pattern update (~30 fps)
@@ -118,5 +119,28 @@ void loop() {
     if (now - lastPrune >= 1000) {
         lastPrune = now;
         proximity.pruneStale();
+    }
+
+    // Traveler summary every 2 seconds
+    if (now - lastReport >= 2000) {
+        lastReport = now;
+        uint8_t count = 0;
+        proximity.forEachActive([&count](const pulleys::TrackedDevice& d) {
+            if (d.deviceType == PULLEYS_TYPE_TRAVELER) count++;
+        });
+        if (count > 0) {
+            Serial.printf("── %d traveler(s) heard ──\n", count);
+            proximity.forEachActive([](const pulleys::TrackedDevice& d) {
+                if (d.deviceType != PULLEYS_TYPE_TRAVELER) return;
+                Serial.printf("  T-%04X %-5s %4.0fdBm  ",
+                              d.deviceId,
+                              pulleys::zone_name(d.zone),
+                              d.rssiSmooth);
+                Serial.printf("%s/%s %.2fHz\n",
+                              pulleys::color_name(d.culture.colorA),
+                              pulleys::color_name(d.culture.colorB),
+                              pulleys::culture_osc_to_hz(d.culture.oscillation));
+            });
+        }
     }
 }
