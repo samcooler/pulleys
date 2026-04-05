@@ -45,16 +45,22 @@ public:
         float t = millis() / 1000.0f;
         float phase = t * hz * 2.0f * (float)M_PI;
 
-        // Ripple: expanding ring from center, positive half only
-        float cx = (_cols - 1) * 0.5f;
-        float cy = (_rows - 1) * 0.5f;
+        // Ripple center wanders around the middle 2/3 of the matrix
+        float midX = (_cols - 1) * 0.5f;
+        float midY = (_rows - 1) * 0.5f;
+        float wanderX = _cols * 0.33f;  // wander radius = 1/3 of matrix width
+        float wanderY = _rows * 0.33f;
+        float cx = midX + wanderX * sinf(t * 0.17f + 0.0f) * cosf(t * 0.11f + 2.3f);
+        float cy = midY + wanderY * sinf(t * 0.13f + 1.1f) * cosf(t * 0.09f + 3.7f);
 
-        // Woozy random walk: smoothly vary ripple speed and spatial frequency
-        // Use layered slow sines at irrational-ratio frequencies for organic drift
-        float rippleSpeed = 3.0f
-            + 2.5f * sinf(t * 0.13f)
-            + 1.5f * sinf(t * 0.31f + 1.7f)
-            + 1.0f * sinf(t * 0.074f + 4.2f);  // range ~-2 to 8
+        // Woozy random walk: smoothly vary ripple speed (symmetric around 0)
+        float rippleSpeed = 0.0f
+            + 0.15f * sinf(t * 0.13f)
+            + 0.10f * sinf(t * 0.31f + 1.7f)
+            + 0.06f * sinf(t * 0.074f + 4.2f);
+        // Hard cap
+        if (rippleSpeed > 0.30f) rippleSpeed = 0.30f;
+        if (rippleSpeed < -0.30f) rippleSpeed = -0.30f;
         float rippleFreq  = 1.8f
             + 0.8f * sinf(t * 0.19f + 0.5f)
             + 0.5f * sinf(t * 0.41f + 2.9f);   // range ~0.5 to 3.1
@@ -65,12 +71,12 @@ public:
         for (uint16_t i = 0; i < _numLeds; i++) {
             // -- Base pattern: two-color wave --
             float pixelPhase = phase + (i * 2.0f * (float)M_PI / _numLeds);
-            // Sharpen sine: spend ~30% solid A, ~30% solid B, ~40% transitioning
+            // Sharpen sine: ~15% solid A, ~15% solid B, ~70% smooth transition
             float raw = (sinf(pixelPhase) + 1.0f) * 0.5f;  // 0.0 to 1.0
             float blend;
-            if (raw < 0.15f)       blend = 0.0f;
-            else if (raw > 0.85f)  blend = 1.0f;
-            else                   blend = (raw - 0.15f) / 0.7f;
+            if (raw < 0.05f)       blend = 0.0f;
+            else if (raw > 0.95f)  blend = 1.0f;
+            else                   blend = (raw - 0.05f) / 0.9f;
 
             CRGB base;
             base.r = (uint8_t)(cA.r + (float)(cB.r - cA.r) * blend);

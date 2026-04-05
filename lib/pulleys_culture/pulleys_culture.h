@@ -13,12 +13,12 @@ namespace pulleys {
 // Map oscillation byte (1–255) to Hz (~0.1 to 5.0 Hz)
 inline float culture_osc_to_hz(uint8_t osc) {
     if (osc == 0) osc = 1;
-    return 0.1f + (osc / 255.0f) * 4.9f;
+    return 0.02f + (osc / 255.0f) * 0.48f;  // 0.02–0.5 Hz (2–50 sec cycle)
 }
 
 // Map Hz back to oscillation byte
 inline uint8_t culture_hz_to_osc(float hz) {
-    float norm = (hz - 0.1f) / 4.9f;
+    float norm = (hz - 0.02f) / 0.48f;
     if (norm < 0.0f) norm = 0.0f;
     if (norm > 1.0f) norm = 1.0f;
     return (uint8_t)(norm * 255.0f);
