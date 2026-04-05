@@ -1,84 +1,162 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
-#include <Adafruit_NeoPixel.h>
+#include <FastLED.h>
 #include <pulleys_protocol.h>
-#include <math.h>
+#include <pulleys_identity.h>
+#include <pulleys_culture.h>
+#include <pulleys_patterns.h>
+#include <pulleys_proximity.h>
+#include <pulleys_ritual.h>
 
+// ── Config (LED_PIN, LED_COUNT set via build_flags in platformio.ini) ─────────
+#ifndef LED_PIN
+  #define LED_PIN   14
+#endif
+#ifndef LED_COUNT
+  #define LED_COUNT 64
+#endif
+
+#define MAX_BRIGHTNESS     30
 #define BEACON_INTERVAL_MS 500
+#define LED_FPS            30
+#define IMU_INTERVAL_MS    100
 
-#define RGB_CONTROL_PIN    14
-#define RGB_COUNT          64
-#define MAX_BRIGHTNESS     50
+// BLE advertising interval in 0.625ms units
+#define BLE_INTERVAL_UNITS (BEACON_INTERVAL_MS * 1000 / 625)
 
-Adafruit_NeoPixel pixels(RGB_COUNT, RGB_CONTROL_PIN, NEO_RGB + NEO_KHZ800);
+// ── Globals ───────────────────────────────────────────────────────────────────
+static CRGB leds[LED_COUNT];
+static pulleys::PatternRenderer pattern;
+static pulleys::ProximityTracker proximity;
+static pulleys::RitualDetector ritual;
 
-// Advertising interval in BLE units (0.625 ms per unit)
-#define BLE_INTERVAL_UNITS (BEACON_INTERVAL_MS * 1000 / 625)  // = 800
-
-static NimBLEAdvertising* pAdv = nullptr;
+static PulleysCulture myCulture;
 static uint32_t counter = 0;
+static NimBLEAdvertising* pAdv = nullptr;
 
+// ── BLE advertising payload ───────────────────────────────────────────────────
 static void updatePayload() {
-  NimBLEAdvertisementData data;
-  data.setName(PULLEYS_DEVICE_NAME);
+    PulleysPacket pkt;
+    pkt.deviceType = PULLEYS_TYPE_TRAVELER;
+    pkt.deviceId   = pulleys::identity_id();
+    pkt.culture    = myCulture;
+    pkt.counter    = counter;
 
-  PulleysPacket pkt = { counter };
-  uint8_t mfr[PULLEYS_MFR_LEN];
-  pulleys_serialize(&pkt, mfr);
-  data.setManufacturerData(std::string((char*)mfr, sizeof(mfr)));
+    uint8_t mfr[PULLEYS_MFR_LEN];
+    pulleys_serialize(&pkt, mfr);
 
-  pAdv->setAdvertisementData(data);
+    NimBLEAdvertisementData data;
+    data.setManufacturerData(std::string((char*)mfr, sizeof(mfr)));
+    pAdv->setAdvertisementData(data);
 }
 
-void setup() {
-  Serial.begin(115200);
-  Serial.println("BOOT OK");
+// ── BLE scan callback — detect nearby Stations ───────────────────────────────
+class StationScanCallbacks : public NimBLEScanCallbacks {
+    void onResult(const NimBLEAdvertisedDevice* dev) override {
+        if (!dev->haveManufacturerData()) return;
+        std::string raw = dev->getManufacturerData();
+        PulleysPacket pkt;
+        if (!pulleys_parse((const uint8_t*)raw.data(), raw.size(), &pkt)) return;
+        if (pkt.deviceType != PULLEYS_TYPE_STATION) return;
 
-  NimBLEDevice::init(PULLEYS_DEVICE_NAME);
-  pAdv = NimBLEDevice::getAdvertising();
-  pAdv->setMinInterval(BLE_INTERVAL_UNITS);
-  pAdv->setMaxInterval(BLE_INTERVAL_UNITS);
+        proximity.update(pkt, dev->getRSSI());
 
-  pixels.begin();
-  pixels.clear();
-  pixels.show();
-
-  updatePayload();
-  pAdv->start();
-  Serial.println("BLE beacon started");
-}
-
-void loop() {
-  static uint32_t lastTx  = 0;
-  static uint32_t lastLed = 0;
-  static uint16_t hueOffset = 0;
-  static float    phase     = 0.0f;
-  uint32_t now = millis();
-
-  // Animate rainbow at ~20 fps
-  if (now - lastLed >= 50) {
-    lastLed = now;
-    hueOffset += 300;       // rolls hue across full wheel slowly
-    phase     += 0.18f;     // advances sine wave
-
-    for (int i = 0; i < RGB_COUNT; i++) {
-      uint16_t hue = hueOffset + (uint16_t)(i * 65536L / RGB_COUNT);
-      // Sine wave modulates brightness between 40% and 100% of MAX_BRIGHTNESS
-      float bri = MAX_BRIGHTNESS * (0.7f + 0.3f * sinf(i * 2.0f * (float)M_PI / 10.0f + phase));
-      pixels.setPixelColor(i, pixels.gamma32(pixels.ColorHSV(hue, 255, (uint8_t)bri)));
+        // TODO: When a station is CLOSE, absorb some of its culture
+        // myCulture = pulleys::culture_blend(myCulture, pkt.culture, 0.05f);
     }
-    pixels.show();
-  }
+};
 
-  // BLE beacon every 500 ms
-  if (now - lastTx >= BEACON_INTERVAL_MS) {
-    lastTx = now;
-    counter++;
+// ── Setup ─────────────────────────────────────────────────────────────────────
+void setup() {
+    Serial.begin(115200);
+    delay(500);
 
-    pAdv->stop();
+    // Identity
+    NimBLEDevice::init("");
+    pulleys::identity_init(PULLEYS_TYPE_TRAVELER);
+    pulleys::identity_print_banner(PULLEYS_TYPE_TRAVELER);
+
+    // Culture — start with a random one
+    randomSeed(esp_random());
+    myCulture = pulleys::culture_random();
+    Serial.println("Starting culture:");
+    pulleys::culture_print("mine", myCulture);
+
+    // LEDs
+    FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, LED_COUNT);
+    FastLED.setBrightness(255);  // brightness controlled by PatternRenderer only
+    pattern.init(leds, LED_COUNT, MAX_BRIGHTNESS);
+    pattern.setDensity(0.2f);  // sparse sparkle — ~20% of pixels lit
+    pattern.setCulture(myCulture);
+
+    // BLE advertising
+    pAdv = NimBLEDevice::getAdvertising();
+    pAdv->setMinInterval(BLE_INTERVAL_UNITS);
+    pAdv->setMaxInterval(BLE_INTERVAL_UNITS);
     updatePayload();
     pAdv->start();
+    Serial.println("BLE beacon started");
 
-    Serial.printf("Beacon #%lu\n", counter);
-  }
+    // BLE scanning (passive, between ad bursts)
+    NimBLEScan* pScan = NimBLEDevice::getScan();
+    pScan->setScanCallbacks(new StationScanCallbacks(), true);
+    pScan->setActiveScan(false);
+    pScan->setInterval(160);   // 100ms
+    pScan->setWindow(80);      // 50ms — leaves room for advertising
+    pScan->start(0, false, false);
+    Serial.println("Scanning for Stations...");
+
+    // IMU / Ritual
+    // TODO: Initialize QMI8658 IMU here
+    // Wire.begin(SDA_PIN, SCL_PIN);
+    // qmi8658_init();
+    ritual.init();
+
+    // TODO: OTA update initialization would go here
+    // ArduinoOTA.setHostname(pulleys::identity_name());
+    // ArduinoOTA.begin();
+
+    Serial.println("Traveler ready.\n");
+}
+
+// ── Loop ──────────────────────────────────────────────────────────────────────
+void loop() {
+    static uint32_t lastBeacon = 0;
+    static uint32_t lastLed    = 0;
+    static uint32_t lastPrune  = 0;
+    static uint32_t lastImu    = 0;
+    uint32_t now = millis();
+
+    // LED pattern update (~30 fps)
+    if (now - lastLed >= (1000 / LED_FPS)) {
+        lastLed = now;
+        pattern.update();
+        FastLED.show();
+    }
+
+    // BLE beacon update
+    if (now - lastBeacon >= BEACON_INTERVAL_MS) {
+        lastBeacon = now;
+        counter++;
+        pAdv->stop();
+        updatePayload();
+        pAdv->start();
+        Serial.printf("Beacon #%lu\n", counter);
+    }
+
+    // Prune stale proximity entries (~1Hz)
+    if (now - lastPrune >= 1000) {
+        lastPrune = now;
+        proximity.pruneStale();
+    }
+
+    // IMU reading
+    if (now - lastImu >= IMU_INTERVAL_MS) {
+        lastImu = now;
+        // TODO: Read QMI8658 accelerometer + gyroscope
+        // float ax, ay, az, gx, gy, gz;
+        // qmi8658_read(&ax, &ay, &az, &gx, &gy, &gz);
+        // ritual.update(ax, ay, az, gx, gy, gz);
+        // Serial.printf("  [IMU] ax=%.2f ay=%.2f az=%.2f\n", ax, ay, az);
+    }
 }
