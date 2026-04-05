@@ -16,9 +16,11 @@ This is the core aesthetic: **emergence from accumulation**. No single interacti
 
 ## On proximity as intimacy
 
-We define three zones: FAR, NEAR, and CLOSE. Only CLOSE triggers culture exchange. This means a puppet must actually be pulled *to* the station, not merely past it. The participant must commit to the encounter — hold the rope, wait for the moment of closeness. The RSSI threshold is a physical fact (radio waves attenuating through air, trees, bodies) that we've dressed up as a social one.
+We define four zones: GONE, FAR, NEAR, and CLOSE. Only CLOSE triggers culture exchange. This means a puppet must actually be pulled *to* the station, not merely past it. The participant must commit to the encounter — hold the rope, wait for the moment of closeness. The RSSI threshold is a physical fact (radio waves attenuating through air, trees, bodies) that we've dressed up as a social one.
 
 There's hysteresis in the zone boundaries — a buffer that prevents flickering at the edges. You have to really arrive to be counted, and you have to really leave to be forgotten. This is a small technical choice that creates a feeling: visits are *events*, not accidents.
+
+And there's a cooldown: the same traveler can only influence a station once every 30 seconds. Lingering doesn't accumulate power. You visit, you leave your mark, and then you must go away and come back. The interaction is a punctuation, not a drone.
 
 ## On ritual (future)
 
@@ -39,4 +41,7 @@ The forest remembers. The stations remember. You won't.
 - **No names in BLE advertisements** — devices are identified by their pattern, not a label. You recognize a traveler by its colors, not its name. This is a deliberate choice: anonymity serves the metaphor of cultural mixing without identity.
 - **Random seed on boot** — cultures aren't designed, they're born. Every power cycle creates a new culture. Nothing is precious. This is an installation, not an archive.
 - **10% blend ratio** — a single visit barely changes a station. It takes many travelers to transform it. This paces the experience across the whole night, not a single moment. Tunable.
+- **30-second mating cooldown** — hovering at a station doesn't compound the effect. You must leave and return. This encourages movement through the forest, not camping at one node.
+- **Reduced TX power (-6 dBm)** — the traveler whispers rather than shouts. This shrinks the radius of intimacy, forcing closer physical proximity for CLOSE detection. It also extends battery life — a practical choice that happens to serve the aesthetic of quiet, deliberate encounters.
 - **Per-pixel phase offset** — the LED pattern isn't a flat color, it's a wave. Movement across the surface of the light creates a sense of life, of breathing. Two static colors would be a flag. Two oscillating colors are an organism.
+- **Sparkle and ripple** — rare per-pixel ignition creates organic glitter over the color wave; a radial ripple with a wandering center gives the matrix a sense of depth, like light on water.

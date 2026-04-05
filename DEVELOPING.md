@@ -20,9 +20,12 @@ Default `pio run` builds `traveler` + `station_s3`.
 
 ## Flashing & Monitoring
 
-One board at a time via USB-C:
+One board at a time via USB-C. The PlatformIO device monitor locks the serial port, so **close it before flashing**:
 
 ```bash
+# Kill any running monitor first
+pkill -f "platformio device monitor"
+
 # Flash traveler
 pio run -e traveler -t upload
 
@@ -35,6 +38,7 @@ pio run -e traveler -t upload && pio device monitor -e traveler
 
 Same for station:
 ```bash
+pkill -f "platformio device monitor"
 pio run -e station_s3 -t upload && pio device monitor -e station_s3
 ```
 
@@ -121,5 +125,9 @@ Alternative: ESP-IDF native OTA with HTTP server for fleet updates.
 
 - **Serial is verbose** — all subsystems log freely. This is intentional during development.
 - **Culture starts random** — each board generates a random culture on boot. Watch the serial output for the starting colors/frequency.
-- **Proximity zones** — serial logs zone transitions (FAR → NEAR → CLOSE → GONE). Useful for tuning RSSI thresholds.
-- **FastLED brightness** — capped at 50 (traveler) / 80 (station) out of 255. Adjust `MAX_BRIGHTNESS` in the source if LEDs are too dim or drawing too much current.
+- **Boot color preview** — the traveler shows its two culture colors as two solid rows in the center of the matrix for 1 second on boot, for visual verification before the pattern starts.
+- **Proximity zones** — serial logs zone transitions (FAR → NEAR → CLOSE → GONE). Station prints a summary of all tracked travelers every 2 seconds.
+- **Mating cooldown** — a station can only absorb culture from the same traveler once every 30 seconds, to prevent over-blending from a single visitor.
+- **TX power** — traveler broadcasts at -6 dBm (reduced from default). This tightens proximity zones and saves battery. Changing TX power requires recalibrating RSSI thresholds via walk tests.
+- **FastLED brightness** — capped at 15 (traveler) / 80 (station) out of 255. Lower values improve color saturation on dense LED matrices. Adjust `MAX_BRIGHTNESS` in the source if needed.
+- **Threshold tuning** — current RSSI thresholds (CLOSE -63, NEAR -78, FAR -85) were calibrated by walk tests at -6 dBm TX power. If you change TX power or antenna environment, re-tune by walking at a known constant speed and adjusting values in `pulleys_proximity.h`.
