@@ -10,15 +10,15 @@
 
 namespace pulleys {
 
-// Map oscillation byte (1–255) to Hz (~0.02 to 4.0 Hz)
+// Map oscillation byte (1–255) to Hz (~0.2 to 2.0 Hz)
 inline float culture_osc_to_hz(uint8_t osc) {
     if (osc == 0) osc = 1;
-    return 0.02f + (osc / 255.0f) * 3.98f;  // 0.02–4.0 Hz
+    return 0.2f + (osc / 255.0f) * 1.8f;  // 0.2–2.0 Hz
 }
 
 // Map Hz back to oscillation byte
 inline uint8_t culture_hz_to_osc(float hz) {
-    float norm = (hz - 0.02f) / 3.98f;
+    float norm = (hz - 0.2f) / 1.8f;
     if (norm < 0.0f) norm = 0.0f;
     if (norm > 1.0f) norm = 1.0f;
     return (uint8_t)(norm * 255.0f);
@@ -45,15 +45,30 @@ static inline PulleysColor _hsv_to_rgb(uint16_t h, uint8_t s, uint8_t v) {
 }
 
 // Generate a random culture with vivid, saturated colors
+// Check if two hues form a red+blue (cop lights) combination
+static inline bool _is_red(uint16_t hue) { return hue <= 15 || hue >= 345; }
+static inline bool _is_blue(uint16_t hue) { return hue >= 225 && hue <= 255; }
+static inline bool _is_cop_pair(uint16_t a, uint16_t b) {
+    return (_is_red(a) && _is_blue(b)) || (_is_red(b) && _is_blue(a));
+}
+
 inline PulleysCulture culture_random() {
     PulleysCulture c;
-    // Two random hues at least 22 degrees apart (~6% of wheel)
-    uint16_t hueA = random(0, 360);
-    uint16_t offset = random(22, 339);  // 22..338 degrees away
-    uint16_t hueB = (hueA + offset) % 360;
-    c.colorA = _hsv_to_rgb(hueA, random(200, 256), 255);
-    c.colorB = _hsv_to_rgb(hueB, random(200, 256), 255);
-    c.oscillation = random(12, 255);  // ~0.2–4.0 Hz
+    for (uint8_t attempt = 0; attempt < 10; attempt++) {
+        // Two random hues at least 22 degrees apart (~6% of wheel)
+        uint16_t hueA = random(0, 360);
+        uint16_t offset = random(22, 339);  // 22..338 degrees away
+        uint16_t hueB = (hueA + offset) % 360;
+        if (_is_cop_pair(hueA, hueB)) continue;  // no cop lights
+        c.colorA = _hsv_to_rgb(hueA, random(200, 256), 255);
+        c.colorB = _hsv_to_rgb(hueB, random(200, 256), 255);
+        c.oscillation = random(12, 255);  // ~0.2–2.0 Hz
+        return c;
+    }
+    // Fallback: yellow + cyan
+    c.colorA = _hsv_to_rgb(60, random(200, 256), 255);
+    c.colorB = _hsv_to_rgb(180, random(200, 256), 255);
+    c.oscillation = random(12, 255);
     return c;
 }
 
