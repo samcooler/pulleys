@@ -29,7 +29,11 @@ static pulleys::ProximityTracker proximity;
 static PulleysCulture slots[NUM_SLOTS];
 static PulleysCulture slotsOld[NUM_SLOTS];  // previous culture for fade-out
 static uint32_t slotTransStart[NUM_SLOTS];  // millis when transition began (0 = none)
-static uint8_t nextSlot = 0;  // round-robin replacement
+
+// Pending slot update from BLE callback (avoids race with render loop)
+static volatile int8_t   pendingSlot = -1;       // -1 = no pending update
+static PulleysCulture    pendingCulture;
+static PulleysCulture    pendingOld;
 
 static uint16_t cooldownIds[32];
 static uint32_t cooldownTimes[32];
@@ -75,11 +79,11 @@ static void onZoneChange(const pulleys::TrackedDevice& dev,
             }
         }
 
-        // Overwrite a random slot with the traveler's culture (no blending)
+        // Queue slot update for main loop (avoid race with render)
         uint8_t s = random(NUM_SLOTS);
-        slotsOld[s] = slots[s];           // save old for fade-out
-        slotTransStart[s] = millis();      // start transition
-        slots[s] = dev.culture;
+        pendingOld = slots[s];
+        pendingCulture = dev.culture;
+        pendingSlot = s;  // atomic write signals main loop
 
         Serial.printf("\n★ T-%04X → slot %d: %s/%s %.2fHz\n",
                       dev.deviceId, s,
@@ -87,14 +91,25 @@ static void onZoneChange(const pulleys::TrackedDevice& dev,
                       pulleys::color_name(dev.culture.colorB),
                       pulleys::culture_osc_to_hz(dev.culture.oscillation));
 
-        // Record cooldown
+        // Record cooldown (prune expired entries first)
+        uint32_t now2 = now;
+        uint8_t writeIdx = 0;
+        for (uint8_t i = 0; i < cooldownCount; i++) {
+            if ((now2 - cooldownTimes[i]) < MATE_COOLDOWN_MS * 2) {
+                cooldownIds[writeIdx] = cooldownIds[i];
+                cooldownTimes[writeIdx] = cooldownTimes[i];
+                writeIdx++;
+            }
+        }
+        cooldownCount = writeIdx;
+
         bool found = false;
         for (uint8_t i = 0; i < cooldownCount; i++) {
-            if (cooldownIds[i] == dev.deviceId) { cooldownTimes[i] = now; found = true; break; }
+            if (cooldownIds[i] == dev.deviceId) { cooldownTimes[i] = now2; found = true; break; }
         }
         if (!found && cooldownCount < 32) {
             cooldownIds[cooldownCount] = dev.deviceId;
-            cooldownTimes[cooldownCount] = now;
+            cooldownTimes[cooldownCount] = now2;
             cooldownCount++;
         }
     }
@@ -162,7 +177,16 @@ void loop() {
     static uint32_t lastReport = 0;
     uint32_t now = millis();
 
-    // LED pattern update (~30 fps)
+    // Apply pending slot update from BLE callback (thread-safe handoff)
+    if (pendingSlot >= 0) {
+        int8_t s = pendingSlot;
+        pendingSlot = -1;  // clear first to avoid re-entry
+        slotsOld[s] = pendingOld;
+        slots[s] = pendingCulture;
+        slotTransStart[s] = now;
+    }
+
+    // LED pattern update (~60 fps)
     if (now - lastLed >= (1000 / LED_FPS)) {
         lastLed = now;
         float t = now / 1000.0f;

@@ -161,13 +161,11 @@ void loop() {
         FastLED.show();
     }
 
-    // BLE beacon update
+    // BLE beacon update (update payload without stop/start cycle)
     if (now - lastBeacon >= BEACON_INTERVAL_MS) {
         lastBeacon = now;
         counter++;
-        pAdv->stop();
         updatePayload();
-        pAdv->start();
         Serial.printf("Beacon #%lu\n", counter);
     }
 

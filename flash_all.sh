@@ -16,8 +16,8 @@ BOOT_APP="/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/par
 
 # Auto-detect chip from environment name
 case "$ENV" in
-  *c3*) CHIP="esp32c3" ;;
-  *)    CHIP="esp32s3" ;;
+  station*) CHIP="esp32c3" ;;
+  *)        CHIP="esp32s3" ;;
 esac
 
 # Verify build exists

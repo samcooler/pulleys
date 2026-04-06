@@ -20,11 +20,13 @@ public:
         _leds = leds;
         _numLeds = (numLeds > MAX_LEDS) ? MAX_LEDS : numLeds;
         _maxBri = maxBrightness;
+        _lastMs = millis();
         memset(_sparkle, 0, sizeof(_sparkle));
 
-        // Seed random walk from device ID so each board diverges immediately
+        // Seed both RNGs from device ID so each board diverges immediately
         uint16_t id = pulleys::identity_id();
         random16_set_seed(id);
+        random16_add_entropy(id);
         _rippleSpeed = ((random8() / 255.0f) - 0.5f) * 10.0f;
         _spatialFreqMul  = 0.3f + (random8() / 255.0f) * 0.7f;  // 0.3-1.0x
         _ripplePhase = (random8() / 255.0f) * 6.2832f;

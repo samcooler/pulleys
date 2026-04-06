@@ -24,7 +24,6 @@ static const BoardEntry _travelerRegistry[] = {
     // Add new travelers here: { 0xXXXX, NN },
 };
 static const BoardEntry _stationRegistry[] = {
-    { 0xA1D5,  1 },  // S-A1D5 — dev board (S3)
     { 0xF563,  1 },  // S-F563 — XIAO C3
     { 0xD25E,  2 },  // S-D25E — XIAO C3
     { 0xD3C5,  3 },  // S-D3C5 — XIAO C3
