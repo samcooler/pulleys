@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <FastLED.h>
+#include <WiFi.h>
+#include <ArduinoOTA.h>
 #include <pulleys_protocol.h>
 #include <pulleys_identity.h>
 #include <pulleys_culture.h>
@@ -16,10 +18,14 @@
   #define LED_COUNT 64
 #endif
 
-#define MAX_BRIGHTNESS     15
+#define MAX_BRIGHTNESS     21
 #define BEACON_INTERVAL_MS 500
 #define LED_FPS            30
 #define IMU_INTERVAL_MS    100
+
+// WiFi credentials for OTA updates
+#define WIFI_SSID     "Blossom 2.4 GHz"
+#define WIFI_PASSWORD "pollinate"
 
 // BLE advertising interval in 0.625ms units
 #define BLE_INTERVAL_UNITS (BEACON_INTERVAL_MS * 1000 / 625)
@@ -71,7 +77,7 @@ void setup() {
     Serial.begin(115200);
     delay(500);
 
-    // Identity
+    // Identity — BLE must init first
     NimBLEDevice::init("");
     NimBLEDevice::setPower(-6);  // reduce TX power: saves battery, tightens proximity zones
     pulleys::identity_init(PULLEYS_TYPE_TRAVELER);
@@ -132,9 +138,25 @@ void setup() {
     // qmi8658_init();
     ritual.init();
 
-    // TODO: OTA update initialization would go here
-    // ArduinoOTA.setHostname(pulleys::identity_name());
-    // ArduinoOTA.begin();
+    // WiFi + OTA — after all BLE setup is done
+    // Note: WiFi modem sleep must stay enabled for BLE coexistence (do NOT call WiFi.setSleep(false))
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.printf("WiFi connecting to '%s'...\n", WIFI_SSID);
+    char otaHostname[16];
+    snprintf(otaHostname, sizeof(otaHostname), "pulleys-%02d", pulleys::identity_label());
+    ArduinoOTA.setHostname(otaHostname);
+    ArduinoOTA.onStart([]() {
+        FastLED.clear(true);  // blank LEDs during update
+        Serial.println("\n[OTA] Update starting...");
+    });
+    ArduinoOTA.onEnd([]()   { Serial.println("[OTA] Update complete. Rebooting..."); });
+    ArduinoOTA.onError([](ota_error_t error) { Serial.printf("[OTA] Error %u\n", error); });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("[OTA] %u%%\r", progress * 100 / total);
+    });
+    ArduinoOTA.begin();
+    Serial.printf("OTA hostname: %s\n", otaHostname);
 
     Serial.println("Traveler ready.\n");
 }
@@ -145,7 +167,20 @@ void loop() {
     static uint32_t lastLed    = 0;
     static uint32_t lastPrune  = 0;
     static uint32_t lastImu    = 0;
+    static bool     wifiReady  = false;
     uint32_t now = millis();
+
+    // WiFi connection status
+    static uint32_t lastWifiCheck = 0;
+    if (!wifiReady && now - lastWifiCheck >= 5000) {
+        lastWifiCheck = now;
+        wl_status_t st = WiFi.status();
+        Serial.printf("[WiFi] status=%d\n", st);
+        if (st == WL_CONNECTED) {
+            wifiReady = true;
+            Serial.printf("[WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+        }
+    }
 
     // LED pattern update (~30 fps)
     if (now - lastLed >= (1000 / LED_FPS)) {
@@ -179,4 +214,7 @@ void loop() {
         // ritual.update(ax, ay, az, gx, gy, gz);
         // Serial.printf("  [IMU] ax=%.2f ay=%.2f az=%.2f\n", ax, ay, az);
     }
+
+    // OTA update check
+    ArduinoOTA.handle();
 }

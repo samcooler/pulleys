@@ -52,20 +52,31 @@ public:
         if (_phase > 6.2832f) _phase -= 6.2832f;
 
         // Smoothed random walk for ripple parameters
-        _rippleSpeed  += _randWalk(dt, 0.05f, 0.30f, _rippleSpeed);
-        _rippleFreq   += _randWalk(dt, 0.10f, 1.3f,  _rippleFreq - 1.8f);
-        _rippleFreq    = _clamp(_rippleFreq, 0.5f, 3.1f);
+        _rippleSpeed  += _randWalk(dt, 15.0f, 0.1f, _rippleSpeed);
+        _rippleFreq   += _randWalk(dt, 1.0f, 0.15f, _rippleFreq - 1.8f);
+        _rippleFreq    = _clamp(_rippleFreq, 0.3f, 4.5f);
         _ripplePhase  += _rippleSpeed * dt;
         if (_ripplePhase >  100.0f) _ripplePhase -= 100.0f;
         if (_ripplePhase < -100.0f) _ripplePhase += 100.0f;
 
-        // Wandering center via smoothed random walk
+        // Wandering center: random walk drives a target, EMA smooths actual position
         float midX = (_cols - 1) * 0.5f;
         float midY = (_rows - 1) * 0.5f;
-        _cx += _randWalk(dt, 0.3f, _cols * 0.33f, _cx - midX);
-        _cy += _randWalk(dt, 0.3f, _rows * 0.33f, _cy - midY);
-        _cx = _clamp(_cx, midX - _cols * 0.33f, midX + _cols * 0.33f);
-        _cy = _clamp(_cy, midY - _rows * 0.33f, midY + _rows * 0.33f);
+        _cxTarget += _randWalk(dt, 1.5f, 0.03f, _cxTarget - midX);
+        _cyTarget += _randWalk(dt, 1.5f, 0.03f, _cyTarget - midY);
+        _cxTarget = _clamp(_cxTarget, 0.0f, (float)(_cols - 1));
+        _cyTarget = _clamp(_cyTarget, 0.0f, (float)(_rows - 1));
+        // Smooth follow (EMA, alpha ~0.02 at 30fps)
+        float alpha = 1.0f - expf(-0.6f * dt);
+        _cx += (_cxTarget - _cx) * alpha;
+        _cy += (_cyTarget - _cy) * alpha;
+
+        // Debug: print ripple state every 1s
+        if (nowMs - _lastDebugMs >= 1000) {
+            _lastDebugMs = nowMs;
+            Serial.printf("  [PAT] spd=%.3f freq=%.2f phase=%.1f cx=%.1f cy=%.1f\n",
+                          _rippleSpeed, _rippleFreq, _ripplePhase, _cx, _cy);
+        }
 
         CRGB cA = CRGB(_culture.colorA.r, _culture.colorA.g, _culture.colorA.b);
         CRGB cB = CRGB(_culture.colorB.r, _culture.colorB.g, _culture.colorB.b);
@@ -133,19 +144,21 @@ private:
 
     // Smoothed random walk state
     uint32_t _lastMs      = 0;
+    uint32_t _lastDebugMs = 0;
     float    _phase       = 0.0f;
     float    _rippleSpeed = 0.0f;
     float    _rippleFreq  = 1.8f;
     float    _ripplePhase = 0.0f;
     float    _cx          = 3.5f;
     float    _cy          = 3.5f;
+    float    _cxTarget    = 3.5f;
+    float    _cyTarget    = 3.5f;
 
-    // Brownian walk step: drift rate controls how fast it wanders,
-    // maxDev is soft spring back toward 0, offset is current displacement.
-    static float _randWalk(float dt, float driftRate, float maxDev, float offset) {
+    // Brownian walk step: driftRate = random nudge strength,
+    // springK = how strongly it pulls back toward center (lower = wider roam).
+    static float _randWalk(float dt, float driftRate, float springK, float offset) {
         float nudge = ((random8() / 255.0f) - 0.5f) * 2.0f * driftRate * dt;
-        // Soft spring: pull back proportional to how far from center
-        float spring = -offset * (driftRate / maxDev) * dt;
+        float spring = -offset * springK * dt;
         return nudge + spring;
     }
 
