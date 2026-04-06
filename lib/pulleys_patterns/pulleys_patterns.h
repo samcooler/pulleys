@@ -63,7 +63,7 @@ public:
         _lastMs = nowMs;
 
         // Accumulate base phase (wrap to avoid precision loss)
-        _phase += hz * 2.0f * (float)M_PI * dt;
+        _phase += hz * 2.0f * 2.0f * (float)M_PI * dt;
         if (_phase > 6.2832f) _phase -= 6.2832f;
 
         // Smoothed random walk for ripple parameters
@@ -100,7 +100,10 @@ public:
         CRGB cA = CRGB(_culture.colorA.r, _culture.colorA.g, _culture.colorA.b);
         CRGB cB = CRGB(_culture.colorB.r, _culture.colorB.g, _culture.colorB.b);
 
-        for (uint16_t i = 0; i < _numLeds; i++) {
+        // Last row reserved for culture status display
+        uint16_t patternLeds = _numLeds - _cols;
+
+        for (uint16_t i = 0; i < patternLeds; i++) {
             // -- Base pattern: two-color wave --
             float pixelPhase = _phase + (i * 2.0f * (float)M_PI / _numLeds);
             // Sharpen sine: ~15% solid A, ~15% solid B, ~70% smooth transition
@@ -130,8 +133,8 @@ public:
             if (_density >= 1.0f) {
                 _leds[i] = base;
             } else {
-                if (_sparkle[i] == 0 && random8() < 3) {
-                    _sparkle[i] = 180;  // reduced sparkle peak
+                if (_sparkle[i] == 0 && random8() < 2) {
+                    _sparkle[i] = 255;  // max bright first frame
                 }
                 uint8_t bri = _sparkle[i] < 40 ? 40 : _sparkle[i];
                 _leds[i] = base;
@@ -143,6 +146,26 @@ public:
                     _sparkle[i] = 0;
                 }
             }
+        }
+
+        // ── Status row (last row): colorA(3) | colorB(3) | freq pulse(2) ──
+        {
+            uint16_t base_i = patternLeds;  // first LED of last row
+            CRGB sA = cA; sA.nscale8(_maxBri / 2);
+            CRGB sB = cB; sB.nscale8(_maxBri / 2);
+            // 3 LEDs color A
+            _leds[base_i + 0] = sA;
+            _leds[base_i + 1] = sA;
+            _leds[base_i + 2] = sA;
+            // 3 LEDs color B
+            _leds[base_i + 3] = sB;
+            _leds[base_i + 4] = sB;
+            _leds[base_i + 5] = sB;
+            // 2 LEDs pulsing white at culture oscillation frequency
+            float pulse = (sinf(_phase) + 1.0f) * 0.5f;  // 0-1
+            uint8_t pBri = (uint8_t)(pulse * _maxBri / 2);
+            _leds[base_i + 6] = CRGB(pBri, pBri, pBri);
+            _leds[base_i + 7] = CRGB(pBri, pBri, pBri);
         }
     }
 
