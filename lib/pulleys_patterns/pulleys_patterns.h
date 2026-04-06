@@ -42,35 +42,37 @@ public:
         if (!_leds || _numLeds == 0) return;
 
         float hz = culture_osc_to_hz(_culture.oscillation);
-        float t = millis() / 1000.0f;
-        float phase = t * hz * 2.0f * (float)M_PI;
+        uint32_t nowMs = millis();
+        float dt = (nowMs - _lastMs) / 1000.0f;
+        if (_lastMs == 0) dt = 0.033f;  // first frame
+        _lastMs = nowMs;
 
-        // Ripple center wanders around the middle 2/3 of the matrix
+        // Accumulate base phase (wrap to avoid precision loss)
+        _phase += hz * 2.0f * (float)M_PI * dt;
+        if (_phase > 6.2832f) _phase -= 6.2832f;
+
+        // Smoothed random walk for ripple parameters
+        _rippleSpeed  += _randWalk(dt, 0.05f, 0.30f, _rippleSpeed);
+        _rippleFreq   += _randWalk(dt, 0.10f, 1.3f,  _rippleFreq - 1.8f);
+        _rippleFreq    = _clamp(_rippleFreq, 0.5f, 3.1f);
+        _ripplePhase  += _rippleSpeed * dt;
+        if (_ripplePhase >  100.0f) _ripplePhase -= 100.0f;
+        if (_ripplePhase < -100.0f) _ripplePhase += 100.0f;
+
+        // Wandering center via smoothed random walk
         float midX = (_cols - 1) * 0.5f;
         float midY = (_rows - 1) * 0.5f;
-        float wanderX = _cols * 0.33f;  // wander radius = 1/3 of matrix width
-        float wanderY = _rows * 0.33f;
-        float cx = midX + wanderX * sinf(t * 0.17f + 0.0f) * cosf(t * 0.11f + 2.3f);
-        float cy = midY + wanderY * sinf(t * 0.13f + 1.1f) * cosf(t * 0.09f + 3.7f);
-
-        // Woozy random walk: smoothly vary ripple speed (symmetric around 0)
-        float rippleSpeed = 0.0f
-            + 0.15f * sinf(t * 0.13f)
-            + 0.10f * sinf(t * 0.31f + 1.7f)
-            + 0.06f * sinf(t * 0.074f + 4.2f);
-        // Hard cap
-        if (rippleSpeed > 0.30f) rippleSpeed = 0.30f;
-        if (rippleSpeed < -0.30f) rippleSpeed = -0.30f;
-        float rippleFreq  = 1.8f
-            + 0.8f * sinf(t * 0.19f + 0.5f)
-            + 0.5f * sinf(t * 0.41f + 2.9f);   // range ~0.5 to 3.1
+        _cx += _randWalk(dt, 0.3f, _cols * 0.33f, _cx - midX);
+        _cy += _randWalk(dt, 0.3f, _rows * 0.33f, _cy - midY);
+        _cx = _clamp(_cx, midX - _cols * 0.33f, midX + _cols * 0.33f);
+        _cy = _clamp(_cy, midY - _rows * 0.33f, midY + _rows * 0.33f);
 
         CRGB cA = CRGB(_culture.colorA.r, _culture.colorA.g, _culture.colorA.b);
         CRGB cB = CRGB(_culture.colorB.r, _culture.colorB.g, _culture.colorB.b);
 
         for (uint16_t i = 0; i < _numLeds; i++) {
             // -- Base pattern: two-color wave --
-            float pixelPhase = phase + (i * 2.0f * (float)M_PI / _numLeds);
+            float pixelPhase = _phase + (i * 2.0f * (float)M_PI / _numLeds);
             // Sharpen sine: ~15% solid A, ~15% solid B, ~70% smooth transition
             float raw = (sinf(pixelPhase) + 1.0f) * 0.5f;  // 0.0 to 1.0
             float blend;
@@ -87,10 +89,10 @@ public:
             // -- Radial ripple modulation (stone in water) --
             uint8_t row = i / _cols;
             uint8_t col = i % _cols;
-            float dx = col - cx;
-            float dy = row - cy;
+            float dx = col - _cx;
+            float dy = row - _cy;
             float dist = sqrtf(dx * dx + dy * dy);
-            float ripple = sinf(dist * rippleFreq - t * rippleSpeed);
+            float ripple = sinf(dist * _rippleFreq - _ripplePhase);
             if (ripple < 0.0f) ripple = 0.0f;  // only positive half
             base.nscale8((uint8_t)(ripple * 255.0f));
 
@@ -128,6 +130,28 @@ private:
     uint8_t        _cols    = 8;
     uint8_t        _sparkle[MAX_LEDS] = {};
     PulleysCulture _culture = {};
+
+    // Smoothed random walk state
+    uint32_t _lastMs      = 0;
+    float    _phase       = 0.0f;
+    float    _rippleSpeed = 0.0f;
+    float    _rippleFreq  = 1.8f;
+    float    _ripplePhase = 0.0f;
+    float    _cx          = 3.5f;
+    float    _cy          = 3.5f;
+
+    // Brownian walk step: drift rate controls how fast it wanders,
+    // maxDev is soft spring back toward 0, offset is current displacement.
+    static float _randWalk(float dt, float driftRate, float maxDev, float offset) {
+        float nudge = ((random8() / 255.0f) - 0.5f) * 2.0f * driftRate * dt;
+        // Soft spring: pull back proportional to how far from center
+        float spring = -offset * (driftRate / maxDev) * dt;
+        return nudge + spring;
+    }
+
+    static float _clamp(float v, float lo, float hi) {
+        return v < lo ? lo : (v > hi ? hi : v);
+    }
 };
 
 } // namespace pulleys
