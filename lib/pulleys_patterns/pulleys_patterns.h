@@ -14,7 +14,7 @@ namespace pulleys {
 
 class PatternRenderer {
 public:
-    static constexpr uint16_t MAX_LEDS = 64;
+    static constexpr uint16_t MAX_LEDS = 256;
 
     void init(CRGB* leds, uint16_t numLeds, uint8_t maxBrightness = 50) {
         _leds = leds;
@@ -47,9 +47,10 @@ public:
     }
 
     // Set matrix dimensions for radial ripple (rows x cols). Default 8x8.
-    void setMatrixSize(uint8_t rows, uint8_t cols) {
+    void setMatrixSize(uint8_t rows, uint8_t cols, bool serpentine = false) {
         _rows = rows;
         _cols = cols;
+        _serpentine = serpentine;
     }
 
     // Call at ~20-30 fps.
@@ -122,6 +123,7 @@ public:
             // -- Radial ripple modulation (stone in water) --
             uint8_t row = i / _cols;
             uint8_t col = i % _cols;
+            if (_serpentine && (row & 1)) col = (_cols - 1) - col;  // unsnake odd rows
             float dx = col - _cx;
             float dy = row - _cy;
             float dist = sqrtf(dx * dx + dy * dy);
@@ -181,6 +183,7 @@ private:
     float          _density = 1.0f;
     uint8_t        _rows    = 8;
     uint8_t        _cols    = 8;
+    bool           _serpentine = false;
     uint8_t        _sparkle[MAX_LEDS] = {};
     PulleysCulture _culture = {};
 

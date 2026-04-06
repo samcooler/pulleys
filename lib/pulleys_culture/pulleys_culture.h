@@ -10,15 +10,15 @@
 
 namespace pulleys {
 
-// Map oscillation byte (1–255) to Hz (~0.1 to 5.0 Hz)
+// Map oscillation byte (1–255) to Hz (~0.02 to 1.5 Hz)
 inline float culture_osc_to_hz(uint8_t osc) {
     if (osc == 0) osc = 1;
-    return 0.02f + (osc / 255.0f) * 0.48f;  // 0.02–0.5 Hz (2–50 sec cycle)
+    return 0.02f + (osc / 255.0f) * 1.48f;  // 0.02–1.5 Hz (0.7–50 sec cycle)
 }
 
 // Map Hz back to oscillation byte
 inline uint8_t culture_hz_to_osc(float hz) {
-    float norm = (hz - 0.02f) / 0.48f;
+    float norm = (hz - 0.02f) / 1.48f;
     if (norm < 0.0f) norm = 0.0f;
     if (norm > 1.0f) norm = 1.0f;
     return (uint8_t)(norm * 255.0f);
@@ -47,9 +47,9 @@ static inline PulleysColor _hsv_to_rgb(uint16_t h, uint8_t s, uint8_t v) {
 // Generate a random culture with vivid, saturated colors
 inline PulleysCulture culture_random() {
     PulleysCulture c;
-    // Two random hues at least 72 degrees apart (20% of wheel)
+    // Two random hues at least 22 degrees apart (~6% of wheel)
     uint16_t hueA = random(0, 360);
-    uint16_t offset = random(72, 289);  // 72..288 degrees away
+    uint16_t offset = random(22, 339);  // 22..338 degrees away
     uint16_t hueB = (hueA + offset) % 360;
     c.colorA = _hsv_to_rgb(hueA, random(200, 256), 255);
     c.colorB = _hsv_to_rgb(hueB, random(200, 256), 255);

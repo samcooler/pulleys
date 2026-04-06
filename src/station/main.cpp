@@ -4,7 +4,6 @@
 #include <pulleys_protocol.h>
 #include <pulleys_identity.h>
 #include <pulleys_culture.h>
-#include <pulleys_patterns.h>
 #include <pulleys_proximity.h>
 
 // ── Config (LED_PIN, LED_COUNT set via build_flags in platformio.ini) ─────────
@@ -15,19 +14,30 @@
   #define LED_COUNT 10
 #endif
 
-#define MAX_BRIGHTNESS     80
+#define MAX_BRIGHTNESS     15
 #define LED_FPS            30
-#define CULTURE_BLEND_RATIO 0.10f   // how much a visiting traveler influences us
-#define MATE_COOLDOWN_MS   30000    // min ms between culture exchanges with same traveler
+#define MATE_COOLDOWN_MS   30000
+#define NUM_SLOTS          4
+#define ROWS_PER_SLOT      8       // 32 rows / 4 slots
+#define COLS               8
 
 // ── Globals ───────────────────────────────────────────────────────────────────
 static CRGB leds[LED_COUNT];
-static pulleys::PatternRenderer pattern;
 static pulleys::ProximityTracker proximity;
-static PulleysCulture myCulture;
+
+// 4 culture slots — each has its own two colors and frequency
+static PulleysCulture slots[NUM_SLOTS];
+static uint8_t nextSlot = 0;  // round-robin replacement
+
 static uint16_t cooldownIds[32];
 static uint32_t cooldownTimes[32];
 static uint8_t  cooldownCount = 0;
+
+// ── XY mapping for serpentine 8-wide matrix ───────────────────────────────────
+static inline uint16_t xyToIndex(uint8_t row, uint8_t col) {
+    if (row & 1) col = (COLS - 1) - col;  // odd rows reversed
+    return (uint16_t)row * COLS + col;
+}
 
 // ── Culture exchange callback ─────────────────────────────────────────────────
 static void onZoneChange(const pulleys::TrackedDevice& dev,
@@ -36,25 +46,25 @@ static void onZoneChange(const pulleys::TrackedDevice& dev,
     if (dev.deviceType != PULLEYS_TYPE_TRAVELER) return;
 
     if (newZone == pulleys::ZONE_CLOSE) {
-        // Check per-traveler cooldown
         uint32_t now = millis();
         for (uint8_t i = 0; i < cooldownCount; i++) {
             if (cooldownIds[i] == dev.deviceId && (now - cooldownTimes[i]) < MATE_COOLDOWN_MS) {
-                Serial.printf("\n☆ Traveler T-%04X CLOSE — cooldown (%lus left)\n",
+                Serial.printf("\n☆ T-%04X CLOSE — cooldown (%lus left)\n",
                               dev.deviceId, (MATE_COOLDOWN_MS - (now - cooldownTimes[i])) / 1000);
                 return;
             }
         }
 
-        Serial.printf("\n★ Traveler T-%04X arrived CLOSE — absorbing culture!\n", dev.deviceId);
-        pulleys::culture_print("theirs", dev.culture);
-        pulleys::culture_print("mine  ", myCulture);
+        // Overwrite the next slot with the traveler's culture (no blending)
+        uint8_t s = nextSlot;
+        slots[s] = dev.culture;
+        nextSlot = (nextSlot + 1) % NUM_SLOTS;
 
-        myCulture = pulleys::culture_blend(myCulture, dev.culture, CULTURE_BLEND_RATIO);
-        pattern.setCulture(myCulture);
-
-        pulleys::culture_print("merged", myCulture);
-        Serial.println();
+        Serial.printf("\n★ T-%04X → slot %d: %s/%s %.2fHz\n",
+                      dev.deviceId, s,
+                      pulleys::color_name(dev.culture.colorA),
+                      pulleys::color_name(dev.culture.colorB),
+                      pulleys::culture_osc_to_hz(dev.culture.oscillation));
 
         // Record cooldown
         bool found = false;
@@ -68,7 +78,7 @@ static void onZoneChange(const pulleys::TrackedDevice& dev,
         }
     }
     if (newZone == pulleys::ZONE_GONE && oldZone >= pulleys::ZONE_NEAR) {
-        Serial.printf("  Traveler T-%04X departed.\n", dev.deviceId);
+        Serial.printf("  T-%04X departed.\n", dev.deviceId);
     }
 }
 
@@ -95,17 +105,18 @@ void setup() {
     pulleys::identity_init(PULLEYS_TYPE_STATION);
     pulleys::identity_print_banner(PULLEYS_TYPE_STATION);
 
-    // Culture — start with a random one
+    // 4 random culture slots
     randomSeed(esp_random());
-    myCulture = pulleys::culture_random();
-    Serial.println("Starting culture:");
-    pulleys::culture_print("mine", myCulture);
+    for (uint8_t i = 0; i < NUM_SLOTS; i++) {
+        slots[i] = pulleys::culture_random();
+        char label[8];
+        snprintf(label, sizeof(label), "slot%d", i);
+        pulleys::culture_print(label, slots[i]);
+    }
 
-    // LEDs
+    // LEDs — 8 cols x 32 rows, serpentine
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, LED_COUNT);
-    FastLED.setBrightness(255);  // brightness controlled by PatternRenderer only
-    pattern.init(leds, LED_COUNT, MAX_BRIGHTNESS);
-    pattern.setCulture(myCulture);
+    FastLED.setBrightness(255);
 
     // Proximity
     proximity.setZoneChangeCallback(onZoneChange);
@@ -118,11 +129,6 @@ void setup() {
     pScan->setWindow(99);
     pScan->start(0, false, false);
     Serial.println("Scanning for Travelers...");
-
-    // TODO: OTA update initialization would go here
-    // ArduinoOTA.setHostname(pulleys::identity_name());
-    // ArduinoOTA.begin();
-
     Serial.println("Station ready.\n");
 }
 
@@ -136,7 +142,54 @@ void loop() {
     // LED pattern update (~30 fps)
     if (now - lastLed >= (1000 / LED_FPS)) {
         lastLed = now;
-        pattern.update();
+        float t = now / 1000.0f;
+
+        for (uint8_t s = 0; s < NUM_SLOTS; s++) {
+            float hz = pulleys::culture_osc_to_hz(slots[s].oscillation);
+            // See-saw: left half and right half oscillate in antiphase
+            float wave = (sinf(t * hz * 2.0f * (float)M_PI) + 1.0f) * 0.5f;  // 0-1
+            float waveInv = 1.0f - wave;
+
+            CRGB cA(slots[s].colorA.r, slots[s].colorA.g, slots[s].colorA.b);
+            CRGB cB(slots[s].colorB.r, slots[s].colorB.g, slots[s].colorB.b);
+
+            // Left half: blend from A toward B
+            CRGB leftC;
+            leftC.r = (uint8_t)(cA.r + (float)(cB.r - cA.r) * wave);
+            leftC.g = (uint8_t)(cA.g + (float)(cB.g - cA.g) * wave);
+            leftC.b = (uint8_t)(cA.b + (float)(cB.b - cA.b) * wave);
+
+            // Right half: blend from B toward A (antiphase)
+            CRGB rightC;
+            rightC.r = (uint8_t)(cA.r + (float)(cB.r - cA.r) * waveInv);
+            rightC.g = (uint8_t)(cA.g + (float)(cB.g - cA.g) * waveInv);
+            rightC.b = (uint8_t)(cA.b + (float)(cB.b - cA.b) * waveInv);
+
+            uint8_t startRow = s * ROWS_PER_SLOT;
+            // Single pillow per slot, split left/right by sharp center line
+            float cxMid = (COLS - 1) * 0.5f;            // horizontal center
+            float cySlot = (ROWS_PER_SLOT - 1) * 0.5f;  // vertical center of slot
+
+            for (uint8_t r = 0; r < ROWS_PER_SLOT; r++) {
+                uint8_t row = startRow + r;
+                // Vertical pillow: raised cosine across slot height
+                float vy = cosf((r - cySlot) / cySlot * (float)M_PI * 0.5f);
+                vy = vy * vy;
+
+                for (uint8_t c = 0; c < COLS; c++) {
+                    uint16_t idx = xyToIndex(row, c);
+                    // Horizontal pillow across full width
+                    float dx = (c - cxMid) / (cxMid + 0.5f);
+                    float vx = cosf(dx * (float)M_PI * 0.5f);
+                    vx = vx * vx;
+
+                    uint8_t pillow = (uint8_t)(vy * vx * MAX_BRIGHTNESS);
+                    // Sharp split: left = leftC, right = rightC
+                    leds[idx] = (c < COLS / 2) ? leftC : rightC;
+                    leds[idx].nscale8(pillow);
+                }
+            }
+        }
         FastLED.show();
     }
 

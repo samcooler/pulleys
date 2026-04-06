@@ -1,10 +1,10 @@
 #!/usr/bin/env zsh
-# Flash all connected travelers in parallel using esptool.py directly.
+# Flash all connected boards in parallel using esptool.py directly.
 # Usage: ./flash_all.sh [env]
 #   env: platformio environment (default: traveler)
 #
-# Build first with: pio run -e traveler
-# Then flash all connected boards: ./flash_all.sh
+# Build first with: pio run -e <env>
+# Then flash all connected boards: ./flash_all.sh <env>
 
 set -euo pipefail
 
@@ -13,6 +13,12 @@ BUILD=".pio/build/$ENV"
 PYTHON="/Users/sam/.platformio/penv/bin/python"
 ESPTOOL="/Users/sam/.platformio/packages/tool-esptoolpy/esptool.py"
 BOOT_APP="/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
+
+# Auto-detect chip from environment name
+case "$ENV" in
+  *c3*) CHIP="esp32c3" ;;
+  *)    CHIP="esp32s3" ;;
+esac
 
 # Verify build exists
 if [[ ! -f "$BUILD/firmware.bin" ]]; then
@@ -27,11 +33,11 @@ if [[ ${#ports[@]} -eq 0 ]]; then
   exit 1
 fi
 
-echo "Flashing $ENV to ${#ports[@]} board(s): ${ports[*]}"
+echo "Flashing $ENV ($CHIP) to ${#ports[@]} board(s): ${ports[*]}"
 
 flash() {
   local port="$1"
-  "$PYTHON" "$ESPTOOL" --chip esp32s3 --port "$port" --baud 460800 \
+  "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$port" --baud 460800 \
     --before default_reset --after hard_reset \
     write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB \
     0x0000  "$BUILD/bootloader.bin" \

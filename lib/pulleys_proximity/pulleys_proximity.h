@@ -42,9 +42,9 @@ class ProximityTracker {
 public:
     static constexpr uint8_t  MAX_TRACKED    = 32;
     static constexpr float    RSSI_ALPHA     = 0.3f;    // smoothing factor (higher = more responsive)
-    static constexpr int      RSSI_CLOSE     = -25;     // dBm threshold for CLOSE (~0.5 m)
-    static constexpr int      RSSI_NEAR      = -60;     // dBm threshold for NEAR  (~3 m)
-    static constexpr int      RSSI_FAR       = -85;     // dBm threshold for FAR   (~9 m)
+    static constexpr int      RSSI_CLOSE     = -58;     // dBm threshold for CLOSE
+    static constexpr int      RSSI_NEAR      = -73;     // dBm threshold for NEAR
+    static constexpr int      RSSI_FAR       = -80;     // dBm threshold for FAR
     static constexpr int      HYSTERESIS     = 5;       // dBm hysteresis to prevent zone flickering
     static constexpr uint32_t TIMEOUT_MS     = 10000;   // remove device after 10s silence
 
