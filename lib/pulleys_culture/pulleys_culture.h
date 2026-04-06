@@ -10,15 +10,15 @@
 
 namespace pulleys {
 
-// Map oscillation byte (1–255) to Hz (~0.02 to 1.5 Hz)
+// Map oscillation byte (1–255) to Hz (~0.02 to 4.0 Hz)
 inline float culture_osc_to_hz(uint8_t osc) {
     if (osc == 0) osc = 1;
-    return 0.02f + (osc / 255.0f) * 1.48f;  // 0.02–1.5 Hz (0.7–50 sec cycle)
+    return 0.02f + (osc / 255.0f) * 3.98f;  // 0.02–4.0 Hz
 }
 
 // Map Hz back to oscillation byte
 inline uint8_t culture_hz_to_osc(float hz) {
-    float norm = (hz - 0.02f) / 1.48f;
+    float norm = (hz - 0.02f) / 3.98f;
     if (norm < 0.0f) norm = 0.0f;
     if (norm > 1.0f) norm = 1.0f;
     return (uint8_t)(norm * 255.0f);
@@ -53,7 +53,7 @@ inline PulleysCulture culture_random() {
     uint16_t hueB = (hueA + offset) % 360;
     c.colorA = _hsv_to_rgb(hueA, random(200, 256), 255);
     c.colorB = _hsv_to_rgb(hueB, random(200, 256), 255);
-    c.oscillation = random(30, 226);  // ~0.7–4.4 Hz, avoiding extremes
+    c.oscillation = random(12, 255);  // ~0.2–4.0 Hz
     return c;
 }
 
