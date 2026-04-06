@@ -3,6 +3,7 @@
 #include <FastLED.h>
 #include <pulleys_protocol.h>
 #include <pulleys_culture.h>
+#include <pulleys_identity.h>
 #include <math.h>
 
 // ── LED pattern renderer driven by a PulleysCulture ───────────────────────────
@@ -20,10 +21,24 @@ public:
         _numLeds = (numLeds > MAX_LEDS) ? MAX_LEDS : numLeds;
         _maxBri = maxBrightness;
         memset(_sparkle, 0, sizeof(_sparkle));
+
+        // Seed random walk from device ID so each board diverges immediately
+        uint16_t id = pulleys::identity_id();
+        random16_set_seed(id);
+        _rippleSpeed = ((random8() / 255.0f) - 0.5f) * 10.0f;
+        _spatialFreqMul  = 0.3f + (random8() / 255.0f) * 0.7f;  // 0.3-1.0x
+        _ripplePhase = (random8() / 255.0f) * 6.2832f;
+        float midX = (_cols - 1) * 0.5f;
+        float midY = (_rows - 1) * 0.5f;
+        _cxTarget = midX + ((random8() / 255.0f) - 0.5f) * 4.0f;
+        _cyTarget = midY + ((random8() / 255.0f) - 0.5f) * 4.0f;
+        _cx = _cxTarget;
+        _cy = _cyTarget;
     }
 
     void setCulture(const PulleysCulture& culture) {
         _culture = culture;
+        _spatialFreqBase = 2.0f;  // base spatial frequency for radial ripple
     }
 
     // Sparse sparkle density: 0.0 = all off, 1.0 = all on
@@ -53,21 +68,25 @@ public:
 
         // Smoothed random walk for ripple parameters
         _rippleSpeed  += _randWalk(dt, 15.0f, 0.1f, _rippleSpeed);
-        _rippleFreq   += _randWalk(dt, 1.0f, 0.15f, _rippleFreq - 1.8f);
-        _rippleFreq    = _clamp(_rippleFreq, 0.3f, 4.5f);
+
+        // Spatial frequency: base from culture, multiplier wanders for longer wavelengths
+        _spatialFreqMul += _randWalk(dt, 0.5f, 0.2f, _spatialFreqMul - 0.65f);
+        _spatialFreqMul  = _clamp(_spatialFreqMul, 0.3f, 1.0f);
+        _rippleFreq      = _spatialFreqBase * _spatialFreqMul;
+
         _ripplePhase  += _rippleSpeed * dt;
         if (_ripplePhase >  100.0f) _ripplePhase -= 100.0f;
         if (_ripplePhase < -100.0f) _ripplePhase += 100.0f;
 
-        // Wandering center: random walk drives a target, EMA smooths actual position
+        // Wandering center: larger excursion, weaker spring, can roam past edges
         float midX = (_cols - 1) * 0.5f;
         float midY = (_rows - 1) * 0.5f;
-        _cxTarget += _randWalk(dt, 1.5f, 0.03f, _cxTarget - midX);
-        _cyTarget += _randWalk(dt, 1.5f, 0.03f, _cyTarget - midY);
-        _cxTarget = _clamp(_cxTarget, 0.0f, (float)(_cols - 1));
-        _cyTarget = _clamp(_cyTarget, 0.0f, (float)(_rows - 1));
-        // Smooth follow (EMA, alpha ~0.02 at 30fps)
-        float alpha = 1.0f - expf(-0.6f * dt);
+        _cxTarget += _randWalk(dt, 4.0f, 0.015f, _cxTarget - midX);
+        _cyTarget += _randWalk(dt, 4.0f, 0.015f, _cyTarget - midY);
+        _cxTarget = _clamp(_cxTarget, -2.0f, (float)(_cols + 1));
+        _cyTarget = _clamp(_cyTarget, -2.0f, (float)(_rows + 1));
+        // Smooth follow (EMA)
+        float alpha = 1.0f - expf(-0.4f * dt);  // slower follow for smoother wander
         _cx += (_cxTarget - _cx) * alpha;
         _cy += (_cyTarget - _cy) * alpha;
 
@@ -147,12 +166,14 @@ private:
     uint32_t _lastDebugMs = 0;
     float    _phase       = 0.0f;
     float    _rippleSpeed = 0.0f;
-    float    _rippleFreq  = 1.8f;
-    float    _ripplePhase = 0.0f;
-    float    _cx          = 3.5f;
-    float    _cy          = 3.5f;
-    float    _cxTarget    = 3.5f;
-    float    _cyTarget    = 3.5f;
+    float    _rippleFreq      = 1.8f;
+    float    _ripplePhase     = 0.0f;
+    float    _spatialFreqBase = 1.8f;
+    float    _spatialFreqMul  = 1.0f;
+    float    _cx              = 3.5f;
+    float    _cy              = 3.5f;
+    float    _cxTarget        = 3.5f;
+    float    _cyTarget        = 3.5f;
 
     // Brownian walk step: driftRate = random nudge strength,
     // springK = how strongly it pulls back toward center (lower = wider roam).

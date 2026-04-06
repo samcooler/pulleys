@@ -10,7 +10,8 @@ set -euo pipefail
 
 ENV="${1:-traveler}"
 BUILD=".pio/build/$ENV"
-ESPTOOL="/Users/sam/.platformio/penv/bin/python /Users/sam/.platformio/packages/tool-esptoolpy/esptool.py"
+PYTHON="/Users/sam/.platformio/penv/bin/python"
+ESPTOOL="/Users/sam/.platformio/packages/tool-esptoolpy/esptool.py"
 BOOT_APP="/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
 
 # Verify build exists
@@ -30,7 +31,7 @@ echo "Flashing $ENV to ${#ports[@]} board(s): ${ports[*]}"
 
 flash() {
   local port="$1"
-  $ESPTOOL --chip esp32s3 --port "$port" --baud 460800 \
+  "$PYTHON" "$ESPTOOL" --chip esp32s3 --port "$port" --baud 460800 \
     --before default_reset --after hard_reset \
     write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB \
     0x0000  "$BUILD/bootloader.bin" \
