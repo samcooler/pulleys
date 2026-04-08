@@ -30,12 +30,10 @@ public:
         _rippleSpeed = ((random8() / 255.0f) - 0.5f) * 10.0f;
         _spatialFreqMul  = 0.3f + (random8() / 255.0f) * 0.7f;  // 0.3-1.0x
         _ripplePhase = (random8() / 255.0f) * 6.2832f;
-        float midX = (_cols - 1) * 0.5f;
-        float midY = (_rows - 1) * 0.5f;
-        _cxTarget = midX + ((random8() / 255.0f) - 0.5f) * 4.0f;
-        _cyTarget = midY + ((random8() / 255.0f) - 0.5f) * 4.0f;
-        _cx = _cxTarget;
-        _cy = _cyTarget;
+        _cx = (_cols - 1) * 0.5f;
+        _cy = (_rows - 1) * 0.5f;
+        _cxVel = 0; _cyVel = 0;
+        _cxAcc = 0; _cyAcc = 0;
     }
 
     void setCulture(const PulleysCulture& culture) {
@@ -69,35 +67,54 @@ public:
         _phase += hz * 2.0f * 2.0f * (float)M_PI * dt;
         if (_phase > 6.2832f) _phase -= 6.2832f;
 
-        // Smoothed random walk for ripple parameters
-        _rippleSpeed  += _randWalk(dt, 15.0f, 0.1f, _rippleSpeed);
+        // Ripple speed: jerk → acc → vel → position (rippleSpeed is the "position")
+        _rsAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * 20.0f * dt;
+        _rsAcc *= expf(-2.0f * dt);
+        _rsVel += _rsAcc * dt;
+        _rsVel *= expf(-0.3f * dt);
+        _rippleSpeed += _rsVel * dt;
+        if (_rippleSpeed < -15.0f) { _rippleSpeed = -15.0f; _rsVel = fabsf(_rsVel); }
+        if (_rippleSpeed >  15.0f) { _rippleSpeed =  15.0f; _rsVel = -fabsf(_rsVel); }
 
-        // Spatial frequency: base from culture, multiplier wanders for longer wavelengths
-        _spatialFreqMul += _randWalk(dt, 0.5f, 0.2f, _spatialFreqMul - 0.65f);
-        _spatialFreqMul  = _clamp(_spatialFreqMul, 0.3f, 1.0f);
-        _rippleFreq      = _spatialFreqBase * _spatialFreqMul;
+        // Spatial frequency multiplier: jerk → acc → vel → position
+        _sfAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * 1.0f * dt;
+        _sfAcc *= expf(-2.0f * dt);
+        _sfVel += _sfAcc * dt;
+        _sfVel *= expf(-0.3f * dt);
+        _spatialFreqMul += _sfVel * dt;
+        if (_spatialFreqMul < 0.3f) { _spatialFreqMul = 0.3f; _sfVel = fabsf(_sfVel); }
+        if (_spatialFreqMul > 1.0f) { _spatialFreqMul = 1.0f; _sfVel = -fabsf(_sfVel); }
+        _rippleFreq = _spatialFreqBase * _spatialFreqMul;
 
-        _ripplePhase  += _rippleSpeed * dt;
+        _ripplePhase += _rippleSpeed * dt;
         if (_ripplePhase >  100.0f) _ripplePhase -= 100.0f;
         if (_ripplePhase < -100.0f) _ripplePhase += 100.0f;
 
-        // Wandering center: larger excursion, weaker spring, can roam past edges
-        float midX = (_cols - 1) * 0.5f;
-        float midY = (_rows - 1) * 0.5f;
-        _cxTarget += _randWalk(dt, 4.0f, 0.015f, _cxTarget - midX);
-        _cyTarget += _randWalk(dt, 4.0f, 0.015f, _cyTarget - midY);
-        _cxTarget = _clamp(_cxTarget, -2.0f, (float)(_cols + 1));
-        _cyTarget = _clamp(_cyTarget, -2.0f, (float)(_rows + 1));
-        // Smooth follow (EMA)
-        float alpha = 1.0f - expf(-0.4f * dt);  // slower follow for smoother wander
-        _cx += (_cxTarget - _cx) * alpha;
-        _cy += (_cyTarget - _cy) * alpha;
+        // Wandering center: jerk impulses → acceleration → velocity → position
+        float jerkScale = 5.0f;
+        _cxAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * jerkScale * dt;
+        _cyAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * jerkScale * dt;
+        float accDecay = expf(-2.0f * dt);   // acceleration half-life ~0.35s
+        _cxAcc *= accDecay;
+        _cyAcc *= accDecay;
+        _cxVel += _cxAcc * dt;
+        _cyVel += _cyAcc * dt;
+        float velDecay = expf(-0.3f * dt);   // velocity half-life ~2.3s
+        _cxVel *= velDecay;
+        _cyVel *= velDecay;
+        _cx += _cxVel * dt;
+        _cy += _cyVel * dt;
+        // Reflect off boundaries
+        if (_cx < -1.0f) { _cx = -1.0f; _cxVel = fabsf(_cxVel); }
+        if (_cx > (float)_cols) { _cx = (float)_cols; _cxVel = -fabsf(_cxVel); }
+        if (_cy < -1.0f) { _cy = -1.0f; _cyVel = fabsf(_cyVel); }
+        if (_cy > (float)_rows) { _cy = (float)_rows; _cyVel = -fabsf(_cyVel); }
 
         // Debug: print ripple state every 1s
         if (nowMs - _lastDebugMs >= 1000) {
             _lastDebugMs = nowMs;
-            Serial.printf("  [PAT] spd=%.3f freq=%.2f phase=%.1f cx=%.1f cy=%.1f\n",
-                          _rippleSpeed, _rippleFreq, _ripplePhase, _cx, _cy);
+            Serial.printf("  [PAT] cx=%.2f cy=%.2f vx=%.2f vy=%.2f ax=%.2f ay=%.2f\n",
+                          _cx, _cy, _cxVel, _cyVel, _cxAcc, _cyAcc);
         }
 
         CRGB cA = CRGB(_culture.colorA.r, _culture.colorA.g, _culture.colorA.b);
@@ -194,26 +211,20 @@ private:
     uint32_t _lastDebugMs = 0;
     float    _phase       = 0.0f;
     float    _rippleSpeed = 0.0f;
+    float    _rsVel           = 0.0f;
+    float    _rsAcc           = 0.0f;
     float    _rippleFreq      = 1.8f;
     float    _ripplePhase     = 0.0f;
     float    _spatialFreqBase = 1.8f;
     float    _spatialFreqMul  = 1.0f;
+    float    _sfVel           = 0.0f;
+    float    _sfAcc           = 0.0f;
     float    _cx              = 3.5f;
     float    _cy              = 3.5f;
-    float    _cxTarget        = 3.5f;
-    float    _cyTarget        = 3.5f;
-
-    // Brownian walk step: driftRate = random nudge strength,
-    // springK = how strongly it pulls back toward center (lower = wider roam).
-    static float _randWalk(float dt, float driftRate, float springK, float offset) {
-        float nudge = ((random8() / 255.0f) - 0.5f) * 2.0f * driftRate * dt;
-        float spring = -offset * springK * dt;
-        return nudge + spring;
-    }
-
-    static float _clamp(float v, float lo, float hi) {
-        return v < lo ? lo : (v > hi ? hi : v);
-    }
+    float    _cxVel           = 0.0f;
+    float    _cyVel           = 0.0f;
+    float    _cxAcc           = 0.0f;
+    float    _cyAcc           = 0.0f;
 };
 
 } // namespace pulleys
