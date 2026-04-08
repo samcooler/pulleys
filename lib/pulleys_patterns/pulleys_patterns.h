@@ -64,7 +64,7 @@ public:
         _lastMs = nowMs;
 
         // Accumulate base phase (wrap to avoid precision loss)
-        _phase += hz * 2.0f * 2.0f * (float)M_PI * dt;
+        _phase += hz * 2.0f * 1.2f * (float)M_PI * dt;
         if (_phase > 6.2832f) _phase -= 6.2832f;
 
         // Ripple speed: jerk → acc → vel → position (rippleSpeed is the "position")
@@ -112,6 +112,15 @@ public:
         if (_cy < yLo) { _cy = yLo; _cyVel = fabsf(_cyVel); }
         if (_cy > yHi) { _cy = yHi; _cyVel = -fabsf(_cyVel); }
 
+        // Wave direction: jerk → acc → vel → angle (no bounds, wraps naturally)
+        _wdAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * 1.5f * dt;
+        _wdAcc *= expf(-2.0f * dt);
+        _wdVel += _wdAcc * dt;
+        _wdVel *= expf(-0.5f * dt);   // half-life ~1.4s, slow rotation
+        _waveDir += _wdVel * dt;
+        float waveDx = cosf(_waveDir);
+        float waveDy = sinf(_waveDir);
+
         // Debug: print ripple state every 1s
         if (nowMs - _lastDebugMs >= 1000) {
             _lastDebugMs = nowMs;
@@ -127,7 +136,11 @@ public:
 
         for (uint16_t i = 0; i < patternLeds; i++) {
             // -- Base pattern: two-color wave --
-            float pixelPhase = _phase + (i * 2.0f * (float)M_PI / _numLeds);
+            uint8_t row = i / _cols;
+            uint8_t col = i % _cols;
+            if (_serpentine && (row & 1)) col = (_cols - 1) - col;
+            float proj = col * waveDx + row * waveDy;
+            float pixelPhase = _phase + proj * 2.0f * (float)M_PI / (float)_cols;
             // Sharpen sine: ~15% solid A, ~15% solid B, ~70% smooth transition
             float raw = (sinf(pixelPhase) + 1.0f) * 0.5f;  // 0.0 to 1.0
             float blend;
@@ -142,9 +155,7 @@ public:
             base.nscale8(_maxBri);
 
             // -- Radial ripple modulation (stone in water) --
-            uint8_t row = i / _cols;
-            uint8_t col = i % _cols;
-            if (_serpentine && (row & 1)) col = (_cols - 1) - col;  // unsnake odd rows
+            // row, col already computed above for wave direction
             float dx = col - _cx;
             float dy = row - _cy;
             float dist = sqrtf(dx * dx + dy * dy);
@@ -227,6 +238,9 @@ private:
     float    _cyVel           = 0.0f;
     float    _cxAcc           = 0.0f;
     float    _cyAcc           = 0.0f;
+    float    _waveDir         = 0.0f;
+    float    _wdVel           = 0.0f;
+    float    _wdAcc           = 0.0f;
 };
 
 } // namespace pulleys
