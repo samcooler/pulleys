@@ -68,13 +68,13 @@ public:
         if (_phase > 6.2832f) _phase -= 6.2832f;
 
         // Ripple speed: jerk → acc → vel → position (rippleSpeed is the "position")
-        _rsAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * 20.0f * dt;
+        _rsAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * 10.0f * dt;
         _rsAcc *= expf(-2.0f * dt);
         _rsVel += _rsAcc * dt;
         _rsVel *= expf(-0.3f * dt);
         _rippleSpeed += _rsVel * dt;
-        if (_rippleSpeed < -15.0f) { _rippleSpeed = -15.0f; _rsVel = fabsf(_rsVel); }
-        if (_rippleSpeed >  15.0f) { _rippleSpeed =  15.0f; _rsVel = -fabsf(_rsVel); }
+        if (_rippleSpeed < -6.0f) { _rippleSpeed = -6.0f; _rsVel = fabsf(_rsVel); }
+        if (_rippleSpeed >  6.0f) { _rippleSpeed =  6.0f; _rsVel = -fabsf(_rsVel); }
 
         // Spatial frequency multiplier: jerk → acc → vel → position
         _sfAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * 1.0f * dt;
@@ -104,11 +104,13 @@ public:
         _cyVel *= velDecay;
         _cx += _cxVel * dt;
         _cy += _cyVel * dt;
-        // Reflect off boundaries
-        if (_cx < -1.0f) { _cx = -1.0f; _cxVel = fabsf(_cxVel); }
-        if (_cx > (float)_cols) { _cx = (float)_cols; _cxVel = -fabsf(_cxVel); }
-        if (_cy < -1.0f) { _cy = -1.0f; _cyVel = fabsf(_cyVel); }
-        if (_cy > (float)_rows) { _cy = (float)_rows; _cyVel = -fabsf(_cyVel); }
+        // Reflect off boundaries (keep center within middle 6 pixels)
+        float xLo = 1.0f, xHi = (float)(_cols - 2);
+        float yLo = 1.0f, yHi = (float)(_rows - 2);
+        if (_cx < xLo) { _cx = xLo; _cxVel = fabsf(_cxVel); }
+        if (_cx > xHi) { _cx = xHi; _cxVel = -fabsf(_cxVel); }
+        if (_cy < yLo) { _cy = yLo; _cyVel = fabsf(_cyVel); }
+        if (_cy > yHi) { _cy = yHi; _cyVel = -fabsf(_cyVel); }
 
         // Debug: print ripple state every 1s
         if (nowMs - _lastDebugMs >= 1000) {
