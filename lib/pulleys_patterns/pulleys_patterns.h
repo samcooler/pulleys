@@ -90,27 +90,50 @@ public:
         if (_ripplePhase >  100.0f) _ripplePhase -= 100.0f;
         if (_ripplePhase < -100.0f) _ripplePhase += 100.0f;
 
-        // Wandering center: jerk impulses → acceleration → velocity → position
-        float jerkScale = 5.0f;
-        _cxAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * jerkScale * dt;
-        _cyAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * jerkScale * dt;
-        float accDecay = expf(-2.0f * dt);   // acceleration half-life ~0.35s
-        _cxAcc *= accDecay;
-        _cyAcc *= accDecay;
-        _cxVel += _cxAcc * dt;
-        _cyVel += _cyAcc * dt;
-        float velDecay = expf(-0.3f * dt);   // velocity half-life ~2.3s
-        _cxVel *= velDecay;
-        _cyVel *= velDecay;
-        _cx += _cxVel * dt;
-        _cy += _cyVel * dt;
-        // Reflect off boundaries (keep center within middle 6 pixels)
-        float xLo = 1.0f, xHi = (float)(_cols - 2);
-        float yLo = 1.0f, yHi = (float)(_rows - 2);
-        if (_cx < xLo) { _cx = xLo; _cxVel = fabsf(_cxVel); }
-        if (_cx > xHi) { _cx = xHi; _cxVel = -fabsf(_cxVel); }
-        if (_cy < yLo) { _cy = yLo; _cyVel = fabsf(_cyVel); }
-        if (_cy > yHi) { _cy = yHi; _cyVel = -fabsf(_cyVel); }
+        // Wandering center: gravity-driven or random jerk
+        if (_useGravity) {
+            // Map accelerometer g-force to center position.
+            // ax>0 → tilt right → center moves right (higher col)
+            // ay>0 → tilt forward → center moves down (higher row)
+            float midX = (_cols - 1) * 0.5f;
+            float midY = (_rows - 1) * 0.5f;
+            float range = 3.0f;  // max displacement from center in pixels
+            float targetX = midX - _gravY * range;
+            float targetY = midY + _gravX * range;
+            // Clamp to bounds
+            float xLo = 1.0f, xHi = (float)(_cols - 2);
+            float yLo = 1.0f, yHi = (float)(_rows - 2);
+            if (targetX < xLo) targetX = xLo;
+            if (targetX > xHi) targetX = xHi;
+            if (targetY < yLo) targetY = yLo;
+            if (targetY > yHi) targetY = yHi;
+            // Smooth follow (exponential ease)
+            float followRate = 1.0f - expf(-4.0f * dt);
+            _cx += (targetX - _cx) * followRate;
+            _cy += (targetY - _cy) * followRate;
+        } else {
+            // Original random wander when no gravity data
+            float jerkScale = 5.0f;
+            _cxAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * jerkScale * dt;
+            _cyAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * jerkScale * dt;
+            float accDecay = expf(-2.0f * dt);   // acceleration half-life ~0.35s
+            _cxAcc *= accDecay;
+            _cyAcc *= accDecay;
+            _cxVel += _cxAcc * dt;
+            _cyVel += _cyAcc * dt;
+            float velDecay = expf(-0.3f * dt);   // velocity half-life ~2.3s
+            _cxVel *= velDecay;
+            _cyVel *= velDecay;
+            _cx += _cxVel * dt;
+            _cy += _cyVel * dt;
+            // Reflect off boundaries (keep center within middle 6 pixels)
+            float xLo = 1.0f, xHi = (float)(_cols - 2);
+            float yLo = 1.0f, yHi = (float)(_rows - 2);
+            if (_cx < xLo) { _cx = xLo; _cxVel = fabsf(_cxVel); }
+            if (_cx > xHi) { _cx = xHi; _cxVel = -fabsf(_cxVel); }
+            if (_cy < yLo) { _cy = yLo; _cyVel = fabsf(_cyVel); }
+            if (_cy > yHi) { _cy = yHi; _cyVel = -fabsf(_cyVel); }
+        }
 
         // Wave direction: jerk → acc → vel → angle (no bounds, wraps naturally)
         _wdAcc += ((random8() / 255.0f) - 0.5f) * 2.0f * 1.5f * dt;
@@ -203,6 +226,14 @@ public:
         }
     }
 
+    // Feed accelerometer gravity vector to move the radial flow center.
+    // ax, ay in g-force units.  The center drifts toward the tilt direction.
+    void setGravity(float ax, float ay) {
+        _gravX = ax;
+        _gravY = ay;
+        _useGravity = true;
+    }
+
     // ── Future pattern types ──────────────────────────────────────────────
     // TODO: Matrix-aware patterns for 8x8 traveler grid (radial, spiral, etc.)
     // TODO: Station "breathing" pattern for orb effect
@@ -241,6 +272,9 @@ private:
     float    _waveDir         = 0.0f;
     float    _wdVel           = 0.0f;
     float    _wdAcc           = 0.0f;
+    bool     _useGravity      = false;
+    float    _gravX           = 0.0f;
+    float    _gravY           = 0.0f;
 };
 
 } // namespace pulleys

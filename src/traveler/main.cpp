@@ -9,6 +9,7 @@
 #include <pulleys_patterns.h>
 #include <pulleys_proximity.h>
 #include <pulleys_ritual.h>
+#include <pulleys_imu.h>
 
 // ── Config (LED_PIN, LED_COUNT set via build_flags in platformio.ini) ─────────
 #ifndef LED_PIN
@@ -35,6 +36,7 @@ static CRGB leds[LED_COUNT];
 static pulleys::PatternRenderer pattern;
 static pulleys::ProximityTracker proximity;
 static pulleys::RitualDetector ritual;
+static pulleys::IMU imu;
 
 static PulleysCulture myCulture;
 static uint32_t counter = 0;
@@ -133,9 +135,11 @@ void setup() {
     Serial.println("Scanning for Stations...");
 
     // IMU / Ritual
-    // TODO: Initialize QMI8658 IMU here
-    // Wire.begin(SDA_PIN, SCL_PIN);
-    // qmi8658_init();
+    if (imu.init(11, 12)) {
+        Serial.println("  [IMU] Accelerometer ready");
+    } else {
+        Serial.println("  [IMU] Accelerometer FAILED — patterns will wander randomly");
+    }
     ritual.init();
 
     // WiFi + OTA disabled for now
@@ -178,11 +182,17 @@ void loop() {
     // IMU reading
     if (now - lastImu >= IMU_INTERVAL_MS) {
         lastImu = now;
-        // TODO: Read QMI8658 accelerometer + gyroscope
-        // float ax, ay, az, gx, gy, gz;
-        // qmi8658_read(&ax, &ay, &az, &gx, &gy, &gz);
-        // ritual.update(ax, ay, az, gx, gy, gz);
-        // Serial.printf("  [IMU] ax=%.2f ay=%.2f az=%.2f\n", ax, ay, az);
+        pulleys::AccelData accel;
+        if (imu.read(accel)) {
+            // Feed gravity to pattern renderer — center moves toward tilt
+            pattern.setGravity(accel.x, accel.y);
+
+            // Feed to ritual detector for gesture recognition
+            ritual.update(accel.x, accel.y, accel.z, 0, 0, 0);
+
+            // Serial output
+            Serial.printf("  [IMU] ax=%.2f ay=%.2f az=%.2f\n", accel.x, accel.y, accel.z);
+        }
     }
 
     // OTA update check (disabled)
