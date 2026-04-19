@@ -13,6 +13,8 @@
                 "/Users/sam/git_repos/pulleys/lib/pulleys_ritual",
                 "/Users/sam/git_repos/pulleys/lib/pulleys_proximity",
                 "/Users/sam/git_repos/pulleys/lib/pulleys_patterns",
+                "/Users/sam/git_repos/pulleys/lib/pulleys_imu",
+                "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
                 "/Users/sam/git_repos/pulleys/lib/pulleys_identity",
                 "/Users/sam/git_repos/pulleys/lib/pulleys_culture",
                 "/Users/sam/git_repos/pulleys/lib/pulleys_protocol",
@@ -221,7 +223,6 @@
                 "/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/qio_qspi/include",
                 "/Users/sam/.platformio/packages/framework-arduinoespressif32/cores/esp32",
                 "/Users/sam/.platformio/packages/framework-arduinoespressif32/variants/esp32s3",
-                "/Users/sam/git_repos/pulleys/lib/pulleys_imu",
                 "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/ArduinoOTA/src",
                 "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/AsyncUDP/src",
                 "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/BLE/src",
@@ -250,7 +251,6 @@
                 "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                 "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/WiFiClientSecure/src",
                 "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/WiFiProv/src",
-                "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
                 ""
             ],
             "browse": {
@@ -261,6 +261,8 @@
                     "/Users/sam/git_repos/pulleys/lib/pulleys_ritual",
                     "/Users/sam/git_repos/pulleys/lib/pulleys_proximity",
                     "/Users/sam/git_repos/pulleys/lib/pulleys_patterns",
+                    "/Users/sam/git_repos/pulleys/lib/pulleys_imu",
+                    "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
                     "/Users/sam/git_repos/pulleys/lib/pulleys_identity",
                     "/Users/sam/git_repos/pulleys/lib/pulleys_culture",
                     "/Users/sam/git_repos/pulleys/lib/pulleys_protocol",
@@ -469,7 +471,6 @@
                     "/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/qio_qspi/include",
                     "/Users/sam/.platformio/packages/framework-arduinoespressif32/cores/esp32",
                     "/Users/sam/.platformio/packages/framework-arduinoespressif32/variants/esp32s3",
-                    "/Users/sam/git_repos/pulleys/lib/pulleys_imu",
                     "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/ArduinoOTA/src",
                     "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/AsyncUDP/src",
                     "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/BLE/src",
@@ -498,7 +499,6 @@
                     "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src",
                     "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/WiFiClientSecure/src",
                     "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/WiFiProv/src",
-                    "/Users/sam/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src",
                     ""
                 ]
             },

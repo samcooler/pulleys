@@ -4,6 +4,7 @@
 #include <pulleys_protocol.h>
 #include <pulleys_identity.h>
 #include <pulleys_culture.h>
+#include <pulleys_patterns.h>
 #include <pulleys_proximity.h>
 
 // ── Config (LED_PIN, LED_COUNT set via build_flags in platformio.ini) ─────────
@@ -22,11 +23,14 @@
 #define COLS               8
 
 // ── Globals ───────────────────────────────────────────────────────────────────
+// Which pattern type to use for all station slots
+static pulleys::PatternType stationPatternType = pulleys::PATTERN_PILLOW_SEESAW;
+
 static CRGB leds[LED_COUNT];
 static pulleys::ProximityTracker proximity;
 
-// 4 culture slots — each has its own two colors and frequency
-static PulleysCulture slots[NUM_SLOTS];
+// 4 culture slots rendered via PatternSlot
+static pulleys::PatternSlot patSlots[NUM_SLOTS];
 static PulleysCulture slotsOld[NUM_SLOTS];  // previous culture for fade-out
 static uint32_t slotTransStart[NUM_SLOTS];  // millis when transition began (0 = none)
 
@@ -38,30 +42,6 @@ static PulleysCulture    pendingOld;
 static uint16_t cooldownIds[32];
 static uint32_t cooldownTimes[32];
 static uint8_t  cooldownCount = 0;
-
-// ── Precomputed pillow brightness table (static, computed once) ───────────────
-static uint8_t pillowMap[ROWS_PER_SLOT][COLS];  // 0-255 pillow factor per pixel
-
-static void initPillowMap() {
-    float cxMid = (COLS - 1) * 0.5f;
-    float cySlot = (ROWS_PER_SLOT - 1) * 0.5f;
-    for (uint8_t r = 0; r < ROWS_PER_SLOT; r++) {
-        float vy = cosf((r - cySlot) / cySlot * (float)M_PI * 0.5f);
-        vy = vy * vy;
-        for (uint8_t c = 0; c < COLS; c++) {
-            float dx = (c - cxMid) / (cxMid + 0.5f);
-            float vx = cosf(dx * (float)M_PI * 0.5f);
-            vx = vx * vx;
-            pillowMap[r][c] = (uint8_t)(vy * vx * 255.0f);
-        }
-    }
-}
-
-// ── XY mapping for serpentine 8-wide matrix ───────────────────────────────────
-static inline uint16_t xyToIndex(uint8_t row, uint8_t col) {
-    if (row & 1) col = (COLS - 1) - col;  // odd rows reversed
-    return (uint16_t)row * COLS + col;
-}
 
 // ── Culture exchange callback ─────────────────────────────────────────────────
 static void onZoneChange(const pulleys::TrackedDevice& dev,
@@ -81,7 +61,7 @@ static void onZoneChange(const pulleys::TrackedDevice& dev,
 
         // Queue slot update for main loop (avoid race with render)
         uint8_t s = random(NUM_SLOTS);
-        pendingOld = slots[s];
+        pendingOld = patSlots[s].culture;
         pendingCulture = dev.culture;
         pendingSlot = s;  // atomic write signals main loop
 
@@ -141,20 +121,23 @@ void setup() {
     pulleys::identity_init(PULLEYS_TYPE_STATION);
     pulleys::identity_print_banner(PULLEYS_TYPE_STATION);
 
-    // 4 random culture slots
+    // 4 random culture slots using PatternSlot
     randomSeed(esp_random());
     for (uint8_t i = 0; i < NUM_SLOTS; i++) {
-        slots[i] = pulleys::culture_random();
+        patSlots[i].buffer = leds + i * ROWS_PER_SLOT * COLS;
+        patSlots[i].serpentine = true;
+        patSlots[i].maxBri = MAX_BRIGHTNESS;
+        patSlots[i].init(stationPatternType, ROWS_PER_SLOT, COLS);
+        patSlots[i].culture = pulleys::culture_random();
         slotTransStart[i] = 0;
         char label[8];
         snprintf(label, sizeof(label), "slot%d", i);
-        pulleys::culture_print(label, slots[i]);
+        pulleys::culture_print(label, patSlots[i].culture);
     }
 
     // LEDs — 8 cols x 32 rows, serpentine
     FastLED.addLeds<WS2812B, LED_PIN, RGB>(leds, LED_COUNT);
     FastLED.setBrightness(255);
-    initPillowMap();
 
     // Proximity
     proximity.setZoneChangeCallback(onZoneChange);
@@ -182,7 +165,7 @@ void loop() {
         int8_t s = pendingSlot;
         pendingSlot = -1;  // clear first to avoid re-entry
         slotsOld[s] = pendingOld;
-        slots[s] = pendingCulture;
+        patSlots[s].culture = pendingCulture;
         slotTransStart[s] = now;
     }
 
@@ -190,62 +173,58 @@ void loop() {
     if (now - lastLed >= (1000 / LED_FPS)) {
         lastLed = now;
         float t = now / 1000.0f;
+        float dt = 1.0f / LED_FPS;
 
         for (uint8_t s = 0; s < NUM_SLOTS; s++) {
             // ── Transition state ──
             // Phase: 0-1s fade old to black, 1-2s fade new in at 3x, 2-6s settle to 1x
-            float briMul = 1.0f;  // brightness multiplier
-            PulleysCulture* cur = &slots[s];
+            float briMul = 1.0f;
             bool useOld = false;
             if (slotTransStart[s] != 0) {
                 float elapsed = (now - slotTransStart[s]) / 1000.0f;
                 if (elapsed < 1.0f) {
-                    // Fade out old culture
-                    briMul = 1.0f - elapsed;  // 1→0
+                    briMul = 1.0f - elapsed;
                     useOld = true;
                 } else if (elapsed < 2.0f) {
-                    // Fade in new culture at 3x brightness
-                    briMul = (elapsed - 1.0f) * 3.0f;  // 0→3
+                    briMul = (elapsed - 1.0f) * 3.0f;
                 } else if (elapsed < 6.0f) {
-                    // Settle from 3x down to 1x
-                    briMul = 3.0f - (elapsed - 2.0f) * 0.5f;  // 3→1
+                    briMul = 3.0f - (elapsed - 2.0f) * 0.5f;
                 } else {
-                    slotTransStart[s] = 0;  // transition done
+                    slotTransStart[s] = 0;
                 }
             }
-            PulleysCulture* active = useOld ? &slotsOld[s] : cur;
 
-            float hz = pulleys::culture_osc_to_hz(active->oscillation);
-            // See-saw: left half and right half oscillate in antiphase
-            float wave = (sinf(t * hz * 2.0f * (float)M_PI) + 1.0f) * 0.5f;  // 0-1
-            float waveInv = 1.0f - wave;
+            // During fade-out, temporarily swap in old culture
+            PulleysCulture saved;
+            if (useOld) {
+                saved = patSlots[s].culture;
+                patSlots[s].culture = slotsOld[s];
+            }
 
-            CRGB cA(active->colorA.r, active->colorA.g, active->colorA.b);
-            CRGB cB(active->colorB.r, active->colorB.g, active->colorB.b);
+            // Render pattern into this slot's region
+            pulleys::pattern_slot_update(patSlots[s], dt, t);
 
-            // Left half: blend from A toward B
-            CRGB leftC;
-            leftC.r = (uint8_t)(cA.r + (float)(cB.r - cA.r) * wave);
-            leftC.g = (uint8_t)(cA.g + (float)(cB.g - cA.g) * wave);
-            leftC.b = (uint8_t)(cA.b + (float)(cB.b - cA.b) * wave);
+            // Restore culture after fade-out render
+            if (useOld) {
+                patSlots[s].culture = saved;
+            }
 
-            // Right half: blend from B toward A (antiphase)
-            CRGB rightC;
-            rightC.r = (uint8_t)(cA.r + (float)(cB.r - cA.r) * waveInv);
-            rightC.g = (uint8_t)(cA.g + (float)(cB.g - cA.g) * waveInv);
-            rightC.b = (uint8_t)(cA.b + (float)(cB.b - cA.b) * waveInv);
-
-            uint8_t startRow = s * ROWS_PER_SLOT;
-
-            for (uint8_t r = 0; r < ROWS_PER_SLOT; r++) {
-                uint8_t row = startRow + r;
-                for (uint8_t c = 0; c < COLS; c++) {
-                    uint16_t idx = xyToIndex(row, c);
-                    uint8_t bScale = (uint8_t)(briMul * MAX_BRIGHTNESS);
-                    if (bScale > 3 * MAX_BRIGHTNESS) bScale = 3 * MAX_BRIGHTNESS;
-                    uint8_t pillow = scale8(pillowMap[r][c], bScale);
-                    leds[idx] = (c < COLS / 2) ? leftC : rightC;
-                    leds[idx].nscale8(pillow);
+            // Apply transition brightness as post-multiply
+            if (briMul != 1.0f) {
+                uint16_t numPx = ROWS_PER_SLOT * COLS;
+                CRGB* buf = patSlots[s].buffer;
+                if (briMul > 1.0f) {
+                    // Brighten: scale up each channel (capped at 255)
+                    for (uint16_t i = 0; i < numPx; i++) {
+                        buf[i].r = (uint8_t)min(255.0f, buf[i].r * briMul);
+                        buf[i].g = (uint8_t)min(255.0f, buf[i].g * briMul);
+                        buf[i].b = (uint8_t)min(255.0f, buf[i].b * briMul);
+                    }
+                } else {
+                    uint8_t sc = (uint8_t)(briMul * 255.0f);
+                    for (uint16_t i = 0; i < numPx; i++) {
+                        buf[i].nscale8(sc);
+                    }
                 }
             }
         }
