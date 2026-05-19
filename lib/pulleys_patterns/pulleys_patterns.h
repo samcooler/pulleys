@@ -140,8 +140,9 @@ struct PatternSlot {
     CRGB*          buffer     = nullptr;
     uint8_t        rows       = 8;
     uint8_t        cols       = 8;
-    bool           serpentine = false;
-    uint8_t        maxBri     = 50;
+    bool           serpentine     = false;
+    bool           serpentineFlip = false;  // true = even rows reversed instead of odd
+    uint8_t        maxBri         = 50;
 
     PulleysCulture culture    = {};
     PatternType    type       = PATTERN_RADIAL_RIPPLE;
@@ -212,7 +213,7 @@ static inline void _pattern_radial_ripple_update(PatternSlot& slot, float dt) {
     for (uint16_t i = 0; i < numPx; i++) {
         uint8_t row = i / slot.cols;
         uint8_t col = i % slot.cols;
-        if (slot.serpentine && (row & 1)) col = (slot.cols - 1) - col;
+        if (slot.serpentine && ((bool)(row & 1) ^ slot.serpentineFlip)) col = (slot.cols - 1) - col;
 
         // Two-color wave
         float proj = col * waveDx + row * waveDy;
@@ -282,7 +283,7 @@ static inline void _pattern_pillow_seesaw_update(PatternSlot& slot, float dt, fl
     for (uint8_t r = 0; r < slot.rows; r++) {
         for (uint8_t c = 0; c < slot.cols; c++) {
             uint8_t col = c;
-            if (slot.serpentine && (r & 1)) col = (slot.cols - 1) - c;
+            if (slot.serpentine && ((bool)(r & 1) ^ slot.serpentineFlip)) col = (slot.cols - 1) - c;
             uint16_t idx = (uint16_t)r * slot.cols + col;
 
             uint8_t pillow = scale8(s.pillowMap[r][c], slot.maxBri);
@@ -338,10 +339,11 @@ public:
         _slot.radialRipple.density = density;
     }
 
-    void setMatrixSize(uint8_t rows, uint8_t cols, bool serpentine = false) {
+    void setMatrixSize(uint8_t rows, uint8_t cols, bool serpentine = false, bool serpentineFlip = false) {
         _slot.rows = rows;
         _slot.cols = cols;
         _slot.serpentine = serpentine;
+        _slot.serpentineFlip = serpentineFlip;
     }
 
     void setPatternType(PatternType type) {
@@ -361,16 +363,18 @@ public:
         _lastMs = nowMs;
         float t = nowMs / 1000.0f;
 
-        // Render pattern into main grid (excluding status row)
-        uint16_t patternLeds = _numLeds - _slot.cols;
-        _slot.buffer = _leds;
-        // Temporarily set rows to exclude status row
-        uint8_t fullRows = _slot.rows;
-        _slot.rows = (uint8_t)(patternLeds / _slot.cols);
-
         pattern_slot_update(_slot, dt, t);
 
-        _slot.rows = fullRows;
+        // Global brightness envelope: sinusoidal at half the culture frequency (slower)
+        // DISABLED
+        // {
+        //     float envHz = culture_osc_to_hz(_slot.culture.oscillation) * 0.5f;
+        //     float brightMul = (sinf(t * envHz * 2.0f * (float)M_PI) + 1.0f) * 0.5f;
+        //     uint8_t brightScale = (uint8_t)(brightMul * 255.0f);
+        //     for (uint16_t i = 0; i < _numLeds; i++) {
+        //         _leds[i].nscale8(brightScale);
+        //     }
+        // }
 
         // Debug
         if (nowMs - _lastDebugMs >= 1000) {
@@ -382,30 +386,7 @@ public:
             }
         }
 
-        // Status row (last row): colorA(3) | colorB(3) | freq pulse(2)
-        CRGB cA(_slot.culture.colorA.r, _slot.culture.colorA.g, _slot.culture.colorA.b);
-        CRGB cB(_slot.culture.colorB.r, _slot.culture.colorB.g, _slot.culture.colorB.b);
-        uint16_t base_i = patternLeds;
-        uint8_t maxBri = _slot.maxBri;
-        CRGB sA = cA; sA.nscale8(maxBri / 2);
-        CRGB sB = cB; sB.nscale8(maxBri / 2);
-        _leds[base_i + 0] = sA;
-        _leds[base_i + 1] = sA;
-        _leds[base_i + 2] = sA;
-        _leds[base_i + 3] = sB;
-        _leds[base_i + 4] = sB;
-        _leds[base_i + 5] = sB;
-        // Pulsing white — need phase from the slot
-        float phase = 0;
-        if (_patternType == PATTERN_RADIAL_RIPPLE) {
-            phase = _slot.radialRipple.phase;
-        } else {
-            phase = t * culture_osc_to_hz(_slot.culture.oscillation) * 2.0f * (float)M_PI;
-        }
-        float pulse = (sinf(phase) + 1.0f) * 0.5f;
-        uint8_t pBri = (uint8_t)(pulse * maxBri / 2);
-        _leds[base_i + 6] = CRGB(pBri, pBri, pBri);
-        _leds[base_i + 7] = CRGB(pBri, pBri, pBri);
+
     }
 
     void setGravity(float ax, float ay) {

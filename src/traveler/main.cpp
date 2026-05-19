@@ -19,7 +19,7 @@
   #define LED_COUNT 64
 #endif
 
-#define MAX_BRIGHTNESS     21
+#define MAX_BRIGHTNESS     19
 #define BEACON_INTERVAL_MS 500
 #define LED_FPS            30
 #define IMU_INTERVAL_MS    100
@@ -41,6 +41,7 @@ static pulleys::IMU imu;
 static PulleysCulture myCulture;
 static uint32_t counter = 0;
 static NimBLEAdvertising* pAdv = nullptr;
+static pulleys::PatternType travelerPatternType = pulleys::PATTERN_RADIAL_RIPPLE;
 
 // ── BLE advertising payload ───────────────────────────────────────────────────
 static void updatePayload() {
@@ -114,6 +115,8 @@ void setup() {
     }
 
     pattern.init(leds, LED_COUNT, MAX_BRIGHTNESS);
+    pattern.setMatrixSize(8, 8, false); // 8x8, no serpentine
+    pattern.setPatternType(travelerPatternType);
     pattern.setDensity(0.2f);  // sparse sparkle — ~20% of pixels lit
     pattern.setCulture(myCulture);
 
