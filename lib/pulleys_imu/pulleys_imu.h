@@ -66,8 +66,8 @@ public:
 
         // CTRL2: accelerometer config
         //   Range = ±2g (bits 6:4 = 000)
-        //   ODR   = 62.5 Hz (bits 3:0 = 0101) — plenty for gravity sensing
-        writeReg(REG_CTRL2, 0x05);
+        //   ODR   = 62.5 Hz (bits 3:0 = 0111) — matches 30 FPS LED updates
+        writeReg(REG_CTRL2, 0x07);
 
         // CTRL5: low-pass filter — mode 0 for accel (default is fine)
         writeReg(REG_CTRL5, 0x01);
@@ -126,14 +126,14 @@ public:
         // CTRL1: auto-increment (bit6) + INT1 output enable (bit3)
         writeReg(REG_CTRL1, 0x48);
 
-        // CTRL2: accel ±2g (000), low-power 128Hz ODR (0b1100)
-        writeReg(REG_CTRL2, 0x0C);
+        // CTRL2: accel ±2g (000), low-power 3Hz ODR (0b1111) — 8.5% duty cycle
+        writeReg(REG_CTRL2, 0x0F);
 
         // CAL1_L: WoM threshold (1mg/LSB resolution per datasheet)
         writeReg(REG_CAL1_L, threshold);
 
-        // CAL1_H: INT1 (bit7:6 = 10), initial HIGH, max blanking 63 samples (~500ms @ 128Hz)
-        writeReg(REG_CAL1_H, 0xBF);
+        // CAL1_H: INT1 (bit7:6 = 10), initial HIGH, 4-sample blanking (~1.3s @ 3Hz)
+        writeReg(REG_CAL1_H, 0x84);
 
         // Dump pre-CTRL9 state
         Serial.printf("  [IMU] Pre-CTRL9: CTRL1=0x%02X CTRL7=0x%02X CTRL8=0x%02X CAL1=0x%02X%02X\n",

@@ -25,13 +25,16 @@
 #define BEACON_INTERVAL_MS 500
 #define LED_FPS            30
 #define IMU_INTERVAL_MS    100
-#define SLEEP_TIMEOUT_MS   10000
+#define SLEEP_TIMEOUT_MS   30000
 #define MOTION_THRESHOLD   0.05f   // g-force delta to count as motion
 #define FADE_DURATION_MS   1000    // fade in/out duration
-#define DREAM_INTERVAL_MS  10000   // time between dreams
+#define DREAM_INTERVAL_MS  30000   // base time between dreams
+#define DREAM_JITTER_MS    5000    // ±randomness added to dream interval and sleep timeout
 #define DREAM_LIT_MS       2000    // how long the dream stays lit
 #define IMU_INT1_PIN       GPIO_NUM_10  // QMI8658 INT1 → GPIO10
 #define WOM_THRESHOLD      30          // Wake-on-Motion threshold (0-255, lower=more sensitive)
+
+static const bool DEBUG_FLASH = false;  // set true to enable LED debug flashes
 
 // WiFi credentials for OTA updates (disabled for now)
 // #define WIFI_SSID     "Blossom 2.4 GHz"
@@ -127,12 +130,13 @@ static void lightSleepLoop() {
     gpio_wakeup_enable(IMU_INT1_PIN, GPIO_INTR_LOW_LEVEL);
     gpio_wakeup_enable(GPIO_NUM_13, GPIO_INTR_LOW_LEVEL);
     esp_sleep_enable_gpio_wakeup();
-    esp_sleep_enable_timer_wakeup((uint64_t)DREAM_INTERVAL_MS * 1000ULL);
+    uint32_t dreamMs = DREAM_INTERVAL_MS + (esp_random() % (2 * DREAM_JITTER_MS + 1)) - DREAM_JITTER_MS;
+    esp_sleep_enable_timer_wakeup((uint64_t)dreamMs * 1000ULL);
 
     Serial.println("  [SLEEP] Entering light sleep loop");
     Serial.flush();
 
-    debugFlash(CRGB::Red);  // entering sleep loop
+    if (DEBUG_FLASH) debugFlash(CRGB::Red);  // entering sleep loop
 
     while (travelerState == ASLEEP) {
         // Ensure both INT pins are HIGH before sleeping
@@ -148,25 +152,25 @@ static void lightSleepLoop() {
         esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
 
         if (cause == ESP_SLEEP_WAKEUP_GPIO) {
-            debugFlash(CRGB::Green);  // GPIO wake (motion)
+            if (DEBUG_FLASH) debugFlash(CRGB::Green);  // GPIO wake (motion)
             lastMotionMs = now;
             travelerState = FADING_IN;
             fadeStartMs = now;
             bleStartAll();
             break;
         } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
-            debugFlash(CRGB::Blue);  // timer wake (dream)
+            if (DEBUG_FLASH) debugFlash(CRGB::Blue);  // timer wake (dream)
             travelerState = DREAM_IN;
             fadeStartMs = now;
             break;
         } else {
-            debugFlash(CRGB::Yellow);  // GPIO already LOW — not sleeping
+            if (DEBUG_FLASH) debugFlash(CRGB::Yellow);  // GPIO already LOW — not sleeping
             imu.checkWomEvent();
             delay(50);
         }
     }
 
-    debugFlash(CRGB::White);  // exiting sleep loop
+    if (DEBUG_FLASH) debugFlash(CRGB::White);  // exiting sleep loop
 
     // Clean up wake sources
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
@@ -174,10 +178,14 @@ static void lightSleepLoop() {
     gpio_wakeup_disable(IMU_INT1_PIN);
     gpio_wakeup_disable(GPIO_NUM_13);
 
-    // Restore normal IMU mode for accel reads
-    imu.restoreNormalMode(11, 12);
-    imuBaselineValid = false;
-    imuResumeMs = millis();
+    bool isDream = (travelerState == DREAM_IN);
+
+    if (!isDream) {
+        // Motion wake — restore full IMU + serial
+        imu.restoreNormalMode(11, 12);
+        imuBaselineValid = false;
+        imuResumeMs = millis();
+    }
 
     // Try to recover USB serial after light sleep
     Serial.end();
@@ -418,13 +426,7 @@ void loop() {
 
             if (deltaMag >= MOTION_THRESHOLD) {
                 lastMotionMs = now;
-                if (travelerState == DREAM_IN ||
-                    travelerState == DREAM_LIT || travelerState == DREAM_OUT) {
-                    travelerState = FADING_IN;
-                    fadeStartMs = now;
-                    bleStartAll();
-                    Serial.println("[WAKE] Motion during dream — fading in");
-                } else if (travelerState == FADING_OUT) {
+                if (travelerState == FADING_OUT) {
                     // Reverse the fade — pick up from current brightness
                     float elapsed = (float)(now - fadeStartMs);
                     float frac = elapsed / (float)FADE_DURATION_MS;
@@ -453,11 +455,14 @@ void loop() {
                       imuBaselineValid ? "ok" : "settling");
     }
 
-    // Sleep transition: no motion for SLEEP_TIMEOUT_MS
-    if (travelerState == AWAKE && (now - lastMotionMs) >= SLEEP_TIMEOUT_MS) {
+    // Sleep transition: no motion for SLEEP_TIMEOUT_MS ± jitter
+    static uint32_t currentSleepTimeout = SLEEP_TIMEOUT_MS;
+    if (travelerState == AWAKE && (now - lastMotionMs) >= currentSleepTimeout) {
         travelerState = FADING_OUT;
         fadeStartMs = now;
         imuBaselineValid = false;  // reset for next wake
+        // Pick new random timeout for next awake cycle
+        currentSleepTimeout = SLEEP_TIMEOUT_MS + (esp_random() % (2 * DREAM_JITTER_MS + 1)) - DREAM_JITTER_MS;
         Serial.println("[SLEEP] No motion — fading out");
     }
 
