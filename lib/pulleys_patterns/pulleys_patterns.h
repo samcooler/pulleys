@@ -329,6 +329,9 @@ public:
         _slot.buffer = leds;
         _slot.maxBri = maxBrightness;
         _slot.init(_patternType, _slot.rows, _slot.cols);
+
+        // Brightness wanderer: slow organic drift 0.22–1.0
+        _briWanderer.configure(0.7f, 0.5f, 2.0f, 0.3f, true, 0.22f, 1.0f);
     }
 
     void setCulture(const PulleysCulture& culture) {
@@ -365,6 +368,13 @@ public:
 
         pattern_slot_update(_slot, dt, t);
 
+        // Global brightness wanderer
+        _briWanderer.update(dt);
+        uint8_t brightScale = (uint8_t)(_briWanderer.pos * 255.0f);
+        for (uint16_t i = 0; i < _numLeds; i++) {
+            _leds[i].nscale8(brightScale);
+        }
+
         // Global brightness envelope: sinusoidal at half the culture frequency (slower)
         // DISABLED
         // {
@@ -392,7 +402,10 @@ public:
     void setGravity(float ax, float ay) {
         _slot.radialRipple.gravX = ax;
         _slot.radialRipple.gravY = ay;
-        _slot.radialRipple.useGravity = true;
+    }
+
+    void setUseGravity(bool use) {
+        _slot.radialRipple.useGravity = use;
     }
 
 private:
@@ -402,6 +415,7 @@ private:
     uint32_t       _lastDebugMs  = 0;
     PatternType    _patternType  = PATTERN_RADIAL_RIPPLE;
     PatternSlot    _slot;
+    Wanderer       _briWanderer;
 };
 
 } // namespace pulleys
