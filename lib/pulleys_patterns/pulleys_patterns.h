@@ -415,14 +415,14 @@ public:
         _slot.init(_patternType, _slot.rows, _slot.cols);
 
         // Global brightness: slow wander, spends time dim for low average power
-        _briWanderer.configure(0.4f, 0.3f, 1.5f, 0.2f, true, 0.05f, 0.85f);
+        _briWanderer.configure(0.6f, 0.3f, 1.5f, 0.2f, true, 0.20f, 0.90f);
 
         // Vignette spotlight: slow drift across the grid
         float midC = (_slot.cols - 1) * 0.5f;
         float midR = (_slot.rows - 1) * 0.5f;
         _vx.configure(midC, 1.2f, 1.5f, 0.35f, true, 0.0f, (float)(_slot.cols - 1));
         _vy.configure(midR, 1.2f, 1.5f, 0.35f, true, 0.0f, (float)(_slot.rows - 1));
-        _vRadius.configure(3.0f, 0.25f, 1.5f, 0.3f, true, 2.0f, 5.5f);
+        _vRadius.configure(5.0f, 0.25f, 1.5f, 0.3f, true, 3.5f, 7.5f);
     }
 
     void setCulture(const PulleysCulture& culture) { _slot.culture = culture; }
@@ -481,8 +481,9 @@ public:
             float dist = sqrtf(dx*dx + dy*dy);
             float tn = dist / _vRadius.pos;
             if (tn > 1.0f) tn = 1.0f;
-            // Cosine rolloff: 1.0 at center, 0.0 at radius edge
-            float vig = (cosf(tn * (float)M_PI) + 1.0f) * 0.5f;
+            // Cosine rolloff: 1.0 at center, 0.12 at radius edge (floor keeps edges alive)
+            static constexpr float VIG_FLOOR = 0.12f;
+            float vig = VIG_FLOOR + (1.0f - VIG_FLOOR) * (cosf(tn * (float)M_PI) + 1.0f) * 0.5f;
 
             uint8_t scale = (uint8_t)(globalBri * vig * 255.0f);
             _leds[i].nscale8(scale);
