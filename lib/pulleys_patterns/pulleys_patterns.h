@@ -410,15 +410,15 @@ public:
         random16_set_seed(id);
         random16_add_entropy(id);
 
+        _maxBri  = maxBrightness;
         _slot.buffer = leds;
-        _slot.maxBri = maxBrightness;
+        _slot.maxBri = 255;  // shape renders full-range colors; brightness gate is briWanderer only
         _slot.init(_patternType, _slot.rows, _slot.cols);
 
-        // Global brightness: full [0,1] range; gamma 2.5 applied at render time
-        // so it spends most time dark (~18% mean) but occasionally peaks at full bright
-        _briWanderer.configure(0.4f, 0.3f, 1.5f, 0.2f, true, 0.0f, 1.0f);
+        // Active range [0,1]; gamma 2.5 at render time → mean ~18%, occasional full-bright peaks
+        _briWanderer.configure(0.4f, 3.0f, 2.0f, 0.5f, true, 0.0f, 1.0f);
 
-        // Vignette spotlight: slow drift across the grid
+        // Vignette wanderers (disabled — kept for easy re-enable)
         float midC = (_slot.cols - 1) * 0.5f;
         float midR = (_slot.rows - 1) * 0.5f;
         _vx.configure(midC, 1.2f, 1.5f, 0.35f, true, 0.0f, (float)(_slot.cols - 1));
@@ -462,41 +462,45 @@ public:
 
         pattern_slot_update(_slot, dt, t);
 
-        // Update wanderers
         _briWanderer.update(dt);
-        _vx.update(dt);
-        _vy.update(dt);
-        _vRadius.update(dt);
 
-        // Gamma 2.5: biases toward dark, peaks at 1.0, mean ~18%
-        float globalBri = powf(_briWanderer.pos, 2.5f);
-        uint8_t cols = _slot.cols;
-
+        // Gamma 2.5: biases toward dark, peaks at 1.0 (mean ~18%)
+        float briPos    = _briWanderer.pos;
+        float globalBri = powf(briPos, 2.5f);
+        // Single brightness gate: shape rendered at full color, scaled here by wanderer × maxBri
+        uint8_t scale = (uint8_t)(globalBri * _maxBri);
         for (uint16_t i = 0; i < _numLeds; i++) {
-            uint8_t row = i / cols;
-            uint8_t col = i % cols;
-            if (_slot.serpentine && ((bool)(row & 1) ^ _slot.serpentineFlip))
-                col = (cols - 1) - col;
-
-            float dx = (float)col - _vx.pos;
-            float dy = (float)row - _vy.pos;
-            float dist = sqrtf(dx*dx + dy*dy);
-            float tn = dist / _vRadius.pos;
-            if (tn > 1.0f) tn = 1.0f;
-            // Cosine rolloff: 1.0 at center, 0.12 at radius edge (floor keeps edges alive)
-            static constexpr float VIG_FLOOR = 0.12f;
-            float vig = VIG_FLOOR + (1.0f - VIG_FLOOR) * (cosf(tn * (float)M_PI) + 1.0f) * 0.5f;
-
-            uint8_t scale = (uint8_t)(globalBri * vig * 255.0f);
             _leds[i].nscale8(scale);
         }
+
+        // Accumulate brightness stats
+        _briSum     += globalBri;
+        _briSamples += 1;
+        if (globalBri < _briMin) _briMin = globalBri;
+        if (globalBri > _briMax) _briMax = globalBri;
+        uint8_t bucket = (uint8_t)(briPos * 5.0f);
+        if (bucket > 4) bucket = 4;
+        _briHist[bucket]++;
 
         if (nowMs - _lastDebugMs >= 1000) {
             _lastDebugMs = nowMs;
             auto& s = _slot.shapeState;
-            Serial.printf("  [PAT] shape=%s cx=%.2f cy=%.2f bri=%.2f vx=%.1f vy=%.1f vr=%.1f\n",
+            Serial.printf("  [PAT] shape=%s briPos=%.2f bri=%.2f scale=%u/%u\n",
                           shape_name(_slot.culture.shape % SHAPE_COUNT),
-                          s.cx.pos, s.cy.pos, globalBri, _vx.pos, _vy.pos, _vRadius.pos);
+                          briPos, globalBri, scale, (unsigned)_maxBri);
+        }
+
+        if (nowMs - _lastStatsMs >= 5000 && _briSamples > 0) {
+            _lastStatsMs = nowMs;
+            float mean = _briSum / (float)_briSamples;
+            Serial.printf("  [BRI STATS] mean=%.2f min=%.2f max=%.2f n=%lu maxBri=%u\n",
+                          mean, _briMin, _briMax, (unsigned long)_briSamples, (unsigned)_maxBri);
+            Serial.printf("  [BRI HIST pos] 0-20%%:%lu 20-40%%:%lu 40-60%%:%lu 60-80%%:%lu 80-100%%:%lu\n",
+                          (unsigned long)_briHist[0], (unsigned long)_briHist[1],
+                          (unsigned long)_briHist[2], (unsigned long)_briHist[3],
+                          (unsigned long)_briHist[4]);
+            _briSum = 0.0f; _briSamples = 0; _briMin = 1.0f; _briMax = 0.0f;
+            memset(_briHist, 0, sizeof(_briHist));
         }
     }
 
@@ -507,8 +511,17 @@ private:
     uint32_t    _lastDebugMs = 0;
     PatternType _patternType = PATTERN_SHAPE;
     PatternSlot _slot;
+    uint8_t     _maxBri      = 255;
     Wanderer    _briWanderer;
-    Wanderer    _vx, _vy, _vRadius;  // vignette spotlight center + radius
+    Wanderer    _vx, _vy, _vRadius;  // vignette spotlight center + radius (disabled)
+
+    // Brightness distribution stats
+    float    _briSum     = 0.0f;
+    uint32_t _briSamples = 0;
+    float    _briMin     = 1.0f;
+    float    _briMax     = 0.0f;
+    uint32_t _briHist[5] = {};
+    uint32_t _lastStatsMs = 0;
 };
 
 } // namespace pulleys

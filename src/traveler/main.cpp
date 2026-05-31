@@ -21,7 +21,7 @@
   #define LED_COUNT 64
 #endif
 
-#define MAX_BRIGHTNESS     32
+#define MAX_BRIGHTNESS     255
 #define BEACON_INTERVAL_MS 500
 #define LED_FPS            30
 #define IMU_INTERVAL_MS    100
