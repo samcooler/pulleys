@@ -15,7 +15,7 @@
   #define LED_COUNT 10
 #endif
 
-#define MAX_BRIGHTNESS     64
+#define MAX_BRIGHTNESS     128   // wanderer peak; slot.maxBri set to 255 so shape renders full range
 #define LED_FPS            30
 #define MATE_COOLDOWN_MS   30000
 #define NUM_SLOTS          4
@@ -31,13 +31,25 @@ static pulleys::ProximityTracker proximity;
 
 // 4 culture slots rendered via PatternSlot
 static pulleys::PatternSlot patSlots[NUM_SLOTS];
-static PulleysCulture slotsOld[NUM_SLOTS];  // previous culture for fade-out
-static uint32_t slotTransStart[NUM_SLOTS];  // millis when transition began (0 = none)
+static pulleys::Wanderer    briWanderers[NUM_SLOTS];
 
-// Pending slot update from BLE callback (avoids race with render loop)
-static volatile int8_t   pendingSlot = -1;       // -1 = no pending update
-static PulleysCulture    pendingCulture;
-static PulleysCulture    pendingOld;
+// Absorption sequence state machine
+enum AbsPhase : uint8_t {
+    ABS_IDLE = 0,
+    ABS_DIM,      // 0.5s  — all slots fade to black
+    ABS_FLASH,    // 3.0s  — all slots show new culture at full brightness
+    ABS_RESOLVE,  // 1.0s  — non-chosen slots fade out
+    ABS_RESTORE,  // 1.5s  — non-chosen slots fade in with old cultures
+};
+static AbsPhase       absPhase     = ABS_IDLE;
+static uint32_t       absPhaseStart = 0;
+static uint8_t        absSlot      = 0;            // slot that keeps the new culture
+static PulleysCulture absNewCulture;
+static PulleysCulture absOldCultures[NUM_SLOTS];   // saved before absorption
+
+// Pending absorption trigger from BLE callback (avoids race with render loop)
+static volatile int8_t pendingSlot = -1;
+static PulleysCulture  pendingCulture;
 
 static uint16_t cooldownIds[32];
 static uint32_t cooldownTimes[32];
@@ -59,9 +71,8 @@ static void onZoneChange(const pulleys::TrackedDevice& dev,
             }
         }
 
-        // Queue slot update for main loop (avoid race with render)
+        // Queue absorption for main loop (avoid race with render)
         uint8_t s = random(NUM_SLOTS);
-        pendingOld = patSlots[s].culture;
         pendingCulture = dev.culture;
         pendingSlot = s;  // atomic write signals main loop
 
@@ -121,23 +132,38 @@ void setup() {
     pulleys::identity_init(PULLEYS_TYPE_STATION);
     pulleys::identity_print_banner(PULLEYS_TYPE_STATION);
 
+    // LEDs — 8 cols x 32 rows, serpentine
+    FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, LED_COUNT);
+    FastLED.setBrightness(255);
+
+    // Boot color-order flash: R → G → B (100ms each) to verify RGB vs GRB wiring
+    auto flashAll = [](CRGB color) {
+        fill_solid(leds, LED_COUNT, color);
+        FastLED.show();
+        delay(300);
+        fill_solid(leds, LED_COUNT, CRGB::Black);
+        FastLED.show();
+        delay(100);
+    };
+    flashAll(CRGB(40, 0, 0));  // should appear RED
+    flashAll(CRGB(0, 40, 0));  // should appear GREEN
+    flashAll(CRGB(0, 0, 40));  // should appear BLUE
+
     // 4 random culture slots using PatternSlot
     randomSeed(esp_random());
     for (uint8_t i = 0; i < NUM_SLOTS; i++) {
         patSlots[i].buffer = leds + i * ROWS_PER_SLOT * COLS;
         patSlots[i].serpentine = true;
-        patSlots[i].maxBri = MAX_BRIGHTNESS;
+        patSlots[i].maxBri = 255;  // shape renderer at full range; wanderer controls brightness
         patSlots[i].init(stationPatternType, ROWS_PER_SLOT, COLS);
         patSlots[i].culture = pulleys::culture_random();
-        slotTransStart[i] = 0;
+        // Stagger wanderer starting positions so slots aren't in lockstep
+        float startPos = 0.2f + (random8() / 255.0f) * 0.5f;
+        briWanderers[i].configure(startPos, 3.0f, 2.0f, 0.5f, true, 0.0f, 1.0f);
         char label[8];
         snprintf(label, sizeof(label), "slot%d", i);
         pulleys::culture_print(label, patSlots[i].culture);
     }
-
-    // LEDs — 8 cols x 32 rows, serpentine
-    FastLED.addLeds<WS2812B, LED_PIN, RGB>(leds, LED_COUNT);
-    FastLED.setBrightness(255);
 
     // Proximity
     proximity.setZoneChangeCallback(onZoneChange);
@@ -160,72 +186,73 @@ void loop() {
     static uint32_t lastReport = 0;
     uint32_t now = millis();
 
-    // Apply pending slot update from BLE callback (thread-safe handoff)
-    if (pendingSlot >= 0) {
-        int8_t s = pendingSlot;
-        pendingSlot = -1;  // clear first to avoid re-entry
-        slotsOld[s] = pendingOld;
-        patSlots[s].culture = pendingCulture;
-        slotTransStart[s] = now;
+    // Start absorption sequence from pending BLE trigger
+    if (pendingSlot >= 0 && absPhase == ABS_IDLE) {
+        absSlot = (uint8_t)pendingSlot;
+        absNewCulture = pendingCulture;
+        for (uint8_t i = 0; i < NUM_SLOTS; i++) absOldCultures[i] = patSlots[i].culture;
+        absPhase = ABS_DIM;
+        absPhaseStart = now;
     }
+    pendingSlot = -1;
 
-    // LED pattern update (~60 fps)
+    // LED pattern update (30 fps)
     if (now - lastLed >= (1000 / LED_FPS)) {
         lastLed = now;
-        float t = now / 1000.0f;
+        float t  = now / 1000.0f;
         float dt = 1.0f / LED_FPS;
 
-        for (uint8_t s = 0; s < NUM_SLOTS; s++) {
-            // ── Transition state ──
-            // Phase: 0-1s fade old to black, 1-2s fade new in at 3x, 2-6s settle to 1x
-            float briMul = 1.0f;
-            bool useOld = false;
-            if (slotTransStart[s] != 0) {
-                float elapsed = (now - slotTransStart[s]) / 1000.0f;
-                if (elapsed < 1.0f) {
-                    briMul = 1.0f - elapsed;
-                    useOld = true;
-                } else if (elapsed < 2.0f) {
-                    briMul = (elapsed - 1.0f) * 3.0f;
-                } else if (elapsed < 6.0f) {
-                    briMul = 3.0f - (elapsed - 2.0f) * 0.5f;
-                } else {
-                    slotTransStart[s] = 0;
-                }
+        if (absPhase != ABS_IDLE) {
+            // ── Absorption sequence ──────────────────────────────────────────────
+            float e = (now - absPhaseStart) / 1000.0f;
+
+            // Phase transitions (recalc e after each to avoid off-by-one-frame)
+            if (absPhase == ABS_DIM && e >= 0.5f) {
+                for (uint8_t i = 0; i < NUM_SLOTS; i++) patSlots[i].culture = absNewCulture;
+                absPhase = ABS_FLASH; absPhaseStart = now; e = 0.0f;
+            } else if (absPhase == ABS_FLASH && e >= 3.0f) {
+                absPhase = ABS_RESOLVE; absPhaseStart = now; e = 0.0f;
+            } else if (absPhase == ABS_RESOLVE && e >= 1.0f) {
+                for (uint8_t i = 0; i < NUM_SLOTS; i++)
+                    if (i != absSlot) patSlots[i].culture = absOldCultures[i];
+                absPhase = ABS_RESTORE; absPhaseStart = now; e = 0.0f;
+            } else if (absPhase == ABS_RESTORE && e >= 1.5f) {
+                absPhase = ABS_IDLE;
             }
 
-            // During fade-out, temporarily swap in old culture
-            PulleysCulture saved;
-            if (useOld) {
-                saved = patSlots[s].culture;
-                patSlots[s].culture = slotsOld[s];
-            }
+            for (uint8_t s = 0; s < NUM_SLOTS; s++) {
+                pulleys::pattern_slot_update(patSlots[s], dt, t);
+                briWanderers[s].update(dt);  // keep wanderer evolving during sequence
 
-            // Render pattern into this slot's region
-            pulleys::pattern_slot_update(patSlots[s], dt, t);
+                float briMul;
+                if      (absPhase == ABS_DIM)     briMul = 1.0f - e / 0.5f;
+                else if (absPhase == ABS_FLASH)   briMul = 1.0f;
+                else if (absPhase == ABS_RESOLVE) briMul = (s == absSlot) ? 1.0f : 1.0f - e / 1.0f;
+                else                              briMul = (s == absSlot) ? 1.0f : e / 1.5f;
 
-            // Restore culture after fade-out render
-            if (useOld) {
-                patSlots[s].culture = saved;
-            }
+                // During FLASH use full LED output; otherwise scale against MAX_BRIGHTNESS
+                uint8_t scale = (absPhase == ABS_FLASH)
+                    ? (uint8_t)(briMul * 255.0f)
+                    : (uint8_t)(briMul * MAX_BRIGHTNESS);
 
-            // Apply transition brightness as post-multiply
-            if (briMul != 1.0f) {
-                uint16_t numPx = ROWS_PER_SLOT * COLS;
                 CRGB* buf = patSlots[s].buffer;
-                if (briMul > 1.0f) {
-                    // Brighten: scale up each channel (capped at 255)
-                    for (uint16_t i = 0; i < numPx; i++) {
-                        buf[i].r = (uint8_t)min(255.0f, buf[i].r * briMul);
-                        buf[i].g = (uint8_t)min(255.0f, buf[i].g * briMul);
-                        buf[i].b = (uint8_t)min(255.0f, buf[i].b * briMul);
-                    }
-                } else {
-                    uint8_t sc = (uint8_t)(briMul * 255.0f);
-                    for (uint16_t i = 0; i < numPx; i++) {
-                        buf[i].nscale8(sc);
-                    }
-                }
+                for (uint16_t j = 0; j < ROWS_PER_SLOT * COLS; j++) buf[j].nscale8(scale);
+            }
+        } else {
+            // ── Normal rendering with per-slot brightness wanderers ──────────────
+            for (uint8_t s = 0; s < NUM_SLOTS; s++) {
+                pulleys::pattern_slot_update(patSlots[s], dt, t);
+
+                briWanderers[s].update(dt);
+                float bp = briWanderers[s].pos;
+                float gb;
+                if      (bp < 0.40f) gb = (bp / 0.40f) * 0.04f;
+                else if (bp < 0.90f) gb = 0.04f + ((bp - 0.40f) / 0.50f) * 0.31f;
+                else                 gb = 0.35f + ((bp - 0.90f) / 0.10f) * 0.40f;
+                uint8_t briScale = (uint8_t)(gb * MAX_BRIGHTNESS);
+
+                CRGB* buf = patSlots[s].buffer;
+                for (uint16_t j = 0; j < ROWS_PER_SLOT * COLS; j++) buf[j].nscale8(briScale);
             }
         }
         FastLED.show();
