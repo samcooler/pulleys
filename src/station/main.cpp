@@ -41,11 +41,16 @@ enum AbsPhase : uint8_t {
     ABS_RESOLVE,  // 1.0s  — non-chosen slots fade out
     ABS_RESTORE,  // 1.5s  — non-chosen slots fade in with old cultures
 };
-static AbsPhase       absPhase     = ABS_IDLE;
+static AbsPhase       absPhase      = ABS_IDLE;
 static uint32_t       absPhaseStart = 0;
-static uint8_t        absSlot      = 0;            // slot that keeps the new culture
+static uint8_t        absSlot       = 0;
 static PulleysCulture absNewCulture;
-static PulleysCulture absOldCultures[NUM_SLOTS];   // saved before absorption
+static PulleysCulture absOldCultures[NUM_SLOTS];
+static float          absStartGb[NUM_SLOTS];  // wanderer gb at absorption trigger
+
+// Max output of the piecewise brightness map (at pos=1.0) — used to land wanderers
+// at a known value matching the end of the RESTORE phase
+static constexpr float WANDER_PEAK_GB = 0.75f;
 
 // Pending absorption trigger from BLE callback (avoids race with render loop)
 static volatile int8_t pendingSlot = -1;
@@ -190,7 +195,14 @@ void loop() {
     if (pendingSlot >= 0 && absPhase == ABS_IDLE) {
         absSlot = (uint8_t)pendingSlot;
         absNewCulture = pendingCulture;
-        for (uint8_t i = 0; i < NUM_SLOTS; i++) absOldCultures[i] = patSlots[i].culture;
+        for (uint8_t i = 0; i < NUM_SLOTS; i++) {
+            absOldCultures[i] = patSlots[i].culture;
+            // Capture current wanderer output so DIM fades from the actual brightness
+            float bp = briWanderers[i].pos;
+            if      (bp < 0.40f) absStartGb[i] = (bp / 0.40f) * 0.04f;
+            else if (bp < 0.90f) absStartGb[i] = 0.04f + ((bp - 0.40f) / 0.50f) * 0.31f;
+            else                 absStartGb[i] = 0.35f + ((bp - 0.90f) / 0.10f) * 0.40f;
+        }
         absPhase = ABS_DIM;
         absPhaseStart = now;
     }
@@ -204,9 +216,14 @@ void loop() {
 
         if (absPhase != ABS_IDLE) {
             // ── Absorption sequence ──────────────────────────────────────────────
+            // All phase boundaries are continuous — see transition table:
+            //   DIM    : slot s fades absStartGb[s]*MB → 0           over 0.5s
+            //   FLASH  : all ramp 0 → 255 in 0.3s, hold 255          over 3.0s
+            //   RESOLVE: absSlot 255→MB, others 255→0                 over 1.0s
+            //   RESTORE: absSlot MB→PEAK*MB, others 0→PEAK*MB         over 1.5s
+            //   →IDLE  : wanderers reset to pos=1.0 → output=PEAK*MB  (matches RESTORE end)
             float e = (now - absPhaseStart) / 1000.0f;
 
-            // Phase transitions (recalc e after each to avoid off-by-one-frame)
             if (absPhase == ABS_DIM && e >= 0.5f) {
                 for (uint8_t i = 0; i < NUM_SLOTS; i++) patSlots[i].culture = absNewCulture;
                 absPhase = ABS_FLASH; absPhaseStart = now; e = 0.0f;
@@ -217,26 +234,41 @@ void loop() {
                     if (i != absSlot) patSlots[i].culture = absOldCultures[i];
                 absPhase = ABS_RESTORE; absPhaseStart = now; e = 0.0f;
             } else if (absPhase == ABS_RESTORE && e >= 1.5f) {
+                // Reset wanderers to pos=1.0 → output = WANDER_PEAK_GB*MB, matching RESTORE end
+                for (uint8_t i = 0; i < NUM_SLOTS; i++) {
+                    briWanderers[i].pos = 1.0f;
+                    briWanderers[i].vel = 0.0f;
+                    briWanderers[i].acc = 0.0f;
+                }
                 absPhase = ABS_IDLE;
             }
 
+            const float MB   = (float)MAX_BRIGHTNESS;
+            const float PEAK = WANDER_PEAK_GB * MB;  // 96 — matches wanderer at pos=1.0
+
             for (uint8_t s = 0; s < NUM_SLOTS; s++) {
                 pulleys::pattern_slot_update(patSlots[s], dt, t);
-                briWanderers[s].update(dt);  // keep wanderer evolving during sequence
+                briWanderers[s].update(dt);
 
-                float briMul;
-                if      (absPhase == ABS_DIM)     briMul = 1.0f - e / 0.5f;
-                else if (absPhase == ABS_FLASH)   briMul = 1.0f;
-                else if (absPhase == ABS_RESOLVE) briMul = (s == absSlot) ? 1.0f : 1.0f - e / 1.0f;
-                else                              briMul = (s == absSlot) ? 1.0f : e / 1.5f;
+                float scale;
+                if (absPhase == ABS_DIM) {
+                    scale = absStartGb[s] * MB * (1.0f - e / 0.5f);
+                } else if (absPhase == ABS_FLASH) {
+                    float ramp = (e < 0.3f) ? e / 0.3f : 1.0f;
+                    scale = ramp * 255.0f;
+                } else if (absPhase == ABS_RESOLVE) {
+                    float t01 = e / 1.0f;
+                    scale = (s == absSlot) ? (255.0f - (255.0f - MB) * t01)
+                                           : (255.0f * (1.0f - t01));
+                } else {  // ABS_RESTORE
+                    float t01 = e / 1.5f;
+                    scale = (s == absSlot) ? (MB + (PEAK - MB) * t01)
+                                           : (PEAK * t01);
+                }
 
-                // During FLASH use full LED output; otherwise scale against MAX_BRIGHTNESS
-                uint8_t scale = (absPhase == ABS_FLASH)
-                    ? (uint8_t)(briMul * 255.0f)
-                    : (uint8_t)(briMul * MAX_BRIGHTNESS);
-
+                uint8_t sc = (uint8_t)scale;
                 CRGB* buf = patSlots[s].buffer;
-                for (uint16_t j = 0; j < ROWS_PER_SLOT * COLS; j++) buf[j].nscale8(scale);
+                for (uint16_t j = 0; j < ROWS_PER_SLOT * COLS; j++) buf[j].nscale8(sc);
             }
         } else {
             // ── Normal rendering with per-slot brightness wanderers ──────────────
