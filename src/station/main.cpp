@@ -15,8 +15,8 @@
   #define LED_COUNT 10
 #endif
 
-#define MAX_BRIGHTNESS     15
-#define LED_FPS            60
+#define MAX_BRIGHTNESS     64
+#define LED_FPS            30
 #define MATE_COOLDOWN_MS   30000
 #define NUM_SLOTS          4
 #define ROWS_PER_SLOT      8       // 32 rows / 4 slots
@@ -24,7 +24,7 @@
 
 // ── Globals ───────────────────────────────────────────────────────────────────
 // Which pattern type to use for all station slots
-static pulleys::PatternType stationPatternType = pulleys::PATTERN_PILLOW_SEESAW;
+static pulleys::PatternType stationPatternType = pulleys::PATTERN_SHAPE;
 
 static CRGB leds[LED_COUNT];
 static pulleys::ProximityTracker proximity;
