@@ -414,7 +414,15 @@ public:
         _slot.maxBri = maxBrightness;
         _slot.init(_patternType, _slot.rows, _slot.cols);
 
-        _briWanderer.configure(0.7f, 0.5f, 2.0f, 0.3f, true, 0.22f, 1.0f);
+        // Global brightness: slow wander, spends time dim for low average power
+        _briWanderer.configure(0.4f, 0.3f, 1.5f, 0.2f, true, 0.05f, 0.85f);
+
+        // Vignette spotlight: slow drift across the grid
+        float midC = (_slot.cols - 1) * 0.5f;
+        float midR = (_slot.rows - 1) * 0.5f;
+        _vx.configure(midC, 1.2f, 1.5f, 0.35f, true, 0.0f, (float)(_slot.cols - 1));
+        _vy.configure(midR, 1.2f, 1.5f, 0.35f, true, 0.0f, (float)(_slot.rows - 1));
+        _vRadius.configure(3.0f, 0.25f, 1.5f, 0.3f, true, 2.0f, 5.5f);
     }
 
     void setCulture(const PulleysCulture& culture) { _slot.culture = culture; }
@@ -453,18 +461,39 @@ public:
 
         pattern_slot_update(_slot, dt, t);
 
+        // Update wanderers
         _briWanderer.update(dt);
-        uint8_t brightScale = (uint8_t)(_briWanderer.pos * 255.0f);
+        _vx.update(dt);
+        _vy.update(dt);
+        _vRadius.update(dt);
+
+        float globalBri = _briWanderer.pos;  // [0.05, 0.85]
+        uint8_t cols = _slot.cols;
+
         for (uint16_t i = 0; i < _numLeds; i++) {
-            _leds[i].nscale8(brightScale);
+            uint8_t row = i / cols;
+            uint8_t col = i % cols;
+            if (_slot.serpentine && ((bool)(row & 1) ^ _slot.serpentineFlip))
+                col = (cols - 1) - col;
+
+            float dx = (float)col - _vx.pos;
+            float dy = (float)row - _vy.pos;
+            float dist = sqrtf(dx*dx + dy*dy);
+            float tn = dist / _vRadius.pos;
+            if (tn > 1.0f) tn = 1.0f;
+            // Cosine rolloff: 1.0 at center, 0.0 at radius edge
+            float vig = (cosf(tn * (float)M_PI) + 1.0f) * 0.5f;
+
+            uint8_t scale = (uint8_t)(globalBri * vig * 255.0f);
+            _leds[i].nscale8(scale);
         }
 
         if (nowMs - _lastDebugMs >= 1000) {
             _lastDebugMs = nowMs;
             auto& s = _slot.shapeState;
-            Serial.printf("  [PAT] shape=%s cx=%.2f cy=%.2f freq=%.2f angle=%.2f\n",
+            Serial.printf("  [PAT] shape=%s cx=%.2f cy=%.2f bri=%.2f vx=%.1f vy=%.1f vr=%.1f\n",
                           shape_name(_slot.culture.shape % SHAPE_COUNT),
-                          s.cx.pos, s.cy.pos, s.freq.pos, s.angle.pos);
+                          s.cx.pos, s.cy.pos, globalBri, _vx.pos, _vy.pos, _vRadius.pos);
         }
     }
 
@@ -476,6 +505,7 @@ private:
     PatternType _patternType = PATTERN_SHAPE;
     PatternSlot _slot;
     Wanderer    _briWanderer;
+    Wanderer    _vx, _vy, _vRadius;  // vignette spotlight center + radius
 };
 
 } // namespace pulleys
