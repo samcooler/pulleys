@@ -191,7 +191,7 @@ static inline void _shape_update(PatternSlot& slot, float dt) {
     uint8_t shape = slot.culture.shape % SHAPE_COUNT;
     float hz = culture_osc_to_hz(slot.culture.oscillation);
 
-    s.phase += hz * 2.0f * (float)M_PI * dt;
+    s.phase += hz * 2.0f * (float)M_PI * dt * 0.5f;
     if (s.phase > 6.2832f) s.phase -= 6.2832f;
 
     // Update center with optional gravity influence
@@ -222,123 +222,122 @@ static inline void _shape_update(PatternSlot& slot, float dt) {
     CRGB cA(slot.culture.colorA.r, slot.culture.colorA.g, slot.culture.colorA.b);
     CRGB cB(slot.culture.colorB.r, slot.culture.colorB.g, slot.culture.colorB.b);
 
-    uint16_t numPx = (uint16_t)slot.rows * slot.cols;
-    for (uint16_t i = 0; i < numPx; i++) {
-        uint8_t row = i / slot.cols;
-        uint8_t col = i % slot.cols;
-        if (slot.serpentine && ((bool)(row & 1) ^ slot.serpentineFlip))
-            col = (slot.cols - 1) - col;
+    // Per-shape off-zone thresholds for 3-state colorizer
+    float offLo, offHi;
+    switch (shape) {
+        case SHAPE_CHECKER:
+            offLo = 0.43f; offHi = 0.57f; break;  // thin dark grid lines
+        case SHAPE_RADIAL:
+        case SHAPE_DIAMONDS:
+            offLo = 0.32f; offHi = 0.68f; break;  // bold dark gaps between rings
+        case SHAPE_CROSS:
+            offLo = 0.36f; offHi = 0.64f; break;  // dark halo around arm edges
+        default:
+            offLo = 0.38f; offHi = 0.62f; break;
+    }
 
-        float fc = (float)col;
-        float fr = (float)row;
-
-        // Each shape computes a blend [0,1] between colorA and colorB
-        float blend = 0.0f;
+    // Blend field sampler — accepts fractional (fc, fr) for supersampling
+    auto blend_at = [&](float fc, float fr) -> float {
         switch (shape) {
-
             case SHAPE_RADIAL: {
-                // Concentric rings outward from wandering center
                 float dx = fc - s.cx.pos, dy = fr - s.cy.pos;
-                float dist = sqrtf(dx*dx + dy*dy);
-                blend = (sinf(s.phase + dist * s.freq.pos) + 1.0f) * 0.5f;
-                break;
+                return (sinf(s.phase + sqrtf(dx*dx + dy*dy) * s.freq.pos) + 1.0f) * 0.5f;
             }
-
-            case SHAPE_BARS: {
-                // Horizontal sine bands scrolling vertically
-                blend = (sinf(s.phase + fr * s.freq.pos + s.scroll.pos) + 1.0f) * 0.5f;
-                break;
-            }
-
+            case SHAPE_BARS:
+                return (sinf(s.phase + fr * s.freq.pos + s.scroll.pos) + 1.0f) * 0.5f;
             case SHAPE_DIAGONAL: {
-                // Bands at a slowly rotating angle
                 float proj = fc * cosf(s.angle.pos) + fr * sinf(s.angle.pos);
-                blend = (sinf(s.phase + proj * s.freq.pos) + 1.0f) * 0.5f;
-                break;
+                return (sinf(s.phase + proj * s.freq.pos) + 1.0f) * 0.5f;
             }
-
             case SHAPE_CHECKER: {
-                // Smooth checkerboard that slides via cx/cy.
-                // Product of cosines: ±1 at pixel centers, soft edges between.
-                // cv=+1 → (cos(phase)+1)/2, cv=-1 → (-cos(phase)+1)/2 — true alternating.
                 float cv = sinf((fc - s.cx.pos + 0.5f) * (float)M_PI)
                          * sinf((fr - s.cy.pos + 0.5f) * (float)M_PI);
-                blend = (sinf(s.phase + cv * 0.5f * (float)M_PI) + 1.0f) * 0.5f;
-                break;
+                return (sinf(s.phase + cv * 0.5f * (float)M_PI) + 1.0f) * 0.5f;
             }
-
             case SHAPE_POLKA: {
-                // Two soft blobs at independent wandering centers.
-                // Blob 1 pulls toward colorA, blob 2 toward colorB.
-                float d1 = sqrtf((fc-s.cx.pos)*(fc-s.cx.pos) + (fr-s.cy.pos)*(fr-s.cy.pos));
+                float d1 = sqrtf((fc-s.cx.pos)*(fc-s.cx.pos)   + (fr-s.cy.pos)*(fr-s.cy.pos));
                 float d2 = sqrtf((fc-s.cx2.pos)*(fc-s.cx2.pos) + (fr-s.cy2.pos)*(fr-s.cy2.pos));
                 float m1 = expf(-d1 / s.width.pos);
                 float m2 = expf(-d2 / s.width.pos);
-                blend = (sinf(s.phase + (m2 - m1) * (float)M_PI) + 1.0f) * 0.5f;
-                break;
+                return (sinf(s.phase + (m2 - m1) * (float)M_PI) + 1.0f) * 0.5f;
             }
-
             case SHAPE_CROSS: {
-                // Thick plus-sign from wandering center, arms pulse with phase.
-                float dx = fabsf(fc - s.cx.pos);
-                float dy = fabsf(fr - s.cy.pos);
-                float armMask = fmaxf(1.0f - dx / s.width.pos, 1.0f - dy / s.width.pos);
-                if (armMask < 0.0f) armMask = 0.0f;
-                blend = (sinf(s.phase + armMask * (float)M_PI) + 1.0f) * 0.5f;
-                break;
-            }
-
-            case SHAPE_DIAMONDS: {
-                // L1-distance rings (diamond / rhombus shapes) from wandering center
-                float dist_l1 = fabsf(fc - s.cx.pos) + fabsf(fr - s.cy.pos);
-                blend = (sinf(s.phase + dist_l1 * s.freq.pos) + 1.0f) * 0.5f;
-                break;
-            }
-
-            case SHAPE_SPIRAL: {
-                // Rotating spiral arms — angle wanders for slow drift, phase drives rotation
-                float dx = fc - s.cx.pos, dy = fr - s.cy.pos;
-                float theta = atan2f(dy, dx) + s.angle.pos;
-                float dist = sqrtf(dx*dx + dy*dy);
-                blend = (sinf(s.phase + theta + dist * s.freq.pos) + 1.0f) * 0.5f;
-                break;
-            }
-
-            case SHAPE_TUNNEL: {
-                // Chebyshev-distance rings (nested squares) with zoom via scroll
                 float dx = fabsf(fc - s.cx.pos), dy = fabsf(fr - s.cy.pos);
-                float dist_cheb = fmaxf(dx, dy);
-                blend = (sinf(s.phase + dist_cheb * s.freq.pos + s.scroll.pos) + 1.0f) * 0.5f;
-                break;
+                float arm = fmaxf(1.0f - dx / s.width.pos, 1.0f - dy / s.width.pos);
+                if (arm < 0.0f) arm = 0.0f;
+                return (sinf(s.phase + arm * (float)M_PI) + 1.0f) * 0.5f;
             }
-
-            case SHAPE_QUADRANTS: {
-                // Four rotating sectors — phase spins them, angle wanders for slow drift
+            case SHAPE_DIAMONDS: {
+                float dist_l1 = fabsf(fc - s.cx.pos) + fabsf(fr - s.cy.pos);
+                return (sinf(s.phase + dist_l1 * s.freq.pos) + 1.0f) * 0.5f;
+            }
+            case SHAPE_SPIRAL: {
                 float dx = fc - s.cx.pos, dy = fr - s.cy.pos;
                 float theta = atan2f(dy, dx) + s.angle.pos;
-                blend = (cosf(2.0f * theta + s.phase) + 1.0f) * 0.5f;
-                break;
+                float dist  = sqrtf(dx*dx + dy*dy);
+                return (sinf(s.phase + theta + dist * s.freq.pos) + 1.0f) * 0.5f;
             }
+            case SHAPE_TUNNEL: {
+                float dx = fabsf(fc - s.cx.pos), dy = fabsf(fr - s.cy.pos);
+                return (sinf(s.phase + fmaxf(dx, dy) * s.freq.pos + s.scroll.pos) + 1.0f) * 0.5f;
+            }
+            case SHAPE_QUADRANTS: {
+                float dx = fc - s.cx.pos, dy = fr - s.cy.pos;
+                float theta = atan2f(dy, dx) + s.angle.pos;
+                return (cosf(2.0f * theta + s.phase) + 1.0f) * 0.5f;
+            }
+            default: return 0.5f;
         }
+    };
 
-        // Mix colors
-        CRGB c;
-        c.r = (uint8_t)(cA.r + (float)(cB.r - cA.r) * blend);
-        c.g = (uint8_t)(cA.g + (float)(cB.g - cA.g) * blend);
-        c.b = (uint8_t)(cA.b + (float)(cB.b - cA.b) * blend);
-        c.nscale8(slot.maxBri);
+    // 3×3 supersample blend field, then soft-threshold the averaged blend once.
+    // Averaging blend values (not colors) keeps colorA/colorB pure and black fully black —
+    // only the narrow boundary pixels receive a dimmed version of their color.
+    constexpr int   SSAA      = 3;
+    constexpr float SSAA_INV  = 1.0f / (SSAA * SSAA);
+    constexpr float EDGE_W    = 0.12f;  // half-width of A→off and off→B ramps (in blend units)
 
-        // Sparkle overlay
-        if (s.density < 1.0f) {
-            if (s.sparkle[i] == 0 && random8() < 2) s.sparkle[i] = 255;
-            uint8_t bri = s.sparkle[i] < 40 ? 40 : s.sparkle[i];
-            c.nscale8(bri);
-            uint8_t decay = (uint8_t)((1.0f - s.density) * 20.0f + 4.0f);
-            if (s.sparkle[i] > decay) s.sparkle[i] -= decay;
-            else s.sparkle[i] = 0;
+    for (uint8_t row = 0; row < slot.rows; row++) {
+        for (uint8_t physCol = 0; physCol < slot.cols; physCol++) {
+            bool    flipRow = slot.serpentine && (((bool)(row & 1)) ^ slot.serpentineFlip);
+            uint8_t linCol  = flipRow ? (slot.cols - 1 - physCol) : physCol;
+            uint16_t i      = (uint16_t)row * slot.cols + linCol;
+
+            float blendSum = 0.0f;
+            for (int dr = 0; dr < SSAA; dr++) {
+                for (int dc = 0; dc < SSAA; dc++) {
+                    float sfr = row     + (dr - (SSAA - 1) * 0.5f) / SSAA;
+                    float sfc = physCol + (dc - (SSAA - 1) * 0.5f) / SSAA;
+                    blendSum += blend_at(sfc, sfr);
+                }
+            }
+            float avgBlend = blendSum * SSAA_INV;
+
+            // Soft ramp at each threshold: pure color in interior, fade to black at edge
+            float wA = (offLo - avgBlend) / EDGE_W;
+            if (wA < 0.0f) wA = 0.0f; else if (wA > 1.0f) wA = 1.0f;
+            float wB = (avgBlend - offHi) / EDGE_W;
+            if (wB < 0.0f) wB = 0.0f; else if (wB > 1.0f) wB = 1.0f;
+
+            CRGB c(
+                (uint8_t)(wA * cA.r + wB * cB.r + 0.5f),
+                (uint8_t)(wA * cA.g + wB * cB.g + 0.5f),
+                (uint8_t)(wA * cA.b + wB * cB.b + 0.5f)
+            );
+            c.nscale8(slot.maxBri);
+
+            // Sparkle overlay (indexed by linear i)
+            if (s.density < 1.0f) {
+                if (s.sparkle[i] == 0 && random8() < 2) s.sparkle[i] = 255;
+                uint8_t bri = s.sparkle[i] < 40 ? 40 : s.sparkle[i];
+                c.nscale8(bri);
+                uint8_t decay = (uint8_t)((1.0f - s.density) * 20.0f + 4.0f);
+                if (s.sparkle[i] > decay) s.sparkle[i] -= decay;
+                else s.sparkle[i] = 0;
+            }
+
+            slot.buffer[i] = c;
         }
-
-        slot.buffer[i] = c;
     }
 }
 
@@ -464,21 +463,21 @@ public:
 
         _briWanderer.update(dt);
 
-        // Piecewise brightness map — three attractors:
-        //   0–40% of wanderer range → near 0.0 (off)
-        //  40–90%                  → near 0.2 (dim ambient, sine bump)
-        //  90–100%                 → 0.75–1.0 (bright flash)
+        // Continuous piecewise-linear brightness map — three regions, shared endpoints:
+        //   briPos [0.00, 0.40] → bri [0.00, 0.04]  (40% near-off, avg 0.02)
+        //   briPos [0.40, 0.90] → bri [0.04, 0.35]  (50% dim-ambient, avg 0.20)
+        //   briPos [0.90, 1.00] → bri [0.35, 0.75]  (10% bright flash, avg 0.55)
         float briPos = _briWanderer.pos;
         float globalBri;
         if (briPos < 0.40f) {
             float t = briPos / 0.40f;
-            globalBri = t * t * 0.04f;
+            globalBri = t * 0.04f;
         } else if (briPos < 0.90f) {
             float t = (briPos - 0.40f) / 0.50f;
-            globalBri = 0.14f + 0.12f * sinf(t * (float)M_PI);
+            globalBri = 0.04f + t * 0.31f;
         } else {
             float t = (briPos - 0.90f) / 0.10f;
-            globalBri = 0.75f + t * 0.25f;
+            globalBri = 0.35f + t * 0.40f;
         }
         // Single brightness gate: shape rendered at full color, scaled here by wanderer × maxBri
         uint8_t scale = (uint8_t)(globalBri * _maxBri);

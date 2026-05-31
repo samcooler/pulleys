@@ -3,6 +3,7 @@
 #include <FastLED.h>
 #include <esp_sleep.h>
 #include <driver/gpio.h>
+#include <Preferences.h>
 // #include <WiFi.h>
 // #include <ArduinoOTA.h>
 #include <pulleys_protocol.h>
@@ -21,7 +22,7 @@
   #define LED_COUNT 64
 #endif
 
-#define MAX_BRIGHTNESS     255
+#define MAX_BRIGHTNESS     128
 #define BEACON_INTERVAL_MS 500
 #define LED_FPS            30
 #define IMU_INTERVAL_MS    100
@@ -39,6 +40,14 @@
 #define VBAT_PIN           1
 #define VBAT_DIVIDER_RATIO 2.0f     // (R1+R2)/R2 — update if resistors differ
 #define VBAT_ADC_REF       3.3f     // ESP32-S3 ADC reference voltage
+#define VBAT_WARN_V        3.4f     // LED warning threshold
+
+// Battery discharge profiling log (NVS)
+#define BAT_LOG_INTERVAL_MS  30000  // sample every 30 seconds
+#define BAT_LOG_MAX          1024   // ~8.5 hours at 30s — 6KB NVS
+#define BAT_LOG_NS           "bplog"
+
+struct BatSample { uint32_t ms; uint16_t mv; };
 
 static const bool DEBUG_FLASH = false;  // set true to enable LED debug flashes
 
@@ -238,7 +247,31 @@ class StationScanCallbacks : public NimBLEScanCallbacks {
 // ── Setup ─────────────────────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
-    delay(500);
+    delay(1500);
+
+    // Dump battery discharge log if one was recorded without USB
+    {
+        Preferences p;
+        p.begin(BAT_LOG_NS, true);
+        uint32_t n = p.getUInt("n", 0);
+        p.end();
+        if (n > 0) {
+            BatSample* buf = (BatSample*)malloc(n * sizeof(BatSample));
+            if (buf) {
+                Preferences p2;
+                p2.begin(BAT_LOG_NS, true);
+                p2.getBytes("d", buf, n * sizeof(BatSample));
+                p2.end();
+                Serial.printf("\n[BATLOG] %lu samples — paste into spreadsheet:\n", n);
+                Serial.println("[BATLOG] uptime_s,voltage_mv,voltage_v");
+                for (uint32_t i = 0; i < n; i++) {
+                    Serial.printf("[BATLOG] %lu,%u,%.3f\n",
+                                  buf[i].ms / 1000, buf[i].mv, buf[i].mv / 1000.0f);
+                }
+                free(buf);
+            }
+        }
+    }
 
     // Identity — BLE must init first
     NimBLEDevice::init("");
@@ -264,8 +297,8 @@ void setup() {
         uint8_t rowB = rowA + 1;                     // row 4
         CRGB cA(myCulture.colorA.r, myCulture.colorA.g, myCulture.colorA.b);
         CRGB cB(myCulture.colorB.r, myCulture.colorB.g, myCulture.colorB.b);
-        cA.nscale8(MAX_BRIGHTNESS);
-        cB.nscale8(MAX_BRIGHTNESS);
+        cA.nscale8(77);  // 30% of LED max
+        cB.nscale8(77);
         fill_solid(leds, LED_COUNT, CRGB::Black);
         fill_solid(leds + rowA * cols, cols, cA);
         fill_solid(leds + rowB * cols, cols, cB);
@@ -335,6 +368,7 @@ void loop() {
     static uint32_t lastPrune        = 0;
     static uint32_t lastImu          = 0;
     static uint32_t lastLog          = 0;
+    static uint32_t lastBatLog       = 0;
     static uint32_t lastPatternCycle = 0;
     static uint8_t  currentShape     = 0;
     static float    lastDelta        = 0;
@@ -486,6 +520,40 @@ void loop() {
         Serial.printf("[%s] delta=%.3f motionAgo=%lums baseline=%s vbat=%.2fV (raw=%.3fV)\n",
                       stateNames[travelerState], lastDelta, sinceMotion,
                       imuBaselineValid ? "ok" : "settling", vbat, vbatRaw);
+    }
+
+    // Battery discharge log — append sample every 30s, warn when low
+    if (now - lastBatLog >= BAT_LOG_INTERVAL_MS) {
+        lastBatLog = now;
+        float vbatRaw = analogRead(VBAT_PIN) * VBAT_ADC_REF / 4095.0f;
+        float vbat    = vbatRaw * VBAT_DIVIDER_RATIO;
+        uint16_t mv   = (uint16_t)(vbat * 1000.0f);
+
+        Preferences p;
+        p.begin(BAT_LOG_NS, false);
+        uint32_t n = p.getUInt("n", 0);
+        if (n >= BAT_LOG_MAX) {
+            // Buffer full — clear and restart
+            p.clear();
+            n = 0;
+            Serial.println("[BATLOG] Buffer full — restarting log");
+        }
+        BatSample* buf = (BatSample*)malloc((n + 1) * sizeof(BatSample));
+        if (buf) {
+            if (n > 0) p.getBytes("d", buf, n * sizeof(BatSample));
+            buf[n] = { now, mv };
+            p.putBytes("d", buf, (n + 1) * sizeof(BatSample));
+            p.putUInt("n", n + 1);
+            free(buf);
+        }
+        p.end();
+        Serial.printf("[BATLOG] n=%lu  %.3fV\n", n + 1, vbat);
+
+        // Visual low-battery warning
+        if (vbat < VBAT_WARN_V) {
+            debugFlash(CRGB::Red, 3);
+            Serial.printf("[BATLOG] LOW BATTERY %.3fV — plug in soon!\n", vbat);
+        }
     }
 
     // Sleep transition: no motion for SLEEP_TIMEOUT_MS ± jitter
