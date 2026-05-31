@@ -464,21 +464,34 @@ public:
 
         _briWanderer.update(dt);
 
-        // Gamma 2.5: biases toward dark, peaks at 1.0 (mean ~18%)
-        float briPos    = _briWanderer.pos;
-        float globalBri = powf(briPos, 2.5f);
+        // Piecewise brightness map — three attractors:
+        //   0–40% of wanderer range → near 0.0 (off)
+        //  40–90%                  → near 0.2 (dim ambient, sine bump)
+        //  90–100%                 → 0.75–1.0 (bright flash)
+        float briPos = _briWanderer.pos;
+        float globalBri;
+        if (briPos < 0.40f) {
+            float t = briPos / 0.40f;
+            globalBri = t * t * 0.04f;
+        } else if (briPos < 0.90f) {
+            float t = (briPos - 0.40f) / 0.50f;
+            globalBri = 0.14f + 0.12f * sinf(t * (float)M_PI);
+        } else {
+            float t = (briPos - 0.90f) / 0.10f;
+            globalBri = 0.75f + t * 0.25f;
+        }
         // Single brightness gate: shape rendered at full color, scaled here by wanderer × maxBri
         uint8_t scale = (uint8_t)(globalBri * _maxBri);
         for (uint16_t i = 0; i < _numLeds; i++) {
             _leds[i].nscale8(scale);
         }
 
-        // Accumulate brightness stats
+        // Accumulate brightness stats (histogram on actual globalBri output)
         _briSum     += globalBri;
         _briSamples += 1;
         if (globalBri < _briMin) _briMin = globalBri;
         if (globalBri > _briMax) _briMax = globalBri;
-        uint8_t bucket = (uint8_t)(briPos * 5.0f);
+        uint8_t bucket = (uint8_t)(globalBri * 5.0f);
         if (bucket > 4) bucket = 4;
         _briHist[bucket]++;
 
@@ -495,7 +508,7 @@ public:
             float mean = _briSum / (float)_briSamples;
             Serial.printf("  [BRI STATS] mean=%.2f min=%.2f max=%.2f n=%lu maxBri=%u\n",
                           mean, _briMin, _briMax, (unsigned long)_briSamples, (unsigned)_maxBri);
-            Serial.printf("  [BRI HIST pos] 0-20%%:%lu 20-40%%:%lu 40-60%%:%lu 60-80%%:%lu 80-100%%:%lu\n",
+            Serial.printf("  [BRI HIST bri] 0-20%%:%lu 20-40%%:%lu 40-60%%:%lu 60-80%%:%lu 80-100%%:%lu\n",
                           (unsigned long)_briHist[0], (unsigned long)_briHist[1],
                           (unsigned long)_briHist[2], (unsigned long)_briHist[3],
                           (unsigned long)_briHist[4]);
