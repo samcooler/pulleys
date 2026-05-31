@@ -414,8 +414,9 @@ public:
         _slot.maxBri = maxBrightness;
         _slot.init(_patternType, _slot.rows, _slot.cols);
 
-        // Global brightness: slow wander, spends time dim for low average power
-        _briWanderer.configure(0.6f, 0.3f, 1.5f, 0.2f, true, 0.20f, 0.90f);
+        // Global brightness: full [0,1] range; gamma 2.5 applied at render time
+        // so it spends most time dark (~18% mean) but occasionally peaks at full bright
+        _briWanderer.configure(0.4f, 0.3f, 1.5f, 0.2f, true, 0.0f, 1.0f);
 
         // Vignette spotlight: slow drift across the grid
         float midC = (_slot.cols - 1) * 0.5f;
@@ -467,7 +468,8 @@ public:
         _vy.update(dt);
         _vRadius.update(dt);
 
-        float globalBri = _briWanderer.pos;  // [0.05, 0.85]
+        // Gamma 2.5: biases toward dark, peaks at 1.0, mean ~18%
+        float globalBri = powf(_briWanderer.pos, 2.5f);
         uint8_t cols = _slot.cols;
 
         for (uint16_t i = 0; i < _numLeds; i++) {
