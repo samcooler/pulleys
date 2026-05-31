@@ -25,7 +25,7 @@
 #define BEACON_INTERVAL_MS 500
 #define LED_FPS            30
 #define IMU_INTERVAL_MS    100
-#define SLEEP_TIMEOUT_MS   30000
+#define SLEEP_TIMEOUT_MS   240000
 #define MOTION_THRESHOLD   0.05f   // g-force delta to count as motion
 #define FADE_DURATION_MS   1000    // fade in/out duration
 #define DREAM_INTERVAL_MS  30000   // base time between dreams
@@ -33,6 +33,12 @@
 #define DREAM_LIT_MS       2000    // how long the dream stays lit
 #define IMU_INT1_PIN       GPIO_NUM_10  // QMI8658 INT1 → GPIO10
 #define WOM_THRESHOLD      30          // Wake-on-Motion threshold (0-255, lower=more sensitive)
+
+// Battery voltage via resistor divider on GPIO2 (ADC1_CH1)
+// Divider: VBAT → R1 → GPIO2 → R2 → GND  (matched pair, so ratio = 2.0)
+#define VBAT_PIN           1
+#define VBAT_DIVIDER_RATIO 2.0f     // (R1+R2)/R2 — update if resistors differ
+#define VBAT_ADC_REF       3.3f     // ESP32-S3 ADC reference voltage
 
 static const bool DEBUG_FLASH = false;  // set true to enable LED debug flashes
 
@@ -53,7 +59,7 @@ static pulleys::IMU imu;
 static PulleysCulture myCulture;
 static uint32_t counter = 0;
 static NimBLEAdvertising* pAdv = nullptr;
-static pulleys::PatternType travelerPatternType = pulleys::PATTERN_RADIAL_RIPPLE;
+static pulleys::PatternType travelerPatternType = pulleys::PATTERN_SHAPE;
 
 // ── Sleep / wake state machine ────────────────────────────────────────────────
 enum TravelerState { AWAKE, FADING_OUT, ASLEEP, FADING_IN, DREAM_IN, DREAM_LIT, DREAM_OUT };
@@ -88,13 +94,16 @@ static void bleStartAll() {
 
 // LED debug flash helper — shows a color briefly for visual debugging
 static void debugFlash(CRGB color, int count = 1) {
+    static const uint8_t CENTER[4] = { 27, 28, 35, 36 };  // center 4 of 8×8
+    CRGB dimColor = color;
+    dimColor.nscale8(3);
     for (int i = 0; i < count; i++) {
-        fill_solid(leds, LED_COUNT, color.nscale8(10));
+        for (uint8_t idx : CENTER) leds[idx] = dimColor;
         FastLED.show();
-        delay(400);
-        fill_solid(leds, LED_COUNT, CRGB::Black);
+        delay(80);
+        for (uint8_t idx : CENTER) leds[idx] = CRGB::Black;
         FastLED.show();
-        if (i < count - 1) delay(200);
+        if (i < count - 1) delay(60);
     }
 }
 
@@ -321,13 +330,24 @@ void setup() {
 static const char* stateNames[] = { "AWAKE", "FADE_OUT", "ASLEEP", "FADE_IN", "DREAM_IN", "DREAM_LIT", "DREAM_OUT" };
 
 void loop() {
-    static uint32_t lastBeacon = 0;
-    static uint32_t lastLed    = 0;
-    static uint32_t lastPrune  = 0;
-    static uint32_t lastImu    = 0;
-    static uint32_t lastLog    = 0;
-    static float lastDelta     = 0;
+    static uint32_t lastBeacon       = 0;
+    static uint32_t lastLed          = 0;
+    static uint32_t lastPrune        = 0;
+    static uint32_t lastImu          = 0;
+    static uint32_t lastLog          = 0;
+    static uint32_t lastPatternCycle = 0;
+    static uint8_t  currentShape     = 0;
+    static float    lastDelta        = 0;
     uint32_t now = millis();
+
+    // Cycle through all shapes every 10 seconds
+    if (travelerState == AWAKE && now - lastPatternCycle >= 10000) {
+        lastPatternCycle = now;
+        currentShape = (currentShape + 1) % pulleys::SHAPE_COUNT;
+        myCulture.shape = currentShape;
+        pattern.setCulture(myCulture);
+        Serial.printf("[PATTERN] shape=%u (%s)\n", currentShape, pulleys::shape_name(currentShape));
+    }
 
     // LED pattern update (~30 fps) — skip only when fully asleep
     if (travelerState != ASLEEP && now - lastLed >= (1000 / LED_FPS)) {
@@ -356,6 +376,16 @@ void loop() {
                     bleStopAll();
                     fill_solid(leds, LED_COUNT, CRGB::Black);
                     FastLED.show();
+
+                    // Battery indicator: 0 flashes (>80%) to 4 flashes (<20%)
+                    float vbat = analogRead(VBAT_PIN) * VBAT_ADC_REF / 4095.0f * VBAT_DIVIDER_RATIO;
+                    int pct = constrain((int)((vbat - 3.0f) / 1.2f * 100.0f), 0, 100);
+                    CRGB flashColor = (pct >= 80) ? CRGB::Green : CRGB::Red;
+                    int flashes = (pct >= 60) ? 1 : (pct >= 40) ? 2 : (pct >= 20) ? 3 : 4;
+                    Serial.printf("[SLEEP] vbat=%.2fV (%d%%) — %d flash(es)\n", vbat, pct, flashes);
+                    delay(100);
+                    debugFlash(flashColor, flashes);
+
                     Serial.println("[SLEEP] Fade complete — entering light sleep");
                     lightSleepLoop();
                     return;  // re-enter loop() with new state
@@ -450,9 +480,12 @@ void loop() {
     if (travelerState != ASLEEP && now - lastLog >= 1000) {
         lastLog = now;
         uint32_t sinceMotion = now - lastMotionMs;
-        Serial.printf("[%s] delta=%.3f motionAgo=%lums baseline=%s\n",
+        // Battery voltage: raw ADC → scale by divider ratio
+        float vbatRaw = analogRead(VBAT_PIN) * VBAT_ADC_REF / 4095.0f;
+        float vbat = vbatRaw * VBAT_DIVIDER_RATIO;
+        Serial.printf("[%s] delta=%.3f motionAgo=%lums baseline=%s vbat=%.2fV (raw=%.3fV)\n",
                       stateNames[travelerState], lastDelta, sinceMotion,
-                      imuBaselineValid ? "ok" : "settling");
+                      imuBaselineValid ? "ok" : "settling", vbat, vbatRaw);
     }
 
     // Sleep transition: no motion for SLEEP_TIMEOUT_MS ± jitter

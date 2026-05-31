@@ -63,12 +63,14 @@ inline PulleysCulture culture_random() {
         c.colorA = _hsv_to_rgb(hueA, random(200, 256), 255);
         c.colorB = _hsv_to_rgb(hueB, random(200, 256), 255);
         c.oscillation = random(12, 255);  // ~0.2–2.0 Hz
+        c.shape = random(0, 10);
         return c;
     }
     // Fallback: yellow + cyan
     c.colorA = _hsv_to_rgb(60, random(200, 256), 255);
     c.colorB = _hsv_to_rgb(180, random(200, 256), 255);
     c.oscillation = random(12, 255);
+    c.shape = random(0, 10);
     return c;
 }
 
@@ -89,6 +91,7 @@ inline PulleysCulture culture_blend(const PulleysCulture& a, const PulleysCultur
     out.colorB.g    = _lerp8(a.colorB.g, b.colorB.g, ratio);
     out.colorB.b    = _lerp8(a.colorB.b, b.colorB.b, ratio);
     out.oscillation = _lerp8(a.oscillation, b.oscillation, ratio);
+    out.shape       = (ratio < 0.5f) ? a.shape : b.shape;
     return out;
 }
 
@@ -118,11 +121,16 @@ inline const char* color_name(const PulleysColor& c) {
 
 // Print culture to Serial for debugging
 inline void culture_print(const char* label, const PulleysCulture& c) {
-    Serial.printf("  %s: A=%-7s(%3d,%3d,%3d) B=%-7s(%3d,%3d,%3d) osc=%d (%.2fHz)\n",
+    static const char* shapeNames[] = {
+        "radial", "bars", "diagonal", "checker", "polka",
+        "cross", "diamonds", "spiral", "tunnel", "quadrants"
+    };
+    const char* sName = c.shape < 10 ? shapeNames[c.shape] : "?";
+    Serial.printf("  %s: A=%-7s(%3d,%3d,%3d) B=%-7s(%3d,%3d,%3d) osc=%d (%.2fHz) shape=%s\n",
                   label,
                   color_name(c.colorA), c.colorA.r, c.colorA.g, c.colorA.b,
                   color_name(c.colorB), c.colorB.r, c.colorB.g, c.colorB.b,
-                  c.oscillation, culture_osc_to_hz(c.oscillation));
+                  c.oscillation, culture_osc_to_hz(c.oscillation), sName);
 }
 
 // ── Stubs for future features ─────────────────────────────────────────────────

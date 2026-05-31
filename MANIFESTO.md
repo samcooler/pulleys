@@ -30,7 +30,9 @@ This is where the project tips from installation into game: when people start ex
 
 ## On the forest at night
 
-Twenty stations hanging in trees, connected by rope. A hundred tiny puppets with glowing LED matrices, each a different creature, each carrying a culture expressed as pulsing colored light. People spread through the dark, pulling ropes, watching colors shift, slowly realizing that the patterns they see are a consequence of everywhere the puppets have been.
+Twenty stations hanging in trees, connected by rope. Each station is a column of light — four cultures stacked vertically, each one the memory of a different visitor. A hundred tiny puppets with glowing LED matrices, each a different creature, each carrying a culture expressed as pulsing colored light. People spread through the dark, pulling ropes, watching colors shift, slowly realizing that the patterns they see are a consequence of everywhere the puppets have been.
+
+When no one is pulling, the puppets sleep. Their lights fade to black and they wait, motionless, drawing almost nothing from their batteries. But they dream: every thirty seconds, a sleeping puppet stirs, its pattern flaring briefly in the dark — a two-second reminder that it's alive, waiting to be picked up again. The dreams are unsynchronized, each puppet on its own internal clock with random jitter, so the forest twinkles with brief, unpredictable flashes of remembered color.
 
 The ropes are physical. The cultures are electromagnetic. The experience is somewhere in between — in the hands pulling, the eyes watching, the slow recognition that you're participating in something that's been going on without you, and will continue after you leave.
 
@@ -45,3 +47,5 @@ The forest remembers. The stations remember. You won't.
 - **Reduced TX power (-6 dBm)** — the traveler whispers rather than shouts. This shrinks the radius of intimacy, forcing closer physical proximity for CLOSE detection. It also extends battery life — a practical choice that happens to serve the aesthetic of quiet, deliberate encounters.
 - **Per-pixel phase offset** — the LED pattern isn't a flat color, it's a wave. Movement across the surface of the light creates a sense of life, of breathing. Two static colors would be a flag. Two oscillating colors are an organism.
 - **Sparkle and ripple** — rare per-pixel ignition creates organic glitter over the color wave; a radial ripple with a wandering center gives the matrix a sense of depth, like light on water.
+- **Sleep and dreams** — a puppet that no one holds fades to black and sleeps. Its accelerometer watches for motion with minimal power draw. Periodically it dreams — a brief flash of its pattern — then sleeps again. This is both practical (battery life) and poetic: the creatures have their own interior lives, independent of the participants.
+- **Battery as mortality** — when a puppet falls asleep, it flashes a dim red count: its remaining life. Four flashes means it's dying. Zero means it's full. The participants don't need to understand this, but the ones who notice will feel the weight of it — these creatures are mortal, and you're spending their time.

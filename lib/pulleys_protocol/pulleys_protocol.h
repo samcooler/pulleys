@@ -12,8 +12,9 @@
 //   [3..4]   Device ID     (uint16_t, little-endian, derived from MAC)
 //   [5..7]   Color A       (RGB, 3 bytes)
 //   [8..10]  Color B       (RGB, 3 bytes)
-//   [11]     Oscillation   (frequency byte: 1–255, maps to ~0.1–5 Hz)
-//   [12..15] Counter       (uint32_t, little-endian)
+//   [11]     Oscillation   (frequency byte: 1–255, maps to ~0.2–2.0 Hz)
+//   [12]     Shape         (0–9, spatial pattern type)
+//   [13..15] Counter       (uint24_t, little-endian — rolls over ~97 days at 500ms)
 //
 // No device name is broadcast — filtering uses company ID + packet structure.
 
@@ -30,7 +31,8 @@ typedef struct {
 typedef struct {
     PulleysColor colorA;
     PulleysColor colorB;
-    uint8_t      oscillation;   // 1–255, maps to ~0.1–5.0 Hz
+    uint8_t      oscillation;   // 1–255, maps to ~0.2–2.0 Hz
+    uint8_t      shape;         // 0–9, spatial pattern type (ShapeType enum)
 } PulleysCulture;
 
 typedef struct {
@@ -54,10 +56,10 @@ inline void pulleys_serialize(const PulleysPacket* pkt, uint8_t out[PULLEYS_MFR_
     out[9]  = pkt->culture.colorB.g;
     out[10] = pkt->culture.colorB.b;
     out[11] = pkt->culture.oscillation;
-    out[12] = (pkt->counter >>  0) & 0xFF;
-    out[13] = (pkt->counter >>  8) & 0xFF;
-    out[14] = (pkt->counter >> 16) & 0xFF;
-    out[15] = (pkt->counter >> 24) & 0xFF;
+    out[12] = pkt->culture.shape;
+    out[13] = (pkt->counter >>  0) & 0xFF;
+    out[14] = (pkt->counter >>  8) & 0xFF;
+    out[15] = (pkt->counter >> 16) & 0xFF;
 }
 
 // ── Parse 16-byte manufacturer data into packet struct ────────────────────────
@@ -75,9 +77,9 @@ inline bool pulleys_parse(const uint8_t* data, size_t len, PulleysPacket* pkt) {
     pkt->culture.colorB.g    = data[9];
     pkt->culture.colorB.b    = data[10];
     pkt->culture.oscillation = data[11];
-    pkt->counter             = (uint32_t)data[12]
-                             | ((uint32_t)data[13] <<  8)
-                             | ((uint32_t)data[14] << 16)
-                             | ((uint32_t)data[15] << 24);
+    pkt->culture.shape       = data[12];
+    pkt->counter             = (uint32_t)data[13]
+                             | ((uint32_t)data[14] <<  8)
+                             | ((uint32_t)data[15] << 16);
     return true;
 }
