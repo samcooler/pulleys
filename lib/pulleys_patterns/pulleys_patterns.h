@@ -293,7 +293,10 @@ static inline void _shape_update(PatternSlot& slot, float dt) {
     // 3×3 supersample blend field, then soft-threshold the averaged blend once.
     // Averaging blend values (not colors) keeps colorA/colorB pure and black fully black —
     // only the narrow boundary pixels receive a dimmed version of their color.
-    constexpr int   SSAA      = 3;
+#ifndef PULLEYS_SSAA
+#define PULLEYS_SSAA 3
+#endif
+    constexpr int   SSAA      = PULLEYS_SSAA;
     constexpr float SSAA_INV  = 1.0f / (SSAA * SSAA);
     constexpr float EDGE_W    = 0.12f;  // half-width of A→off and off→B ramps (in blend units)
 
@@ -415,7 +418,7 @@ public:
         _slot.init(_patternType, _slot.rows, _slot.cols);
 
         // Active range [0,1]; gamma 2.5 at render time → mean ~18%, occasional full-bright peaks
-        _briWanderer.configure(0.4f, 3.0f, 2.0f, 0.5f, true, 0.0f, 1.0f);
+        _briWanderer.configure(1.0f, 3.0f, 2.0f, 0.5f, true, 0.0f, 1.0f);
 
         // Vignette wanderers (disabled — kept for easy re-enable)
         float midC = (_slot.cols - 1) * 0.5f;

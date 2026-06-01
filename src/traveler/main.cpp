@@ -26,7 +26,7 @@
 #define BEACON_INTERVAL_MS 500
 #define LED_FPS            30
 #define IMU_INTERVAL_MS    100
-#define SLEEP_TIMEOUT_MS   240000
+#define SLEEP_TIMEOUT_MS   25000
 #define MOTION_THRESHOLD   0.05f   // g-force delta to count as motion
 #define FADE_DURATION_MS   1000    // fade in/out duration
 #define DREAM_INTERVAL_MS  30000   // base time between dreams
@@ -359,6 +359,37 @@ void setup() {
     Serial.println("Traveler ready.\n");
 }
 
+// ── Battery display (sleep entry) ─────────────────────────────────────────────
+// pct >= 70: 2×2 green center; pct < 70: growing red square 2→8
+static void batteryDisplay(float vbat) {
+    int pct = constrain((int)((vbat - 2.65f) / 1.35f * 100.0f), 0, 100);
+    Serial.printf("[SLEEP] vbat=%.2fV  %d%%\n", vbat, pct);
+
+    int sqSize;
+    CRGB color;
+    if (pct >= 70) {
+        sqSize = 2;
+        color  = CRGB::Green;
+    } else {
+        sqSize = 2 + (int)roundf((70 - pct) / 50.0f * 6.0f);
+        if (sqSize > 8) sqSize = 8;
+        color = CRGB::Red;
+    }
+
+    fill_solid(leds, LED_COUNT, CRGB::Black);
+    int r0 = (8 - sqSize) / 2;
+    for (int r = r0; r < r0 + sqSize; r++) {
+        for (int c = r0; c < r0 + sqSize; c++) {
+            leds[r * 8 + c] = color;
+            leds[r * 8 + c].nscale8(51);  // 20% brightness
+        }
+    }
+    FastLED.show();
+    delay(200);
+    fill_solid(leds, LED_COUNT, CRGB::Black);
+    FastLED.show();
+}
+
 // ── Loop ──────────────────────────────────────────────────────────────────────
 static const char* stateNames[] = { "AWAKE", "FADE_OUT", "ASLEEP", "FADE_IN", "DREAM_IN", "DREAM_LIT", "DREAM_OUT" };
 
@@ -369,19 +400,8 @@ void loop() {
     static uint32_t lastImu          = 0;
     static uint32_t lastLog          = 0;
     static uint32_t lastBatLog       = 0;
-    static uint32_t lastPatternCycle = 0;
-    static uint8_t  currentShape     = 0;
     static float    lastDelta        = 0;
     uint32_t now = millis();
-
-    // Cycle through all shapes every 10 seconds
-    if (travelerState == AWAKE && now - lastPatternCycle >= 10000) {
-        lastPatternCycle = now;
-        currentShape = (currentShape + 1) % pulleys::SHAPE_COUNT;
-        myCulture.shape = currentShape;
-        pattern.setCulture(myCulture);
-        Serial.printf("[PATTERN] shape=%u (%s)\n", currentShape, pulleys::shape_name(currentShape));
-    }
 
     // LED pattern update (~30 fps) — skip only when fully asleep
     if (travelerState != ASLEEP && now - lastLed >= (1000 / LED_FPS)) {
@@ -411,14 +431,9 @@ void loop() {
                     fill_solid(leds, LED_COUNT, CRGB::Black);
                     FastLED.show();
 
-                    // Battery indicator: 0 flashes (>80%) to 4 flashes (<20%)
+                    // Battery display: growing square, green at high charge, red when low
                     float vbat = analogRead(VBAT_PIN) * VBAT_ADC_REF / 4095.0f * VBAT_DIVIDER_RATIO;
-                    int pct = constrain((int)((vbat - 3.0f) / 1.2f * 100.0f), 0, 100);
-                    CRGB flashColor = (pct >= 80) ? CRGB::Green : CRGB::Red;
-                    int flashes = (pct >= 60) ? 1 : (pct >= 40) ? 2 : (pct >= 20) ? 3 : 4;
-                    Serial.printf("[SLEEP] vbat=%.2fV (%d%%) — %d flash(es)\n", vbat, pct, flashes);
-                    delay(100);
-                    debugFlash(flashColor, flashes);
+                    batteryDisplay(vbat);
 
                     Serial.println("[SLEEP] Fade complete — entering light sleep");
                     lightSleepLoop();
@@ -556,6 +571,7 @@ void loop() {
         }
     }
 
+#ifndef DISABLE_SLEEP
     // Sleep transition: no motion for SLEEP_TIMEOUT_MS ± jitter
     static uint32_t currentSleepTimeout = SLEEP_TIMEOUT_MS;
     if (travelerState == AWAKE && (now - lastMotionMs) >= currentSleepTimeout) {
@@ -566,6 +582,7 @@ void loop() {
         currentSleepTimeout = SLEEP_TIMEOUT_MS + (esp_random() % (2 * DREAM_JITTER_MS + 1)) - DREAM_JITTER_MS;
         Serial.println("[SLEEP] No motion — fading out");
     }
+#endif
 
     // OTA update check (disabled)
     // ArduinoOTA.handle();

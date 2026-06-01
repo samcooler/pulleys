@@ -16,7 +16,7 @@
 #endif
 
 #define MAX_BRIGHTNESS     128   // wanderer peak; slot.maxBri set to 255 so shape renders full range
-#define LED_FPS            30
+#define LED_FPS            60
 #define MATE_COOLDOWN_MS   30000
 #define NUM_SLOTS          4
 #define ROWS_PER_SLOT      8       // 32 rows / 4 slots
@@ -141,19 +141,6 @@ void setup() {
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, LED_COUNT);
     FastLED.setBrightness(255);
 
-    // Boot color-order flash: R → G → B (100ms each) to verify RGB vs GRB wiring
-    auto flashAll = [](CRGB color) {
-        fill_solid(leds, LED_COUNT, color);
-        FastLED.show();
-        delay(300);
-        fill_solid(leds, LED_COUNT, CRGB::Black);
-        FastLED.show();
-        delay(100);
-    };
-    flashAll(CRGB(40, 0, 0));  // should appear RED
-    flashAll(CRGB(0, 40, 0));  // should appear GREEN
-    flashAll(CRGB(0, 0, 40));  // should appear BLUE
-
     // 4 random culture slots using PatternSlot
     randomSeed(esp_random());
     for (uint8_t i = 0; i < NUM_SLOTS; i++) {
@@ -177,8 +164,8 @@ void setup() {
     NimBLEScan* pScan = NimBLEDevice::getScan();
     pScan->setScanCallbacks(new TravelerCallbacks(), true);
     pScan->setActiveScan(false);
-    pScan->setInterval(100);
-    pScan->setWindow(99);
+    pScan->setInterval(160);   // 100ms
+    pScan->setWindow(80);      // 50ms — matches traveler, leaves CPU for render
     pScan->start(0, false, false);
     Serial.println("Scanning for Travelers...");
     Serial.println("Station ready.\n");
