@@ -25,8 +25,9 @@ BOOT_APP="/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/par
 
 # Auto-detect chip from environment name
 case "$ENV" in
-  station*) CHIP="esp32c3" ;;
-  *)        CHIP="esp32s3" ;;
+  station_wroom) CHIP="esp32"   ;;
+  station*)      CHIP="esp32c3" ;;
+  *)             CHIP="esp32s3" ;;
 esac
 
 # Verify build exists (not needed for reset-only)
@@ -35,8 +36,8 @@ if [[ "$RESET_ONLY" == false && ! -f "$BUILD/firmware.bin" ]]; then
   exit 1
 fi
 
-# Find all connected USB serial ports
-ports=(/dev/cu.usbmodem*(N))
+# Find all connected USB serial ports (usbmodem = C3/S3, usbserial = WROOM CH340)
+ports=(/dev/cu.usbmodem*(N) /dev/cu.usbserial*(N))
 if [[ ${#ports[@]} -eq 0 ]]; then
   echo "No USB serial ports found."
   exit 1
