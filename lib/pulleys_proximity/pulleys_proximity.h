@@ -38,15 +38,21 @@ struct TrackedDevice {
 // Callback signature: called when a device changes zone
 typedef void (*ZoneChangeCallback)(const TrackedDevice& device, ProximityZone oldZone, ProximityZone newZone);
 
+// Tune PULLEYS_RSSI_CLOSE in platformio.ini build_flags (e.g. -D PULLEYS_RSSI_CLOSE=-55).
+// NEAR and FAR are derived as fixed offsets — only CLOSE needs field calibration.
+#ifndef PULLEYS_RSSI_CLOSE
+#define PULLEYS_RSSI_CLOSE -58
+#endif
+
 class ProximityTracker {
 public:
     static constexpr uint8_t  MAX_TRACKED    = 32;
-    static constexpr float    RSSI_ALPHA     = 0.3f;    // smoothing factor (higher = more responsive)
-    static constexpr int      RSSI_CLOSE     = -58;     // dBm threshold for CLOSE
-    static constexpr int      RSSI_NEAR      = -73;     // dBm threshold for NEAR
-    static constexpr int      RSSI_FAR       = -80;     // dBm threshold for FAR
-    static constexpr int      HYSTERESIS     = 5;       // dBm hysteresis to prevent zone flickering
-    static constexpr uint32_t TIMEOUT_MS     = 10000;   // remove device after 10s silence
+    static constexpr float    RSSI_ALPHA     = 0.3f;
+    static constexpr int      RSSI_CLOSE     = PULLEYS_RSSI_CLOSE;
+    static constexpr int      RSSI_NEAR      = PULLEYS_RSSI_CLOSE - 15;
+    static constexpr int      RSSI_FAR       = PULLEYS_RSSI_CLOSE - 22;
+    static constexpr int      HYSTERESIS     = 5;
+    static constexpr uint32_t TIMEOUT_MS     = 10000;
 
     void setZoneChangeCallback(ZoneChangeCallback cb) { _callback = cb; }
 

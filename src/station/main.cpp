@@ -15,7 +15,7 @@
   #define LED_COUNT 10
 #endif
 
-#define MAX_BRIGHTNESS     128   // wanderer peak; slot.maxBri set to 255 so shape renders full range
+#define MAX_BRIGHTNESS     38    // wanderer peak; slot.maxBri set to 255 so shape renders full range
 #define LED_FPS            60
 #define MATE_COOLDOWN_MS   30000
 #define NUM_SLOTS          4
@@ -140,6 +140,7 @@ void setup() {
     // LEDs — 8 cols x 32 rows, serpentine
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, LED_COUNT);
     FastLED.setBrightness(255);
+    Serial.printf("  LEDs ready — pin %d, %d leds\n", LED_PIN, LED_COUNT);
 
     // 4 random culture slots using PatternSlot
     randomSeed(esp_random());
@@ -214,20 +215,23 @@ void loop() {
             if (absPhase == ABS_DIM && e >= 0.5f) {
                 for (uint8_t i = 0; i < NUM_SLOTS; i++) patSlots[i].culture = absNewCulture;
                 absPhase = ABS_FLASH; absPhaseStart = now; e = 0.0f;
+                Serial.println("[ABS] Flash");
             } else if (absPhase == ABS_FLASH && e >= 3.0f) {
                 absPhase = ABS_RESOLVE; absPhaseStart = now; e = 0.0f;
+                Serial.println("[ABS] Resolve");
             } else if (absPhase == ABS_RESOLVE && e >= 1.0f) {
                 for (uint8_t i = 0; i < NUM_SLOTS; i++)
                     if (i != absSlot) patSlots[i].culture = absOldCultures[i];
                 absPhase = ABS_RESTORE; absPhaseStart = now; e = 0.0f;
+                Serial.println("[ABS] Restore");
             } else if (absPhase == ABS_RESTORE && e >= 1.5f) {
-                // Reset wanderers to pos=1.0 → output = WANDER_PEAK_GB*MB, matching RESTORE end
                 for (uint8_t i = 0; i < NUM_SLOTS; i++) {
                     briWanderers[i].pos = 1.0f;
                     briWanderers[i].vel = 0.0f;
                     briWanderers[i].acc = 0.0f;
                 }
                 absPhase = ABS_IDLE;
+                Serial.println("[ABS] Done");
             }
 
             const float MB   = (float)MAX_BRIGHTNESS;

@@ -133,16 +133,11 @@ static void lightSleepLoop() {
     gpio_config(&io_conf);
 
     // Check both INT pins after WoM config
-    Serial.printf("  [SLEEP] After WoM config: INT1(GPIO10)=%d INT2(GPIO13)=%d STATUS1=0x%02X\n",
-                  gpio_get_level(IMU_INT1_PIN), gpio_get_level(GPIO_NUM_13), imu.readReg(0x2F));
-
     for (int i = 0; i < 50; i++) {
         imu.checkWomEvent();
         delay(20);
         if (gpio_get_level(IMU_INT1_PIN) == 1 && gpio_get_level(GPIO_NUM_13) == 1) break;
     }
-    Serial.printf("  [SLEEP] INT1: %d  INT2: %d\n",
-                  gpio_get_level(IMU_INT1_PIN), gpio_get_level(GPIO_NUM_13));
 
     // Enable wake on BOTH INT pins (we'll figure out which one WoM uses)
     gpio_wakeup_enable(IMU_INT1_PIN, GPIO_INTR_LOW_LEVEL);
@@ -288,6 +283,7 @@ void setup() {
     // LEDs
     FastLED.addLeds<WS2812B, LED_PIN, RGB>(leds, LED_COUNT);
     FastLED.setBrightness(255);  // brightness controlled by PatternRenderer only
+    Serial.printf("  LEDs ready — pin %d, %d leds\n", LED_PIN, LED_COUNT);
 
 
     // Boot preview: show culture colors on centered rows for 1 second
@@ -338,17 +334,6 @@ void setup() {
         Serial.println("  [IMU] Accelerometer FAILED — patterns will wander randomly");
     }
     ritual.init();
-
-    // ── INT pin diagnostic ──
-    // Read GPIO10/13 BEFORE any WoM config to check baseline
-    pinMode(10, INPUT_PULLUP);
-    pinMode(13, INPUT_PULLUP);
-    delay(10);
-    Serial.printf("  [DIAG] GPIO10=%d GPIO13=%d (with pullup, before WoM)\n",
-                  digitalRead(10), digitalRead(13));
-    // Read key IMU registers
-    Serial.printf("  [DIAG] CTRL1=0x%02X CTRL7=0x%02X STATUS1=0x%02X\n",
-                  imu.readReg(0x02), imu.readReg(0x08), imu.readReg(0x2F));
 
     // WiFi + OTA disabled for now
     // WiFi.mode(WIFI_STA);
@@ -529,12 +514,10 @@ void loop() {
     if (travelerState != ASLEEP && now - lastLog >= 1000) {
         lastLog = now;
         uint32_t sinceMotion = now - lastMotionMs;
-        // Battery voltage: raw ADC → scale by divider ratio
-        float vbatRaw = analogRead(VBAT_PIN) * VBAT_ADC_REF / 4095.0f;
-        float vbat = vbatRaw * VBAT_DIVIDER_RATIO;
-        Serial.printf("[%s] delta=%.3f motionAgo=%lums baseline=%s vbat=%.2fV (raw=%.3fV)\n",
-                      stateNames[travelerState], lastDelta, sinceMotion,
-                      imuBaselineValid ? "ok" : "settling", vbat, vbatRaw);
+        float vbat = analogRead(VBAT_PIN) * VBAT_ADC_REF / 4095.0f * VBAT_DIVIDER_RATIO;
+        Serial.printf("[%s] delta=%.3f motionAgo=%lus vbat=%.2fV%s\n",
+                      stateNames[travelerState], lastDelta, sinceMotion / 1000,
+                      vbat, imuBaselineValid ? "" : " (settling)");
     }
 
     // Battery discharge log — append sample every 30s, warn when low
@@ -562,7 +545,6 @@ void loop() {
             free(buf);
         }
         p.end();
-        Serial.printf("[BATLOG] n=%lu  %.3fV\n", n + 1, vbat);
 
         // Visual low-battery warning
         if (vbat < VBAT_WARN_V) {

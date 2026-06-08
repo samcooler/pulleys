@@ -5,49 +5,43 @@
 | Role | Board | LEDs | Extras |
 |------|-------|------|--------|
 | **Traveler** | Waveshare ESP32-S3-Matrix | 8×8 WS2812B matrix, 64 LEDs (GPIO 14) | QMI8658 IMU, battery ADC (GPIO 2) |
-| **Station** | Seeed XIAO ESP32-C3 | 8×32 WS2812B matrix, 256 LEDs (GPIO 10) | — |
+| **Station (C3)** | Seeed XIAO ESP32-C3 | 8×32 WS2812B matrix, 256 LEDs (GPIO 10) | — |
+| **Station (WROOM)** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | hardware FPU, CH340 USB-serial |
 
 ## Build Environments
 
-```
-pio run -e traveler      # build traveler firmware
-pio run -e station       # build station for XIAO ESP32-C3
-```
+| Env | Board | Notes |
+|-----|-------|-------|
+| `traveler` | ESP32-S3 custom | default |
+| `station` | XIAO ESP32-C3 | default |
+| `station_wroom` | D1 Mini ESP32-WROOM-32 | hardware FPU, SSAA=3 |
 
-Default `pio run` builds `traveler` + `station`.
+```sh
+pio run                      # build traveler + station (defaults)
+pio run -e station_wroom     # build one env
+```
 
 Note: PlatformIO CLI is at `~/.platformio/penv/bin/pio` if not on your PATH.
 
 ## Flashing & Monitoring
 
-One board at a time via USB-C. The PlatformIO device monitor locks the serial port, so **close it before flashing**:
-
-```bash
-# Kill any running monitor first
-pkill -f "platformio device monitor"
-
-# Flash traveler
-pio run -e traveler -t upload
-
-# Monitor traveler serial output
-pio device monitor -e traveler
-
-# Flash + monitor in one shot
-pio run -e traveler -t upload && pio device monitor -e traveler
+```sh
+./go.sh station_wroom    # build + flash + monitor in one shot
+./go.sh traveler
+./go.sh station
 ```
 
-Same for station:
-```bash
-pkill -f "platformio device monitor"
-pio run -e station -t upload && pio device monitor -e station
+Or separately:
+
+```sh
+pio run -e station_wroom          # build only
+./flash_all.sh station_wroom      # flash all connected boards (requires prior build)
+pio device monitor -e station_wroom   # monitor only
 ```
 
-### Parallel Flashing
-
-`flash_all.sh` flashes all connected boards in parallel via `esptool.py`. It auto-detects chip type from the environment name (`station*` → esp32c3, else → esp32s3) and finds all `/dev/cu.usbmodem*` ports. Requires a prior `pio run` build.
-
-```bash
-./flash_all.sh traveler    # flash all connected boards with traveler firmware
+Close the monitor before flashing — it locks the serial port:
+```sh
+pkill -f "platformio device monitor"
 ```
 
 ### Serial Watch (Light Sleep)
@@ -149,7 +143,7 @@ Alternative: ESP-IDF native OTA with HTTP server for fleet updates.
 - **Mating cooldown** — a station can only absorb culture from the same traveler once every 30 seconds, to prevent over-blending from a single visitor.
 - **TX power** — traveler broadcasts at -6 dBm (reduced from default). This tightens proximity zones and saves battery. Changing TX power requires recalibrating RSSI thresholds via walk tests.
 - **FastLED brightness** — capped at 32 (traveler) / 15 (station) out of 255. Lower values improve color saturation on dense LED matrices. Adjust `MAX_BRIGHTNESS` in the source if needed.
-- **Threshold tuning** — current RSSI thresholds (CLOSE -58, NEAR -73, FAR -80) were calibrated by walk tests at -6 dBm TX power. If you change TX power or antenna environment, re-tune by walking at a known constant speed and adjusting values in `pulleys_proximity.h`.
+- **Threshold tuning** — walk a traveler toward the station and watch serial for `[PROX] T-XXXX: FAR → CLOSE`. Adjust `PULLEYS_RSSI_CLOSE` in the station env's `build_flags` in `platformio.ini` (default -58 dBm). NEAR and FAR track CLOSE automatically. See `FIELD.md` for field procedure.
 - **Sleep/wake** — travelers enter light sleep after 30s of no motion. USB serial disconnects during sleep (ESP32-S3 CDC limitation). Use `serial_watch.sh` for auto-reconnecting serial output.
 - **Debug flashes** — set `DEBUG_FLASH = true` in traveler `main.cpp` to enable color-coded LED flashes for sleep/wake debugging (red=sleep entry, green=GPIO wake, blue=timer wake, yellow=false trigger, white=exit sleep loop).
 - **Battery indicator** — when a traveler enters sleep, it flashes 0–4 dim red LEDs showing battery level (0 = >80%, 4 = <20%). This always shows regardless of DEBUG_FLASH.
