@@ -38,10 +38,11 @@ struct TrackedDevice {
 // Callback signature: called when a device changes zone
 typedef void (*ZoneChangeCallback)(const TrackedDevice& device, ProximityZone oldZone, ProximityZone newZone);
 
-// Tune PULLEYS_RSSI_CLOSE in platformio.ini build_flags (e.g. -D PULLEYS_RSSI_CLOSE=-55).
-// NEAR and FAR are derived as fixed offsets — only CLOSE needs field calibration.
+// ── Tunable: change PULLEYS_RSSI_CLOSE here to adjust culture-exchange range ──
+// More negative = closer required. Typical range: -50 (very close) to -65 (arm's length).
+// NEAR and FAR are derived as fixed offsets below CLOSE.
 #ifndef PULLEYS_RSSI_CLOSE
-#define PULLEYS_RSSI_CLOSE -58
+#define PULLEYS_RSSI_CLOSE -60
 #endif
 
 class ProximityTracker {

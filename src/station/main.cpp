@@ -17,7 +17,7 @@
 
 #define MAX_BRIGHTNESS     38    // wanderer peak; slot.maxBri set to 255 so shape renders full range
 #define LED_FPS            60
-#define MATE_COOLDOWN_MS   30000
+#define MATE_COOLDOWN_MS   600000   // 10 minutes
 #define NUM_SLOTS          4
 #define ROWS_PER_SLOT      8       // 32 rows / 4 slots
 #define COLS               8
@@ -33,10 +33,15 @@ static pulleys::ProximityTracker proximity;
 static pulleys::PatternSlot patSlots[NUM_SLOTS];
 static pulleys::Wanderer    briWanderers[NUM_SLOTS];
 
+// Vignette map: per-physical-LED brightness scale for one serpentine 8×8 slot.
+// Outer ring = 20%, second ring = 50%, center = 100%.
+static uint8_t vigMap[ROWS_PER_SLOT * COLS];
+
 // Absorption sequence state machine
 enum AbsPhase : uint8_t {
     ABS_IDLE = 0,
     ABS_DIM,      // 0.5s  — all slots fade to black
+    ABS_ANNOUNCE, // 1.0s  — two slots colorA, two colorB; triangle brightness 0→mid→0
     ABS_FLASH,    // 3.0s  — all slots show new culture at full brightness
     ABS_RESOLVE,  // 1.0s  — non-chosen slots fade out
     ABS_RESTORE,  // 1.5s  — non-chosen slots fade in with old cultures
@@ -59,6 +64,10 @@ static PulleysCulture  pendingCulture;
 static uint16_t cooldownIds[32];
 static uint32_t cooldownTimes[32];
 static uint8_t  cooldownCount = 0;
+
+// Periodic culture re-roll: one random slot gets a new random culture every 20 ± 10 min
+static uint32_t rerollLastMs    = 0;
+static uint32_t rerollIntervalMs = 0;  // set in setup
 
 // ── Culture exchange callback ─────────────────────────────────────────────────
 static void onZoneChange(const pulleys::TrackedDevice& dev,
@@ -142,8 +151,24 @@ void setup() {
     FastLED.setBrightness(255);
     Serial.printf("  LEDs ready — pin %d, %d leds\n", LED_PIN, LED_COUNT);
 
+    // Precompute vignette map for one serpentine 8×8 slot
+    for (uint8_t r = 0; r < ROWS_PER_SLOT; r++) {
+        for (uint8_t c = 0; c < COLS; c++) {
+            uint8_t physCol = (r & 1) ? (COLS - 1 - c) : c;
+            uint16_t idx = r * COLS + physCol;
+            uint8_t margin = r;
+            if (c              < margin) margin = c;
+            if (ROWS_PER_SLOT-1-r < margin) margin = ROWS_PER_SLOT-1-r;
+            if (COLS-1-c       < margin) margin = COLS-1-c;
+            vigMap[idx] = (margin == 0) ? 26 : (margin == 1) ? 89 : 255;
+        }
+    }
+
     // 4 random culture slots using PatternSlot
     randomSeed(esp_random());
+    rerollLastMs     = millis();
+    rerollIntervalMs = 600000UL + (uint32_t)random(0, 1200001);  // 10–30 min
+
     for (uint8_t i = 0; i < NUM_SLOTS; i++) {
         patSlots[i].buffer = leds + i * ROWS_PER_SLOT * COLS;
         patSlots[i].serpentine = true;
@@ -213,6 +238,9 @@ void loop() {
             float e = (now - absPhaseStart) / 1000.0f;
 
             if (absPhase == ABS_DIM && e >= 0.5f) {
+                absPhase = ABS_ANNOUNCE; absPhaseStart = now; e = 0.0f;
+                Serial.println("[ABS] Announce");
+            } else if (absPhase == ABS_ANNOUNCE && e >= 1.0f) {
                 for (uint8_t i = 0; i < NUM_SLOTS; i++) patSlots[i].culture = absNewCulture;
                 absPhase = ABS_FLASH; absPhaseStart = now; e = 0.0f;
                 Serial.println("[ABS] Flash");
@@ -241,9 +269,18 @@ void loop() {
                 pulleys::pattern_slot_update(patSlots[s], dt, t);
                 briWanderers[s].update(dt);
 
+                // During announce: overwrite buffer with solid culture colors
+                if (absPhase == ABS_ANNOUNCE) {
+                    PulleysColor& pc = (s & 1) ? absNewCulture.colorB : absNewCulture.colorA;
+                    CRGB c(pc.r, pc.g, pc.b);
+                    fill_solid(patSlots[s].buffer, ROWS_PER_SLOT * COLS, c);
+                }
+
                 float scale;
                 if (absPhase == ABS_DIM) {
                     scale = absStartGb[s] * MB * (1.0f - e / 0.5f);
+                } else if (absPhase == ABS_ANNOUNCE) {
+                    scale = sinf(e * (float)M_PI) * 100.0f;
                 } else if (absPhase == ABS_FLASH) {
                     float ramp = (e < 0.3f) ? e / 0.3f : 1.0f;
                     scale = ramp * 255.0f;
@@ -259,7 +296,8 @@ void loop() {
 
                 uint8_t sc = (uint8_t)scale;
                 CRGB* buf = patSlots[s].buffer;
-                for (uint16_t j = 0; j < ROWS_PER_SLOT * COLS; j++) buf[j].nscale8(sc);
+                for (uint16_t j = 0; j < ROWS_PER_SLOT * COLS; j++)
+                    buf[j].nscale8(scale8(sc, vigMap[j]));
             }
         } else {
             // ── Normal rendering with per-slot brightness wanderers ──────────────
@@ -275,7 +313,8 @@ void loop() {
                 uint8_t briScale = (uint8_t)(gb * MAX_BRIGHTNESS);
 
                 CRGB* buf = patSlots[s].buffer;
-                for (uint16_t j = 0; j < ROWS_PER_SLOT * COLS; j++) buf[j].nscale8(briScale);
+                for (uint16_t j = 0; j < ROWS_PER_SLOT * COLS; j++)
+                    buf[j].nscale8(scale8(briScale, vigMap[j]));
             }
         }
         FastLED.show();
@@ -285,6 +324,18 @@ void loop() {
     if (now - lastPrune >= 1000) {
         lastPrune = now;
         proximity.pruneStale();
+    }
+
+    // Periodic culture re-roll (20 ± 10 min, only while idle)
+    if (rerollIntervalMs > 0 && (now - rerollLastMs) >= rerollIntervalMs && absPhase == ABS_IDLE) {
+        uint8_t s = random(NUM_SLOTS);
+        patSlots[s].culture = pulleys::culture_random();
+        Serial.printf("[REROLL] slot %d → %s/%s %.2fHz\n", s,
+                      pulleys::color_name(patSlots[s].culture.colorA),
+                      pulleys::color_name(patSlots[s].culture.colorB),
+                      pulleys::culture_osc_to_hz(patSlots[s].culture.oscillation));
+        rerollLastMs     = now;
+        rerollIntervalMs = 600000UL + (uint32_t)random(0, 1200001);
     }
 
     // Traveler summary every 2 seconds
