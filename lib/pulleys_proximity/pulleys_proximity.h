@@ -42,7 +42,7 @@ typedef void (*ZoneChangeCallback)(const TrackedDevice& device, ProximityZone ol
 // More negative = closer required. Typical range: -50 (very close) to -65 (arm's length).
 // NEAR and FAR are derived as fixed offsets below CLOSE.
 #ifndef PULLEYS_RSSI_CLOSE
-#define PULLEYS_RSSI_CLOSE -60
+#define PULLEYS_RSSI_CLOSE -80
 #endif
 
 class ProximityTracker {
@@ -50,8 +50,8 @@ public:
     static constexpr uint8_t  MAX_TRACKED    = 32;
     static constexpr float    RSSI_ALPHA     = 0.3f;
     static constexpr int      RSSI_CLOSE     = PULLEYS_RSSI_CLOSE;
-    static constexpr int      RSSI_NEAR      = PULLEYS_RSSI_CLOSE - 15;
-    static constexpr int      RSSI_FAR       = PULLEYS_RSSI_CLOSE - 22;
+    static constexpr int      RSSI_NEAR      = PULLEYS_RSSI_CLOSE - 10;
+    static constexpr int      RSSI_FAR       = PULLEYS_RSSI_CLOSE - 20;
     static constexpr int      HYSTERESIS     = 5;
     static constexpr uint32_t TIMEOUT_MS     = 10000;
 

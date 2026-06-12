@@ -472,7 +472,7 @@ public:
         //   briPos [0.90, 1.00] → bri [0.35, 0.75]  (10% bright flash, avg 0.55)
         float briPos = _briWanderer.pos;
         float globalBri;
-        if (briPos < 0.40f) {
+        if (briPos < 0.15f) {
             float t = briPos / 0.40f;
             globalBri = t * 0.04f;
         } else if (briPos < 0.90f) {

@@ -57,7 +57,7 @@ inline PulleysCulture culture_random() {
     for (uint8_t attempt = 0; attempt < 10; attempt++) {
         // Two random hues at least 22 degrees apart (~6% of wheel)
         uint16_t hueA = random(0, 360);
-        uint16_t offset = random(22, 339);  // 22..338 degrees away
+        uint16_t offset = random(25, 330);  // 22..338 degrees away
         uint16_t hueB = (hueA + offset) % 360;
         if (_is_cop_pair(hueA, hueB)) continue;  // no cop lights
         c.colorA = _hsv_to_rgb(hueA, random(200, 256), 255);
