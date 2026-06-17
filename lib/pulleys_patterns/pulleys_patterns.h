@@ -472,15 +472,15 @@ public:
         //   briPos [0.90, 1.00] → bri [0.35, 0.75]  (10% bright flash, avg 0.55)
         float briPos = _briWanderer.pos;
         float globalBri;
-        if (briPos < 0.15f) {
-            float t = briPos / 0.40f;
-            globalBri = t * 0.04f;
+        if (briPos < 0.20f) {
+            float t = briPos / 0.20f;
+            globalBri = t * 0.10f;
         } else if (briPos < 0.90f) {
-            float t = (briPos - 0.40f) / 0.50f;
-            globalBri = 0.04f + t * 0.31f;
+            float t = (briPos - 0.20f) / 0.70f;
+            globalBri = 0.10f + t * 0.30f;
         } else {
             float t = (briPos - 0.90f) / 0.10f;
-            globalBri = 0.35f + t * 0.40f;
+            globalBri = 0.40f + t * 0.50f;
         }
         // Single brightness gate: shape rendered at full color, scaled here by wanderer × maxBri
         uint8_t scale = (uint8_t)(globalBri * _maxBri);
