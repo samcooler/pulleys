@@ -4,6 +4,8 @@
 #include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
 #include <LovyanGFX.hpp>
 #include <lvgl.h>
+#include "ble_scanner.h"
+#include "ui/arbiter_ui.h"
 
 // ── Display pin mapping — from board schematic ────────────────────────────────
 // Control
@@ -151,28 +153,6 @@ static void lvgl_touch_read(lv_indev_drv_t* /*drv*/, lv_indev_data_t* data) {
     }
 }
 
-// ── LVGL UI ───────────────────────────────────────────────────────────────────
-static void build_ui() {
-    lv_obj_t* screen = lv_scr_act();
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0x1a1a2e), LV_PART_MAIN);
-
-    lv_obj_t* title = lv_label_create(screen);
-    lv_label_set_text(title, "PULLEYS ARBITER");
-    lv_obj_set_style_text_color(title, lv_color_hex(0xe0e0ff), LV_PART_MAIN);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, -40);
-
-    lv_obj_t* status = lv_label_create(screen);
-    lv_label_set_text(status, "Display OK");
-    lv_obj_set_style_text_color(status, lv_color_hex(0x44ff88), LV_PART_MAIN);
-    lv_obj_align(status, LV_ALIGN_CENTER, 0, 10);
-
-    lv_obj_t* res_lbl = lv_label_create(screen);
-    lv_label_set_text_fmt(res_lbl, "%d x %d", LCD_WIDTH, LCD_HEIGHT);
-    lv_obj_set_style_text_color(res_lbl, lv_color_hex(0x888899), LV_PART_MAIN);
-    lv_obj_align(res_lbl, LV_ALIGN_CENTER, 0, 40);
-}
-
 // ── Setup ─────────────────────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
@@ -221,12 +201,30 @@ void setup() {
     indev_drv.read_cb = lvgl_touch_read;
     lv_indev_drv_register(&indev_drv);
 
-    build_ui();
+    scanner_init();
+    ui_init();
     Serial.println("Arbiter ready.");
 }
 
 // ── Loop ──────────────────────────────────────────────────────────────────────
 void loop() {
+    static uint32_t last_scan = 0;
+    static uint32_t last_ui   = 0;
+    uint32_t now = millis();
+
+    if (now - last_scan >= 1000) {
+        last_scan = now;
+        scanner_tick();
+    }
+
+    ui_animate();
     lv_timer_handler();
+
+    // Refresh UI: immediately after a tap, or every 500ms for live RSSI updates
+    if (ui_needs_refresh() || (now - last_ui >= 500)) {
+        last_ui = now;
+        ui_refresh();
+    }
+
     delay(5);
 }

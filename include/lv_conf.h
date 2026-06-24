@@ -14,9 +14,12 @@
 /* ── Color depth ─────────────────────────────────────────────────────────── */
 #define LV_COLOR_DEPTH 16
 
-/* ── Memory ──────────────────────────────────────────────────────────────── */
-#define LV_MEM_CUSTOM 0
-#define LV_MEM_SIZE   (256U * 1024U)  /* 256 KB from internal SRAM */
+/* ── Memory — route LVGL heap to PSRAM to stay out of tight internal DRAM ── */
+#define LV_MEM_CUSTOM 1
+#define LV_MEM_CUSTOM_INCLUDE          "esp_heap_caps.h"
+#define LV_MEM_CUSTOM_ALLOC(size)      heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#define LV_MEM_CUSTOM_FREE(p)          free(p)
+#define LV_MEM_CUSTOM_REALLOC(p, size) heap_caps_realloc(p, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 
 /* ── HAL ─────────────────────────────────────────────────────────────────── */
 #define LV_TICK_CUSTOM 1
@@ -104,7 +107,7 @@
 #define LV_USE_TEXTAREA 0
 #define LV_USE_TABLE    0
 #define LV_USE_CHECKBOX 0
-#define LV_USE_CHART    0
+#define LV_USE_CHART    1
 #define LV_USE_BAR      0
 #define LV_USE_ROLLER   0
 #define LV_USE_LIST     0
