@@ -23,6 +23,7 @@
 
 #define PULLEYS_TYPE_STATION   0x01
 #define PULLEYS_TYPE_TRAVELER  0x02
+#define PULLEYS_TYPE_ARBITER   0x03
 
 typedef struct {
     uint8_t r, g, b;

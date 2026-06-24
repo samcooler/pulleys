@@ -23,11 +23,12 @@ PYTHON="/Users/sam/.platformio/penv/bin/python"
 ESPTOOL="/Users/sam/.platformio/packages/tool-esptoolpy/esptool.py"
 BOOT_APP="/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
 
-# Auto-detect chip and bootloader address from environment name
+# Auto-detect chip, bootloader address, flash mode/size from environment name
 case "$ENV" in
-  station_wroom) CHIP="esp32";   BOOT_ADDR="0x1000" ;;
-  station*)      CHIP="esp32c3"; BOOT_ADDR="0x0000" ;;
-  *)             CHIP="esp32s3"; BOOT_ADDR="0x0000" ;;
+  station_wroom) CHIP="esp32";   BOOT_ADDR="0x1000"; FLASH_MODE="dio"; FLASH_SIZE="4MB"  ;;
+  station*)      CHIP="esp32c3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB"  ;;
+  arbiter)       CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="16MB" ;;
+  *)             CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB"  ;;
 esac
 
 # Verify build exists (not needed for reset-only)
@@ -56,7 +57,7 @@ flash() {
   else
     "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$port" --baud 460800 \
       --before default_reset --after hard_reset \
-      write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB \
+      write_flash -z --flash_mode "$FLASH_MODE" --flash_freq 80m --flash_size "$FLASH_SIZE" \
       $BOOT_ADDR "$BUILD/bootloader.bin" \
       0x8000  "$BUILD/partitions.bin" \
       0xe000  "$BOOT_APP" \

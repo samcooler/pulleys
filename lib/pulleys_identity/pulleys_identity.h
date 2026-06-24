@@ -29,8 +29,12 @@ static const BoardEntry _stationRegistry[] = {
     { 0xD3C5,  3 },  // S-D3C5 — XIAO C3
     // Add new stations here: { 0xXXXX, NN },
 };
+static const BoardEntry _arbiterRegistry[] = {
+    // Add new arbiters here: { 0xXXXX, NN },
+};
 static constexpr uint8_t _travelerRegistrySize = sizeof(_travelerRegistry) / sizeof(_travelerRegistry[0]);
 static constexpr uint8_t _stationRegistrySize  = sizeof(_stationRegistry)  / sizeof(_stationRegistry[0]);
+static constexpr uint8_t _arbiterRegistrySize  = sizeof(_arbiterRegistry)  / sizeof(_arbiterRegistry[0]);
 
 // Call once in setup() after WiFi/BLE init (MAC must be available).
 inline void identity_init(uint8_t deviceType) {
@@ -43,8 +47,16 @@ inline void identity_init(uint8_t deviceType) {
 
     // Look up label from the appropriate registry
     _deviceLabel = 0;  // 0 = unknown board
-    const BoardEntry* reg = (deviceType == PULLEYS_TYPE_TRAVELER) ? _travelerRegistry : _stationRegistry;
-    uint8_t regSize = (deviceType == PULLEYS_TYPE_TRAVELER) ? _travelerRegistrySize : _stationRegistrySize;
+    const BoardEntry* reg;
+    uint8_t regSize;
+    char prefix;
+    if (deviceType == PULLEYS_TYPE_TRAVELER) {
+        reg = _travelerRegistry; regSize = _travelerRegistrySize; prefix = 'T';
+    } else if (deviceType == PULLEYS_TYPE_ARBITER) {
+        reg = _arbiterRegistry;  regSize = _arbiterRegistrySize;  prefix = 'A';
+    } else {
+        reg = _stationRegistry;  regSize = _stationRegistrySize;  prefix = 'S';
+    }
     for (uint8_t i = 0; i < regSize; i++) {
         if (reg[i].id == _deviceId) {
             _deviceLabel = reg[i].label;
@@ -52,7 +64,6 @@ inline void identity_init(uint8_t deviceType) {
         }
     }
 
-    char prefix = (deviceType == PULLEYS_TYPE_TRAVELER) ? 'T' : 'S';
     snprintf(_deviceName, sizeof(_deviceName), "%c-%04X", prefix, _deviceId);
 }
 
@@ -62,7 +73,9 @@ inline const char* identity_name() { return _deviceName; }
 
 // Print boot banner with identity info to Serial
 inline void identity_print_banner(uint8_t deviceType) {
-    const char* typeName = (deviceType == PULLEYS_TYPE_TRAVELER) ? "Traveler" : "Station";
+    const char* typeName = (deviceType == PULLEYS_TYPE_TRAVELER) ? "Traveler"
+                         : (deviceType == PULLEYS_TYPE_ARBITER)  ? "Arbiter"
+                         : "Station";
     Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     Serial.printf("  PULLEYS %s\n", typeName);
     Serial.printf("  ID:  %s (0x%04X)  Label: #%02d\n", _deviceName, _deviceId, _deviceLabel);
