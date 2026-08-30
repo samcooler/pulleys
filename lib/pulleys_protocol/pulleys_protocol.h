@@ -24,6 +24,8 @@
 #define PULLEYS_TYPE_STATION   0x01
 #define PULLEYS_TYPE_TRAVELER  0x02
 #define PULLEYS_TYPE_ARBITER   0x03
+#define PULLEYS_TYPE_SENSOR    0x04   // rope-mounted motion sensor (mesh piece)
+#define PULLEYS_TYPE_SCREEN    0x05   // activity display (mesh piece)
 
 typedef struct {
     uint8_t r, g, b;

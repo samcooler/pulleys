@@ -26,6 +26,7 @@ BOOT_APP="/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/par
 # Auto-detect chip, bootloader address, flash mode/size from environment name
 case "$ENV" in
   station_wroom) CHIP="esp32";   BOOT_ADDR="0x1000"; FLASH_MODE="dio"; FLASH_SIZE="4MB"  ;;
+  screen)        CHIP="esp32";   BOOT_ADDR="0x1000"; FLASH_MODE="dio"; FLASH_SIZE="4MB"  ;;
   station*)      CHIP="esp32c3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB"  ;;
   arbiter)       CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="16MB" ;;
   *)             CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB"  ;;
@@ -37,10 +38,17 @@ if [[ "$RESET_ONLY" == false && ! -f "$BUILD/firmware.bin" ]]; then
   exit 1
 fi
 
-# Find all connected USB serial ports (usbmodem = C3/S3, usbserial = WROOM CH340)
-ports=(/dev/cu.usbmodem*(N) /dev/cu.usbserial*(N))
+# Find connected USB serial ports, restricted to the ones this chip uses:
+# native-USB parts (C3/S3) enumerate as usbmodem, the WROOM's CH340 as usbserial.
+# Without this, flashing with a sensor and a screen both plugged in would push
+# the wrong image to one of them.
+if [[ "$CHIP" == "esp32" ]]; then
+  ports=(/dev/cu.usbserial*(N))
+else
+  ports=(/dev/cu.usbmodem*(N))
+fi
 if [[ ${#ports[@]} -eq 0 ]]; then
-  echo "No USB serial ports found."
+  echo "No USB serial ports found for $CHIP."
   exit 1
 fi
 

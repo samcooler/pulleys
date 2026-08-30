@@ -105,6 +105,57 @@ public:
         return true;
     }
 
+    // ── 6-axis mode (accel + gyro) — used by the Sensor role ──────────────────
+    struct Gyro { float x, y, z; };  // deg/s
+
+    // Gyro full-scale range ±1024 dps
+    static constexpr float GYRO_SCALE = 1024.0f / 32768.0f;
+
+    // Initialize accel + gyro for continuous 6-axis reads (no WoM, no sleep).
+    bool init6(uint8_t sdaPin = 11, uint8_t sclPin = 12) {
+        Wire.begin(sdaPin, sclPin, 400000);
+
+        uint8_t id = readReg(REG_WHO_AM_I);
+        if (id != WHO_AM_I_VAL) {
+            Serial.printf("  [IMU] WHO_AM_I mismatch: got 0x%02X, expected 0x%02X\n", id, WHO_AM_I_VAL);
+            return false;
+        }
+
+        writeReg(REG_RESET, RESET_CMD);
+        delay(20);
+
+        writeReg(REG_CTRL1, 0x40);   // address auto-increment
+        writeReg(REG_CTRL2, 0x06);   // accel: ±2g, 125 Hz ODR
+        writeReg(0x04,      0x66);   // CTRL3: gyro ±1024 dps, 112 Hz ODR
+        writeReg(REG_CTRL5, 0x11);   // LPF enable on accel + gyro (mode 0)
+        writeReg(REG_CTRL7, 0x03);   // enable accelerometer + gyroscope
+        delay(20);
+
+        _initialized = true;
+        Serial.println("  [IMU] QMI8658 6-axis ready (accel ±2g 125Hz + gyro ±1024dps 112Hz)");
+        return true;
+    }
+
+    // Read accel (g) + gyro (deg/s). Returns false if no new sample.
+    bool read6(AccelData& a, Gyro& g) {
+        if (!_initialized) return false;
+        if (!(readReg(REG_STATUS0) & 0x01)) return false;  // accel data-ready gates the pair
+
+        uint8_t buf[12];
+        readRegs(REG_AX_L, buf, 12);   // AX_L..AZ_H then GX_L..GZ_H (contiguous)
+
+        int16_t ax = (int16_t)((buf[1]  << 8) | buf[0]);
+        int16_t ay = (int16_t)((buf[3]  << 8) | buf[2]);
+        int16_t az = (int16_t)((buf[5]  << 8) | buf[4]);
+        int16_t gx = (int16_t)((buf[7]  << 8) | buf[6]);
+        int16_t gy = (int16_t)((buf[9]  << 8) | buf[8]);
+        int16_t gz = (int16_t)((buf[11] << 8) | buf[10]);
+
+        a.x = ax * ACCEL_SCALE; a.y = ay * ACCEL_SCALE; a.z = az * ACCEL_SCALE;
+        g.x = gx * GYRO_SCALE;  g.y = gy * GYRO_SCALE;  g.z = gz * GYRO_SCALE;
+        return true;
+    }
+
     bool initialized() const { return _initialized; }
 
     // Configure Wake-on-Motion mode with CTRL9 command (hardware INT1).
