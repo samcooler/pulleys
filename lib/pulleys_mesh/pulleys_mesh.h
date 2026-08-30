@@ -34,8 +34,18 @@ enum : uint8_t {
 
 enum : uint8_t {
     MESH_MSG_EVENT  = 0x10,
-    MESH_MSG_DIGEST = 0x20,   // reserved
+    MESH_MSG_SYNC   = 0x20,   // shared clock beacon
+    MESH_MSG_DIGEST = 0x30,   // reserved
 };
+
+// Clock sync: every node beacons its own mesh clock, and each listener pulls a
+// fraction of the way toward what it hears. Consensus averaging, so there is no
+// master to lose and a corrupt value washes out over the next few beacons
+// instead of poisoning the field permanently. Precision is tens of ms — far
+// finer than the 0.2–2 Hz oscillation it exists to keep in step.
+static constexpr uint32_t MESH_SYNC_INTERVAL_MS = 2000;
+static constexpr float    MESH_SYNC_GAIN        = 0.25f;
+static constexpr int32_t  MESH_SYNC_MAX_STEP_MS = 400;   // gentle slew once locked
 
 enum : uint8_t {
     SENSOR_MODE_ROTATION = 0,
@@ -60,6 +70,14 @@ struct __attribute__((packed)) MeshEvent {
     uint8_t  flags;       // bit0 = battery low
     uint8_t  reserved;
 };  // 14 bytes
+
+struct __attribute__((packed)) MeshSync {
+    uint8_t  magic0;      // 'P'
+    uint8_t  magic1;      // 'M'
+    uint8_t  msgType;     // MESH_MSG_SYNC
+    uint8_t  originType;
+    uint32_t meshNow;     // sender's mesh clock, ms
+};  // 8 bytes
 
 typedef void (*MeshEventCb)(const MeshEvent& ev, bool relayed);
 
@@ -120,6 +138,15 @@ static MeshEvent          rx[8];
 static volatile uint8_t   rxHead = 0;
 static volatile uint8_t   rxTail = 0;
 
+// Clock sync state. clockOffset is added to millis() to get the mesh clock.
+static int32_t  clockOffset = 0;
+static bool     clockLocked = false;   // false until the first peer is heard
+static uint32_t lastSyncTx   = 0;
+static uint32_t syncInterval = MESH_SYNC_INTERVAL_MS;
+static uint32_t syncRx[4];
+static volatile uint8_t syncHead = 0;
+static volatile uint8_t syncTail = 0;
+
 // Diagnostics — every packet the radio hands us, before and after filtering.
 static volatile uint32_t statRaw      = 0;   // frames delivered by esp-now
 static volatile uint32_t statBadMagic = 0;   // not ours
@@ -133,10 +160,20 @@ static void onRecv(const esp_now_recv_info_t* /*info*/, const uint8_t* data, int
 static void onRecv(const uint8_t* /*mac*/, const uint8_t* data, int len) {
 #endif
     statRaw++;
+    if (len < (int)sizeof(MeshSync)) { statBadMagic++; return; }
+    if (data[0] != 'P' || data[1] != 'M') { statBadMagic++; return; }
+
+    if (data[2] == MESH_MSG_SYNC) {
+        if (len < (int)sizeof(MeshSync)) { statBadMagic++; return; }
+        const MeshSync* s = (const MeshSync*)data;
+        uint8_t nh = (syncHead + 1) & 3;
+        if (nh != syncTail) { syncRx[syncHead] = s->meshNow; syncHead = nh; }
+        return;
+    }
+
     if (len < (int)sizeof(MeshEvent)) { statBadMagic++; return; }
     const MeshEvent* p = (const MeshEvent*)data;
-    if (p->magic0 != 'P' || p->magic1 != 'M') { statBadMagic++; return; }
-    if (p->msgType != MESH_MSG_EVENT)         { statBadMagic++; return; }
+    if (p->msgType != MESH_MSG_EVENT) { statBadMagic++; return; }
 
     uint8_t nh = (rxHead + 1) & 7;
     if (nh == rxTail) { statRingFull++; return; }  // ring full — drop
@@ -215,6 +252,14 @@ inline void mesh_print_stats() {
 
 inline void mesh_on_event(MeshEventCb cb) { _mesh::eventCb = cb; }
 
+// ── Shared clock ─────────────────────────────────────────────────────────────
+// Drive every time-based animation from this instead of millis(), and the whole
+// field oscillates in step. Monotonic in practice: the only backward motion is
+// a bounded slew of at most MESH_SYNC_MAX_STEP_MS per beacon.
+inline uint32_t mesh_now()      { return millis() + _mesh::clockOffset; }
+inline float    mesh_now_secs() { return mesh_now() / 1000.0f; }
+inline bool     mesh_clock_locked() { return _mesh::clockLocked; }
+
 inline void mesh_send_event(uint8_t channel, uint8_t mode, uint8_t magnitude, uint8_t flags) {
     MeshEvent ev;
     ev.magic0     = 'P';
@@ -235,6 +280,40 @@ inline void mesh_send_event(uint8_t channel, uint8_t mode, uint8_t magnitude, ui
 }
 
 inline void mesh_poll() {
+    // 0. clock sync — adopt the first peer heard outright, then slew gently
+    while (_mesh::syncTail != _mesh::syncHead) {
+        uint32_t theirs = _mesh::syncRx[_mesh::syncTail];
+        _mesh::syncTail = (_mesh::syncTail + 1) & 3;
+
+        int32_t delta = (int32_t)(theirs - mesh_now());   // wrap-safe
+        if (!_mesh::clockLocked) {
+            _mesh::clockOffset += delta;                  // step straight onto the field
+            _mesh::clockLocked  = true;
+            Serial.printf("  [MESH] clock locked (stepped %ld ms)\n", (long)delta);
+        } else {
+            int32_t step = (int32_t)(delta * MESH_SYNC_GAIN);
+            if (step >  MESH_SYNC_MAX_STEP_MS) step =  MESH_SYNC_MAX_STEP_MS;
+            if (step < -MESH_SYNC_MAX_STEP_MS) step = -MESH_SYNC_MAX_STEP_MS;
+            _mesh::clockOffset += step;
+        }
+    }
+
+    // Beacon our own clock. The jitter goes into the next interval, never into
+    // the timestamp: scheduling lastSyncTx in the future makes the unsigned
+    // (nowMs - lastSyncTx) underflow, which fires the beacon every poll.
+    uint32_t nowMs = millis();
+    if (nowMs - _mesh::lastSyncTx >= _mesh::syncInterval) {
+        _mesh::lastSyncTx  = nowMs;
+        _mesh::syncInterval = MESH_SYNC_INTERVAL_MS + (uint32_t)random(0, 400);
+        MeshSync s;
+        s.magic0     = 'P';
+        s.magic1     = 'M';
+        s.msgType    = MESH_MSG_SYNC;
+        s.originType = _mesh::originType;
+        s.meshNow    = mesh_now();
+        esp_now_send(_mesh::BCAST, (const uint8_t*)&s, sizeof(s));
+    }
+
     // 1. drain received packets (dedupe + user callback + relay enqueue)
     while (_mesh::rxTail != _mesh::rxHead) {
         MeshEvent ev = _mesh::rx[_mesh::rxTail];

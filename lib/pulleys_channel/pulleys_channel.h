@@ -46,6 +46,11 @@ inline void channel_slot_init(PatternSlot& slot, uint8_t ch, CRGB* buffer,
     slot.maxBri     = 255;                         // brightness applied by caller
     slot.init(PATTERN_SHAPE, rows, cols);
     slot.culture    = channel_culture(ch);         // set after init — init resets state
+
+    // init() randomizes the starting angle for visual variety; a channel needs
+    // the opposite, so every device showing it lands on the same phase for a
+    // given mesh clock. Feed pattern_slot_update mesh_now_secs() to get that.
+    slot.shapeState.phaseOffset = 0.0f;
 }
 
 }  // namespace pulleys

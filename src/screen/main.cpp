@@ -319,7 +319,7 @@ void loop() {
         decayActivity(dt);
 
         if (mode == MODE_COUNTER) renderCounter(now);
-        else                      renderRanking(dt, now / 1000.0f);
+        else                      renderRanking(dt, pulleys::mesh_now_secs());
 
         FastLED.show();
     }
@@ -333,6 +333,9 @@ void loop() {
             else Serial.printf("  ch%d(%.2f)", slotChannel[s], chans[slotChannel[s]].activity);
         }
         Serial.println();
+        Serial.printf("  [SYNC] clock=%s meshNow=%lums\n",
+                      pulleys::mesh_clock_locked() ? "locked" : "free",
+                      (unsigned long)pulleys::mesh_now());
         pulleys::mesh_print_stats();
     }
 }

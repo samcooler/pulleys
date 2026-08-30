@@ -207,7 +207,7 @@ void loop() {
         if (dt > 0.2f) dt = 0.2f;
         lastLed = now;
 
-        pulleys::pattern_slot_update(patSlot, dt, now / 1000.0f);
+        pulleys::pattern_slot_update(patSlot, dt, pulleys::mesh_now_secs());
 
         uint8_t bri = IDLE_BRIGHTNESS;
         if (now < flashUntil) {
@@ -226,6 +226,9 @@ void loop() {
                       stNames[detector.state()], myChannel,
                       detector.measure(), detector.lastRate(), detector.lastResid(),
                       localCount, heardCount);
+        Serial.printf("  [SYNC] clock=%s meshNow=%lums\n",
+                      pulleys::mesh_clock_locked() ? "locked" : "free",
+                      (unsigned long)pulleys::mesh_now());
         pulleys::mesh_print_stats();
     }
 }

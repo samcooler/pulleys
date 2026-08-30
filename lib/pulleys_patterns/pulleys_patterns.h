@@ -87,7 +87,13 @@ enum PatternType : uint8_t {
 struct ShapeState {
     static constexpr uint8_t MAX_SPARKLE = 64;  // per 8×8 slot
 
-    float phase = 0.0f;
+    // Oscillation phase is derived from absolute time rather than accumulated
+    // per frame, so two devices given the same clock and culture stay in step
+    // regardless of frame rate. phaseOffset is the per-slot starting angle:
+    // random by default (variety across a station's slots), but set to a fixed
+    // value where several devices must render identically — see pulleys_channel.
+    float phase       = 0.0f;
+    float phaseOffset = 0.0f;
 
     // Wanderers — which ones drive rendering depends on shape
     Wanderer cx, cy;      // primary center (most shapes) / scroll XY (CHECKER)
@@ -105,7 +111,8 @@ struct ShapeState {
     uint8_t sparkle[MAX_SPARKLE] = {};
 
     void init(uint8_t rows, uint8_t cols) {
-        phase = random8() / 255.0f * 6.2832f;
+        phaseOffset = random8() / 255.0f * 6.2832f;
+        phase       = phaseOffset;
         memset(sparkle, 0, sizeof(sparkle));
         useGravity = false;
 
@@ -186,13 +193,14 @@ struct PatternSlot {
 
 // ── Shape pattern update ──────────────────────────────────────────────────────
 
-static inline void _shape_update(PatternSlot& slot, float dt) {
+static inline void _shape_update(PatternSlot& slot, float dt, float t) {
     ShapeState& s = slot.shapeState;
     uint8_t shape = slot.culture.shape % SHAPE_COUNT;
     float hz = culture_osc_to_hz(slot.culture.oscillation);
 
-    s.phase += hz * 2.0f * (float)M_PI * dt * 0.5f;
-    if (s.phase > 6.2832f) s.phase -= 6.2832f;
+    // Absolute-time phase — same t and same culture give the same phase on any
+    // device. fmodf keeps the argument small enough for sinf to stay precise.
+    s.phase = s.phaseOffset + fmodf(hz * (float)M_PI * t, 6.2832f);
 
     // Update center with optional gravity influence
     if (s.useGravity) {
@@ -386,7 +394,7 @@ static inline void pattern_slot_update(PatternSlot& slot, float dt, float t) {
     if (!slot.buffer) return;
     switch (slot.type) {
         case PATTERN_SHAPE:
-            _shape_update(slot, dt);
+            _shape_update(slot, dt, t);
             break;
         case PATTERN_PILLOW_SEESAW:
             _pattern_pillow_seesaw_update(slot, dt, t);
