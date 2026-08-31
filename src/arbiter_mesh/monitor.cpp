@@ -8,6 +8,7 @@ static MonChannel  s_chans[MON_CHANNELS];
 static MonLogEntry s_log[MON_LOG_LEN];
 static uint8_t     s_logCount = 0;
 
+static MonEventHook s_hook = nullptr;
 static uint32_t s_totalEvents   = 0;
 static uint32_t s_relayedEvents = 0;
 
@@ -63,6 +64,8 @@ static void onEvent(const pulleys::MeshEvent& ev, bool relayed) {
     for (int i = MON_LOG_LEN - 1; i > 0; i--) s_log[i] = s_log[i - 1];
     s_log[0] = { now, ev.originId, ev.channel, ev.magnitude, ev.ttl, relayed };
     if (s_logCount < MON_LOG_LEN) s_logCount++;
+
+    if (s_hook) s_hook(ev, relayed);
 }
 
 static void onSync(uint8_t originType, uint16_t originId, int32_t skewMs) {
@@ -83,6 +86,8 @@ void monitor_init() {
     pulleys::mesh_on_event(onEvent);
     pulleys::mesh_on_sync(onSync);
 }
+
+void monitor_on_event(MonEventHook hook) { s_hook = hook; }
 
 void monitor_tick() {
     uint32_t now = millis();

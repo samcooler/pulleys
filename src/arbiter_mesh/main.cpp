@@ -3,6 +3,9 @@
 #include <SPI.h>
 #include <SD.h>
 #include <pulleys_ch422g.h>
+#include <pulleys_rtc.h>
+#include "eventlog.h"
+#include "clocksrc.h"
 // ESP32-S3 RGB panel classes aren't pulled in by LovyanGFX.hpp by default
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
 #include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
@@ -71,7 +74,10 @@
 class LGFX : public lgfx::LGFX_Device {
     lgfx::Panel_RGB   _panel_instance;
     lgfx::Bus_RGB     _bus_instance;
-    lgfx::Touch_GT911 _touch_instance;
+    // No touch instance: this display is read-only, and LovyanGFX's GT911
+    // driver takes ownership of I2C port 0 — the bus the RTC and the CH422G
+    // expander sit on. Keeping the bus means the clock stays readable and
+    // settable while running, which the event log depends on.
 
 public:
     LGFX() {
@@ -127,27 +133,57 @@ public:
             dcfg.use_psram = 2;   // 0=SRAM, 1=both, 2=PSRAM only
             _panel_instance.config_detail(dcfg);
         }
-        { // Touch (GT911 via I2C)
-            auto cfg = _touch_instance.config();
-            cfg.x_min  = 0;   cfg.x_max = LCD_WIDTH - 1;
-            cfg.y_min  = 0;   cfg.y_max = LCD_HEIGHT - 1;
-            cfg.pin_int = TOUCH_INT;
-            cfg.pin_rst = TOUCH_RST;
-            cfg.bus_shared   = false;
-            cfg.offset_rotation = 0;
-            cfg.i2c_port = 0;
-            cfg.i2c_addr = 0x5D;   // GT911: 0x5D or 0x14
-            cfg.pin_sda  = TOUCH_SDA;
-            cfg.pin_scl  = TOUCH_SCL;
-            cfg.freq     = 400000;
-            _touch_instance.config(cfg);
-            _panel_instance.setTouch(&_touch_instance);
-        }
         setPanel(&_panel_instance);
     }
 };
 
 static LGFX display;
+static pulleys::RTC s_rtc;
+
+// Serial console: T<YYYYMMDDHHMMSS> sets the clock. Fixed width so there is no
+// ambiguity about field order, and local wall time rather than epoch because
+// time-of-day is the question the log exists to answer.
+static void handleSerial() {
+    static char buf[32];
+    static uint8_t len = 0;
+    while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r') {
+            if (len == 0) continue;
+            buf[len] = 0;
+            uint8_t n = len;
+            len = 0;
+            if (buf[0] == 'T' && n == 15) {
+                auto num = [&](uint8_t off, uint8_t w) {
+                    int v = 0;
+                    for (uint8_t i = 0; i < w; i++) v = v * 10 + (buf[1 + off + i] - '0');
+                    return v;
+                };
+                pulleys::RtcTime t;
+                t.year   = num(0, 4); t.month  = num(4, 2); t.day    = num(6, 2);
+                t.hour   = num(8, 2); t.minute = num(10, 2); t.second = num(12, 2);
+                if (t.month >= 1 && t.month <= 12 && t.day >= 1 && t.day <= 31 &&
+                    t.hour < 24 && t.minute < 60 && t.second < 60 && s_rtc.set(t)) {
+                    clocksrc_mark_set();
+                    char o[24]; pulleys::RTC::format(t, o, sizeof(o));
+                    Serial.printf("  [RTC] set to %s (source now: %s)\n",
+                                  o, clocksrc_source_str());
+                } else {
+                    Serial.println("  [RTC] set FAILED — expected T<YYYYMMDDHHMMSS>");
+                }
+            } else if (buf[0] == 'D') {
+                eventlog_dump();
+            } else if (buf[0] == 'L') {
+                Serial.printf("  [LOG] %s  file=%s rows=%lu dropped=%lu\n",
+                              eventlog_ok() ? "ok" : "STOPPED", eventlog_path(),
+                              (unsigned long)eventlog_rows(),
+                              (unsigned long)eventlog_dropped());
+            }
+        } else if (len < sizeof(buf) - 1) {
+            buf[len++] = c;
+        }
+    }
+}
 
 // ── LVGL glue ─────────────────────────────────────────────────────────────────
 static lv_disp_draw_buf_t draw_buf;
@@ -158,17 +194,6 @@ static void lvgl_flush(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* co
     uint32_t h = area->y2 - area->y1 + 1;
     display.pushImage(area->x1, area->y1, w, h, (lgfx::rgb565_t*)color_p);
     lv_disp_flush_ready(drv);
-}
-
-static void lvgl_touch_read(lv_indev_drv_t* /*drv*/, lv_indev_data_t* data) {
-    uint16_t tx, ty;
-    if (display.getTouch(&tx, &ty)) {
-        data->point.x = tx;
-        data->point.y = ty;
-        data->state   = LV_INDEV_STATE_PR;
-    } else {
-        data->state = LV_INDEV_STATE_REL;
-    }
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
@@ -193,6 +218,12 @@ void setup() {
         }
         Serial.println(found ? "" : " none");
     }
+
+    // ── Real-time clock ───────────────────────────────────────────────────────
+    // Confirmed a PCF85063 by watching register 0x04 tick in BCD. Seconds at
+    // 0x04 rather than 0x02 is what tells it apart from a PCF8563.
+    s_rtc.begin();
+    clocksrc_init(&s_rtc);
 
     // ── microSD ───────────────────────────────────────────────────────────────
     // Must run before display.init(): LovyanGFX's GT911 driver takes over I2C
@@ -308,12 +339,6 @@ void setup() {
     disp_drv.draw_buf = &draw_buf;
     lv_disp_drv_register(&disp_drv);
 
-    static lv_indev_drv_t indev_drv;
-    lv_indev_drv_init(&indev_drv);
-    indev_drv.type    = LV_INDEV_TYPE_POINTER;
-    indev_drv.read_cb = lvgl_touch_read;
-    lv_indev_drv_register(&indev_drv);
-
     // Join the mesh as an observer. Relaying is on by default — a monitor that
     // relays is a legitimate extra hop — but MESH_OBSERVE_ONLY makes it passive
     // so it cannot paper over the range gaps you are hunting for.
@@ -324,6 +349,8 @@ void setup() {
     Serial.println("  [MESH] observe-only: relaying disabled");
 #endif
     monitor_init();
+    eventlog_init(&s_rtc);
+    monitor_on_event(eventlog_record);
     ui_init();
     Serial.printf("Arbiter (mesh monitor) ready — %s\n", pulleys::identity_name());
 }
@@ -335,6 +362,9 @@ void loop() {
     uint32_t now = millis();
 
     pulleys::mesh_poll();
+    handleSerial();
+    eventlog_tick();
+    clocksrc_tick();
 
     if (now - last_tick >= 1000) {
         last_tick = now;
@@ -361,6 +391,11 @@ void loop() {
                       monitor_events_per_min(),
                       (long)monitor_skew_spread(),
                       pulleys::mesh_clock_locked() ? "locked" : "free");
+        Serial.printf("   log %s rows=%lu dropped=%lu clock=%s\n",
+                      eventlog_ok() ? "ok" : "STOPPED",
+                      (unsigned long)eventlog_rows(),
+                      (unsigned long)eventlog_dropped(),
+                      clocksrc_source_str());
         for (uint8_t i = 0; i < MON_MAX_NODES; i++) {
             const MonNode& n = nodes[i];
             if (!n.active) continue;

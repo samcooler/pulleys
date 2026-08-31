@@ -46,7 +46,11 @@ struct MonLogEntry {
     bool     relayed;
 };
 
+typedef void (*MonEventHook)(const pulleys::MeshEvent& ev, bool relayed);
+
 void monitor_init();
+// Fan-out for anything that also wants each deduped event (the SD log).
+void monitor_on_event(MonEventHook hook);
 void monitor_tick();                 // ~1 Hz: decay, age out lost nodes
 
 const MonNode*     monitor_nodes();
