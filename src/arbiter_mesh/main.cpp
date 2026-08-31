@@ -254,13 +254,20 @@ void loop() {
         for (uint8_t i = 0; i < MON_MAX_NODES; i++) {
             const MonNode& n = nodes[i];
             if (!n.active) continue;
-            Serial.printf("   %s %04X ch%-2d %s ev=%lu skew=%+ldms seen=%lus\n",
-                          n.type == pulleys::MESH_ORIGIN_SENSOR ? "SENSOR " :
-                          n.type == pulleys::MESH_ORIGIN_SCREEN ? "SCREEN " : "ARBITER",
-                          n.id, n.channel,
-                          n.mode == pulleys::SENSOR_MODE_ROTATION ? "rot" : "lin",
-                          (unsigned long)n.events, (long)n.skewMs,
-                          (unsigned long)((now - n.lastBeaconMs) / 1000));
+            uint32_t seenS = (now - n.lastBeaconMs) / 1000;
+            if (n.type == pulleys::MESH_ORIGIN_SENSOR) {
+                Serial.printf("   SENSOR  %04X ch%-2d %s ev=%lu skew=%+ldms seen=%lus\n",
+                              n.id, n.channel,
+                              n.mode == pulleys::SENSOR_MODE_ROTATION ? "rot" : "lin",
+                              (unsigned long)n.events, (long)n.skewMs,
+                              (unsigned long)seenS);
+            } else {
+                // Channel/mode/events are sensor-only; printing them for a
+                // screen invents data that does not exist.
+                Serial.printf("   %s %04X skew=%+ldms seen=%lus\n",
+                              n.type == pulleys::MESH_ORIGIN_SCREEN ? "SCREEN " : "ARBITER",
+                              n.id, (long)n.skewMs, (unsigned long)seenS);
+            }
         }
     }
 
