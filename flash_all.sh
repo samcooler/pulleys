@@ -71,25 +71,53 @@ else
   echo "Flashing $ENV ($CHIP) to ${#ports[@]} board(s): ${ports[*]}"
 fi
 
+# Piping esptool through tail loses its exit status, so capture the output and
+# check the status explicitly — a flashing tool that reports success on a failed
+# write is worse than one that says nothing.
 flash() {
-  local port="$1"
+  local port="$1" out rc   # not `status`: that name is read-only in zsh
+  # errexit would abort this function at the assignment below, before the exit
+  # status could be inspected, losing the esptool diagnostics.
+  set +e
   if [[ "$RESET_ONLY" == true ]]; then
-    "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$port" --before default_reset --after hard_reset run 2>&1 | tail -1
+    out=$("$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$port" --before default_reset --after hard_reset run 2>&1)
+    rc=$?
   else
-    "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$port" --baud 460800 \
+    out=$("$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$port" --baud 460800 \
       --before default_reset --after hard_reset \
       write_flash -z --flash_mode "$FLASH_MODE" --flash_freq 80m --flash_size "$FLASH_SIZE" \
       $BOOT_ADDR "$BUILD/bootloader.bin" \
       0x8000  "$BUILD/partitions.bin" \
       0xe000  "$BOOT_APP" \
-      0x10000 "$BUILD/firmware.bin" 2>&1 | tail -2
+      0x10000 "$BUILD/firmware.bin" 2>&1)
+    rc=$?
   fi
-  echo "  ✓ $port"
+  set -e
+  if [[ $rc -eq 0 ]]; then
+    echo "  ✓ $port"
+  else
+    echo "  ✗ $port — FAILED (exit $rc)"
+    echo "$out" | tail -4 | sed 's/^/      /'
+    return 1
+  fi
 }
 
+# Flash in parallel, then collect each job's status. A background job runs in a
+# subshell and cannot set a variable in the parent, so the result has to come
+# back through `wait <pid>`.
+pids=()
 for port in "${ports[@]}"; do
   flash "$port" &
+  pids+=($!)
 done
-wait
 
+failed=0
+for pid in "${pids[@]}"; do
+  wait "$pid" || failed=$((failed + 1))
+done
+
+if [[ $failed -gt 0 ]]; then
+  echo "FAILED — $failed of ${#ports[@]} board(s) did not flash."
+  exit 1
+fi
 echo "Done — ${#ports[@]} board(s) flashed."
