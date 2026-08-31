@@ -142,6 +142,7 @@ public:
 static LGFX display;
 static pulleys::RTC   s_rtc;
 static pulleys::GT911 s_touch;
+static bool           s_touchDebug = false;
 
 // Serial console: T<YYYYMMDDHHMMSS> sets the clock. Fixed width so there is no
 // ambiguity about field order, and local wall time rather than epoch because
@@ -174,6 +175,16 @@ static void handleSerial() {
                 } else {
                     Serial.println("  [RTC] set FAILED — expected T<YYYYMMDDHHMMSS>");
                 }
+            } else if (buf[0] == 'X') {
+                s_touchDebug = !s_touchDebug;
+                s_touch.setDebug(s_touchDebug);
+                Serial.printf("  [TOUCH] trace %s\n", s_touchDebug ? "ON" : "off");
+                uint16_t rw, rh;
+                if (s_touch.readResolution(rw, rh))
+                    Serial.printf("  [TOUCH] controller resolution %ux%u (panel %dx%d)\n",
+                                  rw, rh, LCD_WIDTH, LCD_HEIGHT);
+                else
+                    Serial.println("  [TOUCH] could not read controller resolution");
             } else if (buf[0] == 'D') {
                 eventlog_dump();
             } else if (buf[0] == 'L') {
