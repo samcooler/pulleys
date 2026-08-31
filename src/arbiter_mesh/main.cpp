@@ -70,7 +70,7 @@
 
 #define LCD_WIDTH    800
 #define LCD_HEIGHT   480
-#define LCD_BUF_LINES 10
+#define LCD_BUF_LINES 40   // fewer, larger flushes into the live framebuffer
 
 // ── LovyanGFX display class ───────────────────────────────────────────────────
 class LGFX : public lgfx::LGFX_Device {
@@ -106,7 +106,10 @@ public:
             cfg.pin_vsync         = LCD_VSYNC;
             cfg.pin_hsync         = LCD_HSYNC;
             cfg.pin_pclk          = LCD_PCLK;
-            cfg.freq_write        = 16000000;
+            // 12 MHz rather than 16: the panel DMA and the CPU share PSRAM
+            // bandwidth, and underruns show up as shimmer on thin strokes.
+            // 800x480 plus porches at 12 MHz still gives ~29 fps.
+            cfg.freq_write        = 12000000;
             cfg.hsync_polarity    = 0;
             cfg.hsync_front_porch = 8;
             cfg.hsync_pulse_width = 4;
@@ -409,7 +412,7 @@ void loop() {
     clockui_tick();
     lv_timer_handler();
 
-    if (now - last_ui >= 400 && !clockui_is_open()) {
+    if (now - last_ui >= 750 && !clockui_is_open()) {
         last_ui = now;
         ui_refresh();
     }

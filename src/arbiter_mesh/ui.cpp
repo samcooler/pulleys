@@ -6,6 +6,7 @@
 #include <pulleys_mesh.h>
 #include <pulleys_channel.h>
 #include <stdio.h>
+#include <string.h>
 
 // ── Four quadrants of an 800×480 panel ────────────────────────────────────────
 //
@@ -47,6 +48,16 @@ static lv_obj_t* s_chanBar[MON_CHANNELS];
 static lv_obj_t* s_chanLbl[MON_CHANNELS];
 
 static char s_buf[1024];
+
+// The RGB panel streams its framebuffer straight out of PSRAM with no double
+// buffer, so every write competes with scanout: repaint less, tear less.
+// lv_label_set_text invalidates whether or not the text differs, and most of
+// this display is identical from one refresh to the next.
+static void setTextIfChanged(lv_obj_t* label, const char* text) {
+    const char* cur = lv_label_get_text(label);
+    if (cur && strcmp(cur, text) == 0) return;
+    lv_label_set_text(label, text);
+}
 
 static Quadrant makeQuadrant(int col, int row, const char* title) {
     Quadrant q;
@@ -161,11 +172,11 @@ static void refreshSensors() {
     if (shown == 0)
         len += snprintf(s_buf + len, sizeof(s_buf) - len, "\n  no sensors heard yet");
 
-    lv_label_set_text(s_q[0].body, s_buf);
+    setTextIfChanged(s_q[0].body, s_buf);
 
     char t[48];
     snprintf(t, sizeof(t), "SENSORS  %d", monitor_count(pulleys::MESH_ORIGIN_SENSOR));
-    lv_label_set_text(s_q[0].title, t);
+    setTextIfChanged(s_q[0].title, t);
     lv_obj_set_style_text_color(s_q[0].title, lv_color_hex(COL_SENSOR), 0);
 }
 
@@ -198,11 +209,11 @@ static void refreshScreens() {
                     "\nbeacon every %lus; a screen is\nsilent otherwise.",
                     (unsigned long)(pulleys::MESH_SYNC_INTERVAL_MS / 1000));
 
-    lv_label_set_text(s_q[1].body, s_buf);
+    setTextIfChanged(s_q[1].body, s_buf);
 
     char t[48];
     snprintf(t, sizeof(t), "SCREENS  %d", monitor_count(pulleys::MESH_ORIGIN_SCREEN));
-    lv_label_set_text(s_q[1].title, t);
+    setTextIfChanged(s_q[1].title, t);
     lv_obj_set_style_text_color(s_q[1].title, lv_color_hex(COL_SCREEN), 0);
 }
 
@@ -217,14 +228,19 @@ static void refreshChannels() {
         char l[24];
         snprintf(l, sizeof(l), "%2d %c%4lu", i,
                  ch[i].sensors ? '*' : ' ', (unsigned long)ch[i].events);
-        lv_label_set_text(s_chanLbl[i], l);
+        setTextIfChanged(s_chanLbl[i], l);
 
         int w = (int)((ch[i].activity / peak) * 120.0f);
         if (w < 2) w = 2;
-        lv_obj_set_width(s_chanBar[i], w);
+        static int  lastW[MON_CHANNELS] = {};
+        static bool lastLit[MON_CHANNELS] = {};
+        bool lit = ch[i].activity > 0.01f;
+        if (w != lastW[i]) { lv_obj_set_width(s_chanBar[i], w); lastW[i] = w; }
         // Idle channels dim right down so the busy ones carry the eye.
-        lv_obj_set_style_opa(s_chanBar[i],
-                             ch[i].activity > 0.01f ? LV_OPA_COVER : LV_OPA_30, 0);
+        if (lit != lastLit[i]) {
+            lv_obj_set_style_opa(s_chanBar[i], lit ? LV_OPA_COVER : LV_OPA_30, 0);
+            lastLit[i] = lit;
+        }
     }
 }
 
@@ -263,7 +279,7 @@ static void refreshMesh() {
                         e.relayed ? " R" : "");
     }
 
-    lv_label_set_text(s_q[3].body, s_buf);
+    setTextIfChanged(s_q[3].body, s_buf);
     lv_obj_set_style_text_font(s_q[3].body, &lv_font_unscii_8, 0);
 }
 
