@@ -140,10 +140,21 @@ static void refreshSensors() {
         uint32_t quiet = now - (n.lastBeaconMs > n.lastEventMs ? n.lastBeaconMs : n.lastEventMs);
         ageStr(n.lastEventMs ? now - n.lastEventMs : 0xFFFFFFFF, lastS, sizeof(lastS));
         ageStr(quiet, seenS, sizeof(seenS));
+        // Channel and mode ride on EVENT packets only. A sensor that has
+        // beaconed but not yet fired is present with nothing known about it,
+        // and "ch0 rot" would be a fabrication.
+        char chS[4], modeS[4];
+        if (n.events) {
+            snprintf(chS, sizeof(chS), "%2d", n.channel);
+            snprintf(modeS, sizeof(modeS), "%s",
+                     n.mode == pulleys::SENSOR_MODE_ROTATION ? "rot" : "lin");
+        } else {
+            snprintf(chS, sizeof(chS), " ?");
+            snprintf(modeS, sizeof(modeS), " ? ");
+        }
         len += snprintf(s_buf + len, sizeof(s_buf) - len,
-                        "%04X  %2d %s %6lu  %s %s\n",
-                        n.id, n.channel,
-                        n.mode == pulleys::SENSOR_MODE_ROTATION ? "rot" : "lin",
+                        "%04X  %s %s %6lu  %s %s\n",
+                        n.id, chS, modeS,
                         (unsigned long)n.events, lastS, seenS);
         shown++;
     }

@@ -256,9 +256,17 @@ void loop() {
             if (!n.active) continue;
             uint32_t seenS = (now - n.lastBeaconMs) / 1000;
             if (n.type == pulleys::MESH_ORIGIN_SENSOR) {
-                Serial.printf("   SENSOR  %04X ch%-2d %s ev=%lu skew=%+ldms seen=%lus\n",
-                              n.id, n.channel,
-                              n.mode == pulleys::SENSOR_MODE_ROTATION ? "rot" : "lin",
+                char chS[6], modeS[4];
+                if (n.events) {
+                    snprintf(chS, sizeof(chS), "ch%-2d", n.channel);
+                    snprintf(modeS, sizeof(modeS), "%s",
+                             n.mode == pulleys::SENSOR_MODE_ROTATION ? "rot" : "lin");
+                } else {
+                    snprintf(chS, sizeof(chS), "ch??");   // not known until an event
+                    snprintf(modeS, sizeof(modeS), "?  ");
+                }
+                Serial.printf("   SENSOR  %04X %s %s ev=%lu skew=%+ldms seen=%lus\n",
+                              n.id, chS, modeS,
                               (unsigned long)n.events, (long)n.skewMs,
                               (unsigned long)seenS);
             } else {

@@ -222,10 +222,21 @@ void loop() {
     if (now - lastLog >= 2000) {
         lastLog = now;
         static const char* stNames[] = { "IDLE", "ACTIVE", "REFRAC" };
-        Serial.printf("[%s] ch%-2d measure=%.1f rate=%.0f resid=%.3f  tx=%lu rx=%lu\n",
-                      stNames[detector.state()], myChannel,
-                      detector.measure(), detector.lastRate(), detector.lastResid(),
-                      localCount, heardCount);
+        if (myMode == pulleys::SENSOR_MODE_LINEAR) {
+            // The learned primary axis only converges with real pulls, so show
+            // it: a drifting axis means the sensor has not settled yet.
+            float ax, ay, az;
+            detector.axis(ax, ay, az);
+            Serial.printf("[%s] ch%-2d impulse=%.3f resid=%.3f axis=[%+.2f %+.2f %+.2f]  tx=%lu rx=%lu\n",
+                          stNames[detector.state()], myChannel,
+                          detector.measure(), detector.lastResid(),
+                          ax, ay, az, localCount, heardCount);
+        } else {
+            Serial.printf("[%s] ch%-2d measure=%.1f rate=%.0f resid=%.3f  tx=%lu rx=%lu\n",
+                          stNames[detector.state()], myChannel,
+                          detector.measure(), detector.lastRate(), detector.lastResid(),
+                          localCount, heardCount);
+        }
         Serial.printf("  [SYNC] clock=%s meshNow=%lums\n",
                       pulleys::mesh_clock_locked() ? "locked" : "free",
                       (unsigned long)pulleys::mesh_now());
