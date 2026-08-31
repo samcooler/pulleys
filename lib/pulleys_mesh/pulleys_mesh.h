@@ -28,8 +28,9 @@
 namespace pulleys {
 
 enum : uint8_t {
-    MESH_ORIGIN_SENSOR = 0x04,
-    MESH_ORIGIN_SCREEN = 0x05,
+    MESH_ORIGIN_SENSOR  = 0x04,
+    MESH_ORIGIN_SCREEN  = 0x05,
+    MESH_ORIGIN_ARBITER = 0x06,   // monitor; joins the mesh but shows no art
 };
 
 enum : uint8_t {
@@ -75,39 +76,22 @@ struct __attribute__((packed)) MeshSync {
     uint8_t  magic0;      // 'P'
     uint8_t  magic1;      // 'M'
     uint8_t  msgType;     // MESH_MSG_SYNC
-    uint8_t  originType;
+    uint8_t  originType;  // MESH_ORIGIN_*
     uint32_t meshNow;     // sender's mesh clock, ms
-};  // 8 bytes
+    uint16_t originId;    // appended after meshNow — older nodes ignore the tail
+};  // 10 bytes
 
+// Every node beacons, so this is also the presence signal for roles that emit
+// no events of their own: without it a Screen is invisible to a monitor.
 typedef void (*MeshEventCb)(const MeshEvent& ev, bool relayed);
+typedef void (*MeshSyncCb)(uint8_t originType, uint16_t originId, int32_t skewMs);
 
 // ── Internal state ──────────────────────────────────────────────────────────
 namespace _mesh {
 
 static const uint8_t BCAST[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
-static uint8_t     originType = 0;
-static uint16_t    originId   = 0;
-static uint16_t    seqCounter = 0;
-static MeshEventCb eventCb    = nullptr;
-
-// Deduplication ring — linear scan, fine at this node count / event rate.
-static uint32_t seen[512];
-static uint16_t seenHead = 0;
-
-inline bool wasSeen(uint32_t key) {
-    for (uint16_t i = 0; i < 512; i++) if (seen[i] == key) return true;
-    return false;
-}
-inline void markSeen(uint32_t key) {
-    seen[seenHead] = key;
-    seenHead = (seenHead + 1) & 511;
-}
-inline uint32_t keyOf(uint16_t id, uint16_t sq) {
-    return ((uint32_t)id << 16) | sq;
-}
-
-// Outbound queue — handles both local bursts and relay resends.
+// Outbound queue slot — handles both local bursts and relay resends.
 struct OutSlot {
     MeshEvent ev;
     uint32_t  dueMs;
@@ -115,70 +99,108 @@ struct OutSlot {
     uint8_t   left;
     bool      used;
 };
-static OutSlot out[16];
+
+// All mutable state lives in one struct reached through an inline accessor.
+// This header is included by several translation units in the arbiter, and
+// namespace-scope `static` would give each of them a private copy: one file
+// would register the callbacks while another polled its own empty rings.
+// A function-local static inside an inline function is one shared instance
+// across the whole program, guaranteed even under C++11.
+struct State {
+    uint8_t     originType = 0;
+    uint16_t    originId   = 0;
+    uint16_t    seqCounter = 0;
+    MeshEventCb eventCb    = nullptr;
+    MeshSyncCb  syncCb     = nullptr;
+    bool        relayOn    = true;
+
+    // Deduplication ring — linear scan, fine at this node count / event rate.
+    uint32_t seen[512]  = {};
+    uint16_t seenHead   = 0;
+
+    OutSlot out[16]     = {};
+
+    // RX ring — the WiFi task is the single producer (a real FreeRTOS task, not
+    // an ISR), mesh_poll() the single consumer, so volatile indices around a
+    // plain slot array are sufficient.
+    MeshEvent          rx[8]  = {};
+    volatile uint8_t   rxHead = 0;
+    volatile uint8_t   rxTail = 0;
+
+    // Clock sync. clockOffset is added to millis() to get the mesh clock.
+    int32_t  clockOffset  = 0;
+    bool     clockLocked  = false;
+    uint32_t lastSyncTx   = 0;
+    uint32_t syncInterval = MESH_SYNC_INTERVAL_MS;
+    MeshSync syncRx[4]    = {};
+    volatile uint8_t syncHead = 0;
+    volatile uint8_t syncTail = 0;
+
+    // Diagnostics — every frame the radio hands us, before and after filtering.
+    volatile uint32_t statRaw      = 0;
+    volatile uint32_t statBadMagic = 0;
+    volatile uint32_t statRingFull = 0;
+    uint32_t          statSent     = 0;
+    uint32_t          statSendErr  = 0;
+};
+
+inline State& S() { static State s; return s; }
+
+inline bool wasSeen(uint32_t key) {
+    State& s = S();
+    for (uint16_t i = 0; i < 512; i++) if (s.seen[i] == key) return true;
+    return false;
+}
+inline void markSeen(uint32_t key) {
+    State& s = S();
+    s.seen[s.seenHead] = key;
+    s.seenHead = (s.seenHead + 1) & 511;
+}
+inline uint32_t keyOf(uint16_t id, uint16_t sq) {
+    return ((uint32_t)id << 16) | sq;
+}
 
 inline void enqueue(const MeshEvent& ev, uint8_t count, uint16_t gap, uint16_t firstDelay) {
+    State& s = S();
     for (uint8_t i = 0; i < 16; i++) {
-        if (out[i].used) continue;
-        out[i].ev    = ev;
-        out[i].left  = count;
-        out[i].gapMs = gap;
-        out[i].dueMs = millis() + firstDelay;
-        out[i].used  = true;
+        if (s.out[i].used) continue;
+        s.out[i].ev    = ev;
+        s.out[i].left  = count;
+        s.out[i].gapMs = gap;
+        s.out[i].dueMs = millis() + firstDelay;
+        s.out[i].used  = true;
         return;
     }
     // queue full — drop silently (bursts make this non-fatal)
 }
-
-// RX ring — WiFi task is the single producer, mesh_poll() the single consumer.
-// Producer is the WiFi task (a real FreeRTOS task, not an ISR), consumer is
-// mesh_poll() on the main loop — single producer / single consumer, so volatile
-// indices around a plain slot array are sufficient.
-static MeshEvent          rx[8];
-static volatile uint8_t   rxHead = 0;
-static volatile uint8_t   rxTail = 0;
-
-// Clock sync state. clockOffset is added to millis() to get the mesh clock.
-static int32_t  clockOffset = 0;
-static bool     clockLocked = false;   // false until the first peer is heard
-static uint32_t lastSyncTx   = 0;
-static uint32_t syncInterval = MESH_SYNC_INTERVAL_MS;
-static uint32_t syncRx[4];
-static volatile uint8_t syncHead = 0;
-static volatile uint8_t syncTail = 0;
-
-// Diagnostics — every packet the radio hands us, before and after filtering.
-static volatile uint32_t statRaw      = 0;   // frames delivered by esp-now
-static volatile uint32_t statBadMagic = 0;   // not ours
-static volatile uint32_t statRingFull = 0;   // dropped, consumer too slow
-static uint32_t          statSent     = 0;   // esp_now_send calls
-static uint32_t          statSendErr  = 0;   // esp_now_send returned != OK
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
 static void onRecv(const esp_now_recv_info_t* /*info*/, const uint8_t* data, int len) {
 #else
 static void onRecv(const uint8_t* /*mac*/, const uint8_t* data, int len) {
 #endif
-    statRaw++;
-    if (len < (int)sizeof(MeshSync)) { statBadMagic++; return; }
-    if (data[0] != 'P' || data[1] != 'M') { statBadMagic++; return; }
+    State& st = S();
+    st.statRaw++;
+    if (len < (int)sizeof(MeshSync)) { st.statBadMagic++; return; }
+    if (data[0] != 'P' || data[1] != 'M') { st.statBadMagic++; return; }
 
     if (data[2] == MESH_MSG_SYNC) {
-        if (len < (int)sizeof(MeshSync)) { statBadMagic++; return; }
-        const MeshSync* s = (const MeshSync*)data;
-        uint8_t nh = (syncHead + 1) & 3;
-        if (nh != syncTail) { syncRx[syncHead] = s->meshNow; syncHead = nh; }
+        uint8_t nh = (st.syncHead + 1) & 3;
+        if (nh != st.syncTail) {
+            memcpy(&st.syncRx[st.syncHead], data, sizeof(MeshSync));
+            st.syncHead = nh;
+        }
         return;
     }
 
-    if (len < (int)sizeof(MeshEvent)) { statBadMagic++; return; }
+    if (len < (int)sizeof(MeshEvent)) { st.statBadMagic++; return; }
     const MeshEvent* p = (const MeshEvent*)data;
-    if (p->msgType != MESH_MSG_EVENT) { statBadMagic++; return; }
+    if (p->msgType != MESH_MSG_EVENT) { st.statBadMagic++; return; }
 
-    uint8_t nh = (rxHead + 1) & 7;
-    if (nh == rxTail) { statRingFull++; return; }  // ring full — drop
-    rx[rxHead] = *p;
-    rxHead = nh;
+    uint8_t nh = (st.rxHead + 1) & 7;
+    if (nh == st.rxTail) { st.statRingFull++; return; }  // ring full — drop
+    st.rx[st.rxHead] = *p;
+    st.rxHead = nh;
 }
 
 inline void handle(const MeshEvent& ev) {
@@ -187,9 +209,9 @@ inline void handle(const MeshEvent& ev) {
     markSeen(key);
 
     bool relayed = ev.ttl < MESH_TTL_START;
-    if (eventCb) eventCb(ev, relayed);
+    if (S().eventCb) S().eventCb(ev, relayed);
 
-    if (ev.ttl > 0) {
+    if (S().relayOn && ev.ttl > 0) {
         MeshEvent r = ev;
         r.ttl--;
         enqueue(r, 1, 0, (uint16_t)random(3, 28));  // small jitter vs collisions
@@ -200,10 +222,11 @@ inline void handle(const MeshEvent& ev) {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 inline bool mesh_init(uint8_t originType, uint16_t originId, uint8_t wifiChannel = MESH_WIFI_CHANNEL) {
-    _mesh::originType = originType;
-    _mesh::originId   = originId;
-    memset(_mesh::seen, 0, sizeof(_mesh::seen));
-    memset((void*)_mesh::out, 0, sizeof(_mesh::out));
+    _mesh::State& st = _mesh::S();
+    st.originType = originType;
+    st.originId   = originId;
+    memset(st.seen, 0, sizeof(st.seen));
+    memset((void*)st.out, 0, sizeof(st.out));
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
@@ -245,29 +268,38 @@ inline void mesh_print_stats() {
     wifi_second_chan_t sec;
     esp_wifi_get_channel(&ch, &sec);
     Serial.printf("  [MESH] ch=%d sent=%lu sendErr=%lu rawRx=%lu badMagic=%lu ringFull=%lu\n",
-                  ch, (unsigned long)_mesh::statSent, (unsigned long)_mesh::statSendErr,
-                  (unsigned long)_mesh::statRaw, (unsigned long)_mesh::statBadMagic,
-                  (unsigned long)_mesh::statRingFull);
+                  ch, (unsigned long)_mesh::S().statSent, (unsigned long)_mesh::S().statSendErr,
+                  (unsigned long)_mesh::S().statRaw, (unsigned long)_mesh::S().statBadMagic,
+                  (unsigned long)_mesh::S().statRingFull);
 }
 
-inline void mesh_on_event(MeshEventCb cb) { _mesh::eventCb = cb; }
+inline void mesh_on_event(MeshEventCb cb) { _mesh::S().eventCb = cb; }
+
+// Observe every clock beacon: node presence plus that node's skew from ours.
+inline void mesh_on_sync(MeshSyncCb cb) { _mesh::S().syncCb = cb; }
+
+// Turn off rebroadcasting to observe the field without altering it. A monitor
+// that relays is a legitimate extra hop and helps coverage, but it also masks
+// the very range gaps you might be trying to find.
+inline void mesh_set_relay(bool on) { _mesh::S().relayOn = on; }
 
 // ── Shared clock ─────────────────────────────────────────────────────────────
 // Drive every time-based animation from this instead of millis(), and the whole
 // field oscillates in step. Monotonic in practice: the only backward motion is
 // a bounded slew of at most MESH_SYNC_MAX_STEP_MS per beacon.
-inline uint32_t mesh_now()      { return millis() + _mesh::clockOffset; }
+inline uint32_t mesh_now()      { return millis() + _mesh::S().clockOffset; }
 inline float    mesh_now_secs() { return mesh_now() / 1000.0f; }
-inline bool     mesh_clock_locked() { return _mesh::clockLocked; }
+inline bool     mesh_clock_locked() { return _mesh::S().clockLocked; }
 
 inline void mesh_send_event(uint8_t channel, uint8_t mode, uint8_t magnitude, uint8_t flags) {
     MeshEvent ev;
     ev.magic0     = 'P';
     ev.magic1     = 'M';
     ev.msgType    = MESH_MSG_EVENT;
-    ev.originType = _mesh::originType;
-    ev.originId   = _mesh::originId;
-    ev.seq        = ++_mesh::seqCounter;
+    _mesh::State& st = _mesh::S();
+    ev.originType = st.originType;
+    ev.originId   = st.originId;
+    ev.seq        = ++st.seqCounter;
     ev.ttl        = MESH_TTL_START;
     ev.channel    = channel;
     ev.mode       = mode;
@@ -281,20 +313,22 @@ inline void mesh_send_event(uint8_t channel, uint8_t mode, uint8_t magnitude, ui
 
 inline void mesh_poll() {
     // 0. clock sync — adopt the first peer heard outright, then slew gently
-    while (_mesh::syncTail != _mesh::syncHead) {
-        uint32_t theirs = _mesh::syncRx[_mesh::syncTail];
-        _mesh::syncTail = (_mesh::syncTail + 1) & 3;
+    _mesh::State& st = _mesh::S();
+    while (st.syncTail != st.syncHead) {
+        MeshSync beacon = st.syncRx[st.syncTail];
+        st.syncTail = (st.syncTail + 1) & 3;
 
-        int32_t delta = (int32_t)(theirs - mesh_now());   // wrap-safe
-        if (!_mesh::clockLocked) {
-            _mesh::clockOffset += delta;                  // step straight onto the field
-            _mesh::clockLocked  = true;
+        int32_t delta = (int32_t)(beacon.meshNow - mesh_now());   // wrap-safe
+        if (st.syncCb) st.syncCb(beacon.originType, beacon.originId, delta);
+        if (!st.clockLocked) {
+            st.clockOffset += delta;                      // step straight onto the field
+            st.clockLocked  = true;
             Serial.printf("  [MESH] clock locked (stepped %ld ms)\n", (long)delta);
         } else {
             int32_t step = (int32_t)(delta * MESH_SYNC_GAIN);
             if (step >  MESH_SYNC_MAX_STEP_MS) step =  MESH_SYNC_MAX_STEP_MS;
             if (step < -MESH_SYNC_MAX_STEP_MS) step = -MESH_SYNC_MAX_STEP_MS;
-            _mesh::clockOffset += step;
+            st.clockOffset += step;
         }
     }
 
@@ -302,32 +336,33 @@ inline void mesh_poll() {
     // the timestamp: scheduling lastSyncTx in the future makes the unsigned
     // (nowMs - lastSyncTx) underflow, which fires the beacon every poll.
     uint32_t nowMs = millis();
-    if (nowMs - _mesh::lastSyncTx >= _mesh::syncInterval) {
-        _mesh::lastSyncTx  = nowMs;
-        _mesh::syncInterval = MESH_SYNC_INTERVAL_MS + (uint32_t)random(0, 400);
+    if (nowMs - st.lastSyncTx >= st.syncInterval) {
+        st.lastSyncTx   = nowMs;
+        st.syncInterval = MESH_SYNC_INTERVAL_MS + (uint32_t)random(0, 400);
         MeshSync s;
         s.magic0     = 'P';
         s.magic1     = 'M';
         s.msgType    = MESH_MSG_SYNC;
-        s.originType = _mesh::originType;
+        s.originType = st.originType;
         s.meshNow    = mesh_now();
+        s.originId   = st.originId;
         esp_now_send(_mesh::BCAST, (const uint8_t*)&s, sizeof(s));
     }
 
     // 1. drain received packets (dedupe + user callback + relay enqueue)
-    while (_mesh::rxTail != _mesh::rxHead) {
-        MeshEvent ev = _mesh::rx[_mesh::rxTail];
-        _mesh::rxTail = (_mesh::rxTail + 1) & 7;
+    while (st.rxTail != st.rxHead) {
+        MeshEvent ev = st.rx[st.rxTail];
+        st.rxTail = (st.rxTail + 1) & 7;
         _mesh::handle(ev);
     }
     // 2. service the outbound queue (local bursts + relays)
     uint32_t now = millis();
     for (uint8_t i = 0; i < 16; i++) {
-        _mesh::OutSlot& s = _mesh::out[i];
+        _mesh::OutSlot& s = st.out[i];
         if (!s.used || now < s.dueMs) continue;
         esp_err_t e = esp_now_send(_mesh::BCAST, (const uint8_t*)&s.ev, sizeof(MeshEvent));
-        _mesh::statSent++;
-        if (e != ESP_OK) _mesh::statSendErr++;
+        st.statSent++;
+        if (e != ESP_OK) st.statSendErr++;
         if (--s.left == 0) s.used = false;
         else s.dueMs = now + s.gapMs;
     }

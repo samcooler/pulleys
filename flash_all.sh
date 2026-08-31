@@ -3,6 +3,11 @@
 # Usage: ./flash_all.sh [env] [-r]
 #   env: platformio environment (default: traveler)
 #   -r:  reset only — no flash write
+#   -p <port>: flash only this port (repeatable)
+#
+# Several roles now share the ESP32-S3 on /dev/cu.usbmodem*, so flashing every
+# matching port would push sensor firmware onto an arbiter. Use -p when more
+# than one S3 role is connected.
 #
 # Build first with: pio run -e <env>
 # Then flash all connected boards: ./flash_all.sh <env>
@@ -11,9 +16,15 @@ set -euo pipefail
 
 RESET_ONLY=false
 ENV="traveler"
+ONLY_PORTS=()
+expect_port=false
 for arg in "$@"; do
-  if [[ "$arg" == "-r" || "$arg" == "--reset" ]]; then
+  if [[ "$expect_port" == true ]]; then
+    ONLY_PORTS+=("$arg"); expect_port=false
+  elif [[ "$arg" == "-r" || "$arg" == "--reset" ]]; then
     RESET_ONLY=true
+  elif [[ "$arg" == "-p" || "$arg" == "--port" ]]; then
+    expect_port=true
   else
     ENV="$arg"
   fi
@@ -28,7 +39,7 @@ case "$ENV" in
   station_wroom) CHIP="esp32";   BOOT_ADDR="0x1000"; FLASH_MODE="dio"; FLASH_SIZE="4MB"  ;;
   screen)        CHIP="esp32";   BOOT_ADDR="0x1000"; FLASH_MODE="dio"; FLASH_SIZE="4MB"  ;;
   station*)      CHIP="esp32c3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB"  ;;
-  arbiter)       CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="16MB" ;;
+  arbiter*)      CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="16MB" ;;
   *)             CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB"  ;;
 esac
 
@@ -42,7 +53,9 @@ fi
 # native-USB parts (C3/S3) enumerate as usbmodem, the WROOM's CH340 as usbserial.
 # Without this, flashing with a sensor and a screen both plugged in would push
 # the wrong image to one of them.
-if [[ "$CHIP" == "esp32" ]]; then
+if [[ ${#ONLY_PORTS[@]} -gt 0 ]]; then
+  ports=("${ONLY_PORTS[@]}")
+elif [[ "$CHIP" == "esp32" ]]; then
   ports=(/dev/cu.usbserial*(N))
 else
   ports=(/dev/cu.usbmodem*(N))

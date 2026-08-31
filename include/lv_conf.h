@@ -32,6 +32,9 @@
 
 /* ── Font ────────────────────────────────────────────────────────────────── */
 #define LV_FONT_MONTSERRAT_16 1
+/* Monospace faces — debug tables need columns that line up. */
+#define LV_FONT_UNSCII_8      1
+#define LV_FONT_UNSCII_16     1
 #define LV_FONT_DEFAULT       &lv_font_montserrat_16
 
 /* ── Logging ─────────────────────────────────────────────────────────────── */
