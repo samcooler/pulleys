@@ -27,10 +27,19 @@
 #define IMU_HZ          100
 #define IMU_INTERVAL_MS (1000 / IMU_HZ)
 #define LED_FPS         30
-#define FLASH_MS        600     // confirmation flash on local detection
-#define IDLE_BRIGHTNESS 22      // resting brightness of the channel pattern
-#define FLASH_BRIGHTNESS 150    // peak at the moment of detection
 #define NVS_NS          "sensor"
+
+// ── Idle / active look ────────────────────────────────────────────────────────
+// The installed piece is dark until someone plays with it, so a sensor shows
+// nothing at rest and lights fully only while it is detecting and sending.
+//
+// SENSOR_IDLE_PIXELS is a debugging affordance: a few pixels stay lit in the
+// channel colour so an unlit rope can be told apart from a dead board. Set it
+// to 0 for the installed behaviour — properly dark at rest.
+#define SENSOR_IDLE_PIXELS 4
+#define IDLE_BRIGHTNESS    14     // low — a presence check, not a display
+#define FLASH_BRIGHTNESS   190    // full pattern while detecting/sending
+#define FLASH_FADE_MS      400    // ease-out at the end so it doesn't hard-cut
 
 static CRGB leds[LED_COUNT];
 static pulleys::IMU      imu;
@@ -73,6 +82,9 @@ static void applyConfig() {
     c.rotThresholdDeg = myRotDeg;
     detector.init(c);
 }
+
+// Centre 2x2 of the 8x8 panel — the idle presence pixels.
+static const uint8_t IDLE_PIXEL_IDX[4] = { 27, 28, 35, 36 };
 
 // Point the pattern slot at the current channel. Call after any channel change.
 static void applyChannelVisual() {
@@ -118,7 +130,7 @@ static void handleSerial() {
             } else if (buf[0] == 't') {          // "t" → fire a test event
                 pulleys::mesh_send_event(myChannel, myMode, 90, 0);
                 localCount++;
-                flashUntil = millis() + FLASH_MS;
+                flashUntil = millis() + detector.cfg.refractoryMs;
                 Serial.println("  [TX] test event");
             }
             printConfig();
@@ -158,9 +170,11 @@ void setup() {
     applyChannelVisual();
 
     // Boot: flash the channel color three times so the install crew can verify
+    FastLED.setBrightness(255);   // brightness is applied per-pixel from here on
     for (int i = 0; i < 3; i++) {
-        fill_solid(leds, LED_COUNT, pulleys::channel_color(myChannel));
-        FastLED.setBrightness(40);
+        CRGB boot = pulleys::channel_color(myChannel);
+        boot.nscale8(40);
+        fill_solid(leds, LED_COUNT, boot);
         FastLED.show();
         delay(120);
         fill_solid(leds, LED_COUNT, CRGB::Black);
@@ -191,7 +205,7 @@ void loop() {
             uint8_t mag = 0;
             if (detector.update(a.x, a.y, a.z, g.x, g.y, g.z, dt, mag)) {
                 localCount++;
-                flashUntil = now + FLASH_MS;
+                flashUntil = now + detector.cfg.refractoryMs;
                 pulleys::mesh_send_event(myChannel, myMode, mag, 0);
                 Serial.printf("★ DETECT ch%-2d %s mag=%d  (#%lu)\n",
                               myChannel,
@@ -201,20 +215,29 @@ void loop() {
         }
     }
 
-    // LED: the channel's own pattern, resting dim and swelling on detection
+    // LED: dark at rest, full channel pattern while detecting and sending
     if (now - lastLed >= (1000 / LED_FPS)) {
         float dt = (now - lastLed) / 1000.0f;
         if (dt > 0.2f) dt = 0.2f;
         lastLed = now;
 
-        pulleys::pattern_slot_update(patSlot, dt, pulleys::mesh_now_secs());
-
-        uint8_t bri = IDLE_BRIGHTNESS;
         if (now < flashUntil) {
-            float f = (flashUntil - now) / (float)FLASH_MS;
-            bri = (uint8_t)(IDLE_BRIGHTNESS + f * (FLASH_BRIGHTNESS - IDLE_BRIGHTNESS));
+            // Active: the channel's own pattern, matching this channel's block
+            // on a Screen. Eases out over the last stretch of the window.
+            pulleys::pattern_slot_update(patSlot, dt, pulleys::mesh_now_secs());
+            uint32_t left = flashUntil - now;
+            uint8_t  bri  = FLASH_BRIGHTNESS;
+            if (left < FLASH_FADE_MS)
+                bri = (uint8_t)(FLASH_BRIGHTNESS * (left / (float)FLASH_FADE_MS));
+            for (uint16_t i = 0; i < LED_COUNT; i++) leds[i].nscale8(bri);
+        } else {
+            // Rest: dark, bar the debugging presence pixels.
+            fill_solid(leds, LED_COUNT, CRGB::Black);
+            CRGB c = pulleys::channel_color(myChannel);
+            c.nscale8(IDLE_BRIGHTNESS);
+            for (uint8_t i = 0; i < SENSOR_IDLE_PIXELS && i < 4; i++)
+                leds[IDLE_PIXEL_IDX[i]] = c;
         }
-        FastLED.setBrightness(bri);
         FastLED.show();
     }
 
