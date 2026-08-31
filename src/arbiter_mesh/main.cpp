@@ -1,4 +1,8 @@
 #include <Arduino.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <SD.h>
+#include <pulleys_ch422g.h>
 // ESP32-S3 RGB panel classes aren't pulled in by LovyanGFX.hpp by default
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
 #include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
@@ -47,6 +51,17 @@
 #define TOUCH_SCL  9
 #define TOUCH_INT  4
 #define TOUCH_RST (-1)   // controlled by CH422G, skip for now
+
+// ── microSD (SPI; chip-select lives on the CH422G, not a GPIO) ────────────────
+#define SD_MOSI  11
+#define SD_SCK   12
+#define SD_MISO  13
+// The SD library insists on driving a GPIO for chip-select, but the real select
+// is EXIO4 on the expander. Since the card is the only device on this bus we
+// hold EXIO4 asserted and hand the library an unconnected pin to waggle. A card
+// enters SPI mode by seeing CS low during CMD0, so a permanently asserted
+// select is what the card wants anyway.
+#define SD_CS_DUMMY 15
 
 #define LCD_WIDTH    800
 #define LCD_HEIGHT   480
@@ -163,6 +178,101 @@ void setup() {
     Serial.println("\n── Arbiter (mesh monitor) boot ──");
     Serial.printf("  PSRAM: %u KB total  %u KB free\n",
                   ESP.getPsramSize() / 1024, ESP.getFreePsram() / 1024);
+
+    // ── Bus probe ─────────────────────────────────────────────────────────────
+    // Reports what is actually on the I2C bus before trusting any pin map from
+    // memory. The GT911 touch controller and the CH422G expander share it, and
+    // on this board family the microSD chip-select hangs off that expander.
+    {
+        Wire.begin(TOUCH_SDA, TOUCH_SCL, 400000);
+        Serial.print("  [I2C] devices:");
+        int found = 0;
+        for (uint8_t a = 1; a < 127; a++) {
+            Wire.beginTransmission(a);
+            if (Wire.endTransmission() == 0) { Serial.printf(" 0x%02X", a); found++; }
+        }
+        Serial.println(found ? "" : " none");
+    }
+
+    // ── microSD ───────────────────────────────────────────────────────────────
+    // Must run before display.init(): LovyanGFX's GT911 driver takes over I2C
+    // port 0, after which Arduino's Wire can no longer reach the expander.
+    {
+        static pulleys::CH422G expander;
+        if (!expander.init()) {
+            Serial.println("  [SD] CH422G not responding — no card access");
+        } else {
+            // Prove the expander actually drives its pins before blaming the
+            // card: a write can be ACKed while the outputs stay high-impedance.
+            uint8_t lo = 0, hi = 0;
+            if (expander.selfTest(pulleys::CH422G_EXIO_SD_CS, lo, hi)) {
+                Serial.printf("  [SD] EXIO readback low=0x%02X high=0x%02X  (bit4: %d -> %d)\n",
+                              lo, hi, (lo >> 4) & 1, (hi >> 4) & 1);
+                if (((lo >> 4) & 1) == ((hi >> 4) & 1))
+                    Serial.println("       EXIO4 is NOT moving — expander outputs not enabled");
+            } else {
+                Serial.println("  [SD] EXIO readback unavailable");
+            }
+
+            pinMode(SD_MISO, INPUT_PULLUP);   // SPI-mode SD needs MISO pulled up
+            SPI.begin(SD_SCK, SD_MISO, SD_MOSI);
+
+            // Some cards want to see chip-select released once before the first
+            // command, so cycle it rather than only ever asserting.
+            expander.set(pulleys::CH422G_EXIO_SD_CS, true);
+            delay(10);
+            expander.set(pulleys::CH422G_EXIO_SD_CS, false);   // active low
+            delay(10);
+
+            // Walk the clock down: a long ribbon to the card slot will not hold
+            // 20 MHz, and the failure looks identical to an absent card.
+            const uint32_t speeds[] = { 20000000, 10000000, 4000000, 1000000, 400000 };
+            bool mounted = false;
+            for (uint8_t i = 0; i < 5 && !mounted; i++) {
+                if (SD.begin(SD_CS_DUMMY, SPI, speeds[i])) {
+                    Serial.printf("  [SD] mounted at %lu kHz\n",
+                                  (unsigned long)(speeds[i] / 1000));
+                    mounted = true;
+                } else {
+                    SD.end();
+                    delay(20);
+                }
+            }
+
+            if (!mounted) {
+                Serial.println("  [SD] mount FAILED at every speed.");
+                Serial.println("       card inserted? formatted FAT32 (not exFAT)?");
+            } else {
+                const char* kind = "?";
+                switch (SD.cardType()) {
+                    case CARD_MMC:  kind = "MMC";   break;
+                    case CARD_SD:   kind = "SDSC";  break;
+                    case CARD_SDHC: kind = "SDHC";  break;
+                    case CARD_NONE: kind = "none";  break;
+                    default: break;
+                }
+                Serial.printf("  [SD] %s, %llu MB total, %llu MB used\n",
+                              kind, SD.cardSize() / (1024ULL * 1024ULL),
+                              SD.usedBytes() / (1024ULL * 1024ULL));
+
+                // Prove it round-trips before trusting it with an event log.
+                File f = SD.open("/pulleys_probe.txt", FILE_WRITE);
+                if (!f) {
+                    Serial.println("  [SD] open for write FAILED");
+                } else {
+                    f.printf("pulleys arbiter probe, millis=%lu\n", (unsigned long)millis());
+                    f.close();
+                    File r = SD.open("/pulleys_probe.txt", FILE_READ);
+                    if (r) {
+                        Serial.printf("  [SD] read back OK: %s", r.readString().c_str());
+                        r.close();
+                    } else {
+                        Serial.println("  [SD] read back FAILED");
+                    }
+                }
+            }
+        }
+    }
 
     bool ok = display.init();
     Serial.printf("  display.init(): %s  (%dx%d)\n",
