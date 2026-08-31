@@ -6,6 +6,8 @@
 #include <pulleys_rtc.h>
 #include "eventlog.h"
 #include "clocksrc.h"
+#include "clockui.h"
+#include <pulleys_gt911.h>
 // ESP32-S3 RGB panel classes aren't pulled in by LovyanGFX.hpp by default
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
 #include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
@@ -138,7 +140,8 @@ public:
 };
 
 static LGFX display;
-static pulleys::RTC s_rtc;
+static pulleys::RTC   s_rtc;
+static pulleys::GT911 s_touch;
 
 // Serial console: T<YYYYMMDDHHMMSS> sets the clock. Fixed width so there is no
 // ambiguity about field order, and local wall time rather than epoch because
@@ -189,6 +192,17 @@ static void handleSerial() {
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t         buf1[LCD_WIDTH * LCD_BUF_LINES];
 
+static void lvgl_touch_read(lv_indev_drv_t* /*drv*/, lv_indev_data_t* data) {
+    uint16_t tx, ty;
+    if (s_touch.readSticky(tx, ty)) {
+        data->point.x = (lv_coord_t)tx;
+        data->point.y = (lv_coord_t)ty;
+        data->state   = LV_INDEV_STATE_PR;
+    } else {
+        data->state = LV_INDEV_STATE_REL;
+    }
+}
+
 static void lvgl_flush(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* color_p) {
     uint32_t w = area->x2 - area->x1 + 1;
     uint32_t h = area->y2 - area->y1 + 1;
@@ -224,6 +238,9 @@ void setup() {
     // 0x04 rather than 0x02 is what tells it apart from a PCF8563.
     s_rtc.begin();
     clocksrc_init(&s_rtc);
+
+    s_touch.setBounds(LCD_WIDTH, LCD_HEIGHT);
+    if (!s_touch.begin()) Serial.println("  [TOUCH] GT911 not found — clock UI unusable");
 
     // ── microSD ───────────────────────────────────────────────────────────────
     // Must run before display.init(): LovyanGFX's GT911 driver takes over I2C
@@ -339,6 +356,12 @@ void setup() {
     disp_drv.draw_buf = &draw_buf;
     lv_disp_drv_register(&disp_drv);
 
+    static lv_indev_drv_t indev_drv;
+    lv_indev_drv_init(&indev_drv);
+    indev_drv.type    = LV_INDEV_TYPE_POINTER;
+    indev_drv.read_cb = lvgl_touch_read;
+    lv_indev_drv_register(&indev_drv);
+
     // Join the mesh as an observer. Relaying is on by default — a monitor that
     // relays is a legitimate extra hop — but MESH_OBSERVE_ONLY makes it passive
     // so it cannot paper over the range gaps you are hunting for.
@@ -352,6 +375,7 @@ void setup() {
     eventlog_init(&s_rtc);
     monitor_on_event(eventlog_record);
     ui_init();
+    clockui_init(&s_rtc);
     Serial.printf("Arbiter (mesh monitor) ready — %s\n", pulleys::identity_name());
 }
 
@@ -371,9 +395,10 @@ void loop() {
         monitor_tick();
     }
 
+    clockui_tick();
     lv_timer_handler();
 
-    if (now - last_ui >= 400) {
+    if (now - last_ui >= 400 && !clockui_is_open()) {
         last_ui = now;
         ui_refresh();
     }
