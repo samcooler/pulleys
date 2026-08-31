@@ -106,10 +106,10 @@ public:
             cfg.pin_vsync         = LCD_VSYNC;
             cfg.pin_hsync         = LCD_HSYNC;
             cfg.pin_pclk          = LCD_PCLK;
-            // 12 MHz rather than 16: the panel DMA and the CPU share PSRAM
-            // bandwidth, and underruns show up as shimmer on thin strokes.
-            // 800x480 plus porches at 12 MHz still gives ~29 fps.
-            cfg.freq_write        = 12000000;
+            // 16 MHz. Dropping to 12 to ease PSRAM contention blanked the
+            // panel to solid white: this glass has a minimum pixel clock and
+            // loses sync below it, so bandwidth has to be won elsewhere.
+            cfg.freq_write        = 16000000;
             cfg.hsync_polarity    = 0;
             cfg.hsync_front_porch = 8;
             cfg.hsync_pulse_width = 4;
