@@ -19,10 +19,12 @@
 //   RANKING — top-4 channels as 8×8 shape patterns, most active on the left,
 //             brightness driven by each channel's activity level
 //
-// The mode is chosen at boot, not on a timer: the installed matrix has no
-// buttons, so each boot uses the mode the previous boot stored and then stores
-// the next one. Power-cycling steps COUNTER → RANKING → COUNTER … which is the
-// whole user interface.
+// Which one it shows is chosen at boot, not on a timer. A board named in the
+// install map (lib/pulleys_install) runs the display assigned to it, so an
+// installed screen survives being unplugged without changing what it does.
+// A board nobody has decided for falls back to the only interface a matrix with
+// no buttons has: each boot uses what the previous boot stored and then stores
+// the next, so power-cycling steps COUNTER → RANKING → COUNTER …
 //
 // This is the whole "game" for v1: ranked activity, and number go up.
 
@@ -65,7 +67,7 @@
 #define MAX_COUNT_CHANS   4
 #define COUNT_DISPLAY_MAX 9999   // clamp so one runaway channel cannot crowd the rest
 
-// NVS namespace holding the boot-alternated display mode
+// NVS namespace holding the boot-alternated display mode (unlisted boards only)
 #define NVS_NS            "screen"
 
 // ── Globals ───────────────────────────────────────────────────────────────────
@@ -88,18 +90,30 @@ static pulleys::PatternSlot patSlots[NUM_SLOTS];
 static int8_t  slotChannel[NUM_SLOTS]   = { -1, -1, -1, -1 };
 static float   slotBrightness[NUM_SLOTS] = { 0, 0, 0, 0 };  // eased toward target
 
-enum DisplayMode : uint8_t { MODE_COUNTER = 0, MODE_RANKING, MODE_COUNT };
-static DisplayMode mode = MODE_COUNTER;   // real value comes from NVS at boot
+static uint8_t mode        = pulleys::SCREEN_COUNTER;
+static bool    modeIsListed = false;   // pinned by the install map, not cycled
 
-// Boot-time mode select. Read what the last boot left, then immediately store
-// the next mode, so yanking power is what advances the display.
-static void loadAndAdvanceMode() {
+// Display select. A board named in DISPLAY_ASSIGNMENT runs what the install map
+// says and nothing else — power-cycling it is then just a restart, which is
+// what you want of an installed piece someone might unplug by accident.
+//
+// A board nobody has decided for keeps the old interface: read what the last
+// boot left, immediately store the next one, so yanking power steps
+// COUNTER → RANKING → COUNTER. On a matrix with no buttons that is still the
+// only way to change it in the field.
+static void loadDisplayMode() {
+    int8_t listed = pulleys::display_for_device(pulleys::identity_id());
+    if (listed >= 0) {
+        mode         = (uint8_t)listed;
+        modeIsListed = true;
+        return;
+    }
     Preferences p;
     p.begin(NVS_NS, false);
-    uint8_t stored = p.getUChar("mode", MODE_COUNTER);
-    if (stored >= MODE_COUNT) stored = MODE_COUNTER;
-    mode = (DisplayMode)stored;
-    p.putUChar("mode", (uint8_t)((stored + 1) % MODE_COUNT));
+    uint8_t stored = p.getUChar("mode", pulleys::SCREEN_COUNTER);
+    if (stored >= pulleys::SCREEN_DISPLAY_COUNT) stored = pulleys::SCREEN_COUNTER;
+    mode = stored;
+    p.putUChar("mode", (uint8_t)((stored + 1) % pulleys::SCREEN_DISPLAY_COUNT));
     p.end();
 }
 
@@ -350,10 +364,10 @@ static void handleSerial() {
                 Serial.println("  [TX] test broadcast");
             } else if (buf[0] == 'm') {
                 // Bench override only -- does not touch the stored boot mode.
-                mode = (mode == MODE_COUNTER) ? MODE_RANKING : MODE_COUNTER;
+                mode = (mode + 1) % pulleys::SCREEN_DISPLAY_COUNT;
                 fill_solid(leds, LED_COUNT, CRGB::Black);
-                Serial.printf("  mode=%s (this boot only)\n",
-                              mode == MODE_COUNTER ? "COUNTER" : "RANKING");
+                Serial.printf("  display=%s (this boot only)\n",
+                              pulleys::screen_display_name(mode));
             }
         } else if (len < sizeof(buf) - 1) {
             buf[len++] = c;
@@ -388,9 +402,10 @@ void setup() {
     pulleys::mesh_init(pulleys::MESH_ORIGIN_SCREEN, pulleys::identity_id());
     pulleys::mesh_on_event(onMeshEvent);
 
-    loadAndAdvanceMode();
-    Serial.printf("  mode=%s this boot (power-cycle for the other)\n",
-                  mode == MODE_COUNTER ? "COUNTER" : "RANKING");
+    loadDisplayMode();
+    Serial.printf("  display=%s (%s)\n", pulleys::screen_display_name(mode),
+                  modeIsListed ? "from the install map"
+                               : "unlisted — power-cycle for the next one");
     lastAnyEvent = millis();
     pulleys::whoami_reply();
     Serial.println("Screen ready — listening for sensor events.\n");
@@ -416,7 +431,7 @@ void loop() {
 
         decayActivity(dt);
 
-        if (mode == MODE_COUNTER) renderCounter(now);
+        if (mode == pulleys::SCREEN_COUNTER) renderCounter(now);
         else                      renderRanking(dt, pulleys::mesh_now_secs());
 
         FastLED.show();
@@ -424,8 +439,8 @@ void loop() {
 
     if (now - lastLog >= 3000) {
         lastLog = now;
-        Serial.printf("── total=%lu  mode=%s  counts:", totalCount,
-                      mode == MODE_COUNTER ? "COUNTER" : "RANKING");
+        Serial.printf("── total=%lu  display=%s  counts:", totalCount,
+                      pulleys::screen_display_name(mode));
         bool any = false;
         for (uint8_t c = 0; c < NUM_CHANNELS; c++) {
             if (chans[c].count == 0) continue;

@@ -41,8 +41,10 @@
 #      firmware it happens to be running — the crate is full of boards carrying
 #      retired traveler/station images, and --auto would faithfully reflash
 #      them with those
-#   2. hand every sensor-class board to tools/assign_channels.py, which adds the
-#      missing ones at the lowest free channel and leaves the rest untouched
+#   2. hand every board to tools/install_map.py: sensors get the lowest free
+#      rope channel, screens get a display spread across the ones available.
+#      Boards already listed are left exactly as they are, so anything set by
+#      hand survives
 #   3. build the envs actually needed, so the table edit is in the image
 #   4. flash each board with its own env
 #
@@ -99,7 +101,7 @@ fi
 
 PYTHON="/Users/sam/.platformio/penv/bin/python"
 PIO="/Users/sam/.platformio/penv/bin/pio"
-ASSIGN="${0:A:h}/tools/assign_channels.py"
+ASSIGN="${0:A:h}/tools/install_map.py"
 ESPTOOL="/Users/sam/.platformio/packages/tool-esptoolpy/esptool.py"
 BOOT_APP="/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
 IDENTIFY="${0:A:h}/tools/identify.py"
@@ -206,7 +208,7 @@ else
 
   # ── Provisioning: register, build, flash — the install pass ────────────────
   if [[ "$PROVISION" == true ]]; then
-    typeset -a prov_ports prov_envs prov_specs prov_unknown
+    typeset -a prov_ports prov_envs prov_specs prov_disp prov_unknown
     for row in "${ROWS[@]}"; do
       port=$(row_field "$row" 1); cls=$(row_field "$row" 2)
       id=$(row_field "$row" 5);   name=$(row_field "$row" 7); mac=$(row_field "$row" 8)
@@ -226,13 +228,20 @@ else
       prov_ports+=("$port"); prov_envs+=("$tenv")
       # Only sensors carry a channel. A board that never answered has no ID to
       # register with; it is flashed anyway and picked up on the second pass.
-      if [[ "$tenv" == "sensor" ]]; then
-        if [[ "$id" == "?" || -z "$id" ]]; then
-          prov_unknown+=("$port")
-        else
-          prov_specs+=("${id}=${name}")
-        fi
-      fi
+      # Sensors carry a rope channel, screens carry a display; both are keyed
+      # by device ID. A board that never answered has no ID to register with;
+      # it is flashed anyway and picked up on the second pass.
+      case "$tenv" in
+        sensor|screen)
+          if [[ "$id" == "?" || -z "$id" ]]; then
+            prov_unknown+=("$port")
+          elif [[ "$tenv" == "sensor" ]]; then
+            prov_specs+=("${id}=${name}")
+          else
+            prov_disp+=("${id}=${name}")
+          fi
+          ;;
+      esac
     done
 
     if [[ ${#prov_ports[@]} -eq 0 ]]; then
@@ -242,14 +251,16 @@ else
       exit 1
     fi
 
-    # 1. register any board the channel table does not know yet
+    # 1. register any board the install map does not know yet
+    typeset -a dry
+    [[ "$LIST_ONLY" == true ]] && dry=("--dry-run")
     if [[ ${#prov_specs[@]} -gt 0 ]]; then
       echo "\nChannel table:"
-      if [[ "$LIST_ONLY" == true ]]; then
-        python3 "$ASSIGN" --add --dry-run "${prov_specs[@]}" | sed 's/^/  /'
-      else
-        python3 "$ASSIGN" --add "${prov_specs[@]}" | sed 's/^/  /'
-      fi
+      python3 "$ASSIGN" --add --kind channel "${dry[@]}" "${prov_specs[@]}" | sed 's/^/  /'
+    fi
+    if [[ ${#prov_disp[@]} -gt 0 ]]; then
+      echo "\nDisplay table:"
+      python3 "$ASSIGN" --add --kind display "${dry[@]}" "${prov_disp[@]}" | sed 's/^/  /'
     fi
 
     if [[ "$LIST_ONLY" == true ]]; then
@@ -287,30 +298,42 @@ else
     if [[ ${#prov_unknown[@]} -gt 0 && $rc -eq 0 ]]; then
       echo "\n${#prov_unknown[@]} board(s) were silent before flashing; asking again…"
       gather "${prov_unknown[@]}"
-      typeset -a late_specs late_ports
+      typeset -a late_ports late_envs late_chan late_disp
       for row in "${ROWS[@]}"; do
-        id=$(row_field "$row" 5); name=$(row_field "$row" 7)
+        id=$(row_field "$row" 5); name=$(row_field "$row" 7); cls=$(row_field "$row" 2)
         [[ "$id" == "?" || -z "$id" ]] && continue
-        late_specs+=("${id}=${name}"); late_ports+=("$(row_field "$row" 1)")
+        tenv=$(class_env "$cls"); [[ -z "$tenv" ]] && continue
+        late_ports+=("$(row_field "$row" 1)"); late_envs+=("$tenv")
+        if [[ "$tenv" == "sensor" ]]; then late_chan+=("${id}=${name}")
+        else                                late_disp+=("${id}=${name}"); fi
       done
-      if [[ ${#late_specs[@]} -gt 0 ]]; then
-        python3 "$ASSIGN" --add "${late_specs[@]}" | sed 's/^/  /'
-        if "$PIO" run -e sensor >/dev/null 2>&1; then
-          for port in "${late_ports[@]}"; do
-            echo "  → $port ← sensor (re-flash with channel)"
-            "$0" sensor -p "$port" 2>&1 | tail -1 || rc=1
+      if [[ ${#late_ports[@]} -gt 0 ]]; then
+        [[ ${#late_chan[@]} -gt 0 ]] && \
+          python3 "$ASSIGN" --add --kind channel "${late_chan[@]}" | sed 's/^/  /'
+        [[ ${#late_disp[@]} -gt 0 ]] && \
+          python3 "$ASSIGN" --add --kind display "${late_disp[@]}" | sed 's/^/  /'
+        typeset -A late_seen
+        typeset -a late_build
+        for e in "${late_envs[@]}"; do
+          if [[ -z "${late_seen[$e]:-}" ]]; then late_seen[$e]=1; late_build+=("-e" "$e"); fi
+        done
+        if "$PIO" run "${late_build[@]}" >/dev/null 2>&1; then
+          for i in {1..${#late_ports[@]}}; do
+            echo "  → ${late_ports[$i]} ← ${late_envs[$i]} (re-flash with its assignment)"
+            "$0" "${late_envs[$i]}" -p "${late_ports[$i]}" 2>&1 | tail -1 || rc=1
           done
         else
-          echo "  Build FAILED on the second pass — those boards keep a hashed channel."
+          echo "  Build FAILED on the second pass — those boards keep their fallback."
           rc=1
         fi
       else
-        echo "  Still silent — they will run on a hashed channel until they answer."
+        echo "  Still silent — they will run on their fallback until they answer."
       fi
     fi
 
-    echo "\nChannel table now:"
-    python3 "$ASSIGN" --list | awk -F'\t' '{printf "  %s  ch%-3s %s\n", $1, $2, $3}'
+    echo "\nInstall map now:"
+    python3 "$ASSIGN" --kind channel --list | awk -F'\t' '{printf "  %s  ch%-8s %s\n", $1, $2, $3}'
+    python3 "$ASSIGN" --kind display --list | awk -F'\t' '{printf "  %s  %-10s %s\n", $1, $2, $3}'
     exit $rc
   fi
 

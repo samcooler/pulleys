@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
-"""Own the CHANNEL_ASSIGNMENT table in lib/pulleys_channel/pulleys_channel.h.
+"""Own the board tables in lib/pulleys_install/pulleys_install.h.
 
-The table maps a board's MAC-derived device ID to the rope channel it drives.
-It has to survive being edited during an install, by someone distracted, so
-this tool is the only thing that writes it: hand-editing a C array in a hurry
-is how two ropes end up on one channel.
+Two tables, keyed the same way — by a board's MAC-derived device ID:
 
-    assign_channels.py --list                 print the table as TSV
-    assign_channels.py --add ID [ID ...]      add any missing IDs, lowest free
-                                              channel first; already-listed IDs
-                                              are left exactly as they are
-    assign_channels.py --check ID [ID ...]    exit 1 if any ID is missing
-    --dry-run    say what would change, write nothing
-    --file PATH  override the header location
+    channels   which rope a Sensor drives
+    displays   which display a Screen runs
+
+Both have to survive being edited mid-install by someone distracted, so this
+tool writes them: editing a C array in a hurry is how two ropes end up on one
+channel. It is deliberately additive — it never changes a row that already
+exists, so a value set by hand at a desk outlives every later run.
+
+    install_map.py --list [--kind K]          print a table as TSV
+    install_map.py --add ID [ID ...]          add missing IDs to the channel
+                                              table, lowest free channel first
+    install_map.py --add --kind display ID…   add missing IDs to the display
+                                              table, spreading them over the
+                                              available displays
+    install_map.py --check ID [ID ...]        exit 1 if any ID is missing
+    --kind channel|display    which table (default: channel)
+    --dry-run                 say what would change, write nothing
+    --file PATH               override the header location
 
 An ID may be written 0xA855, A855, or N-A855, and may carry a name for the
 generated comment: A855=N-A855.
@@ -29,15 +37,19 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_HEADER = os.path.join(HERE, os.pardir, "lib", "pulleys_channel",
-                              "pulleys_channel.h")
+DEFAULT_HEADER = os.path.join(HERE, os.pardir, "lib", "pulleys_install",
+                              "pulleys_install.h")
 
-BEGIN = "// ASSIGNMENTS BEGIN"
-END = "// ASSIGNMENTS END"
-
-# Kept in step with CHANNEL_FALLBACK_LO/HI in the header. Channel 0 is excluded
-# on purpose -- see the comment there.
-CHAN_LO, CHAN_HI = 1, 12
+# Per-table settings. `lo`/`hi` bound the value; `names` is how a value is shown
+# and how the tool talks about it. The channel range is kept in step with
+# CHANNEL_FALLBACK_LO/HI in the header -- channel 0 is excluded on purpose, see
+# the comment there. Displays are dense from 0 and named after ScreenDisplay.
+KINDS = {
+    "channel": dict(begin="// ASSIGNMENTS BEGIN", end="// ASSIGNMENTS END",
+                    lo=1, hi=12, names=None, prefix="N"),
+    "display": dict(begin="// DISPLAYS BEGIN", end="// DISPLAYS END",
+                    lo=0, hi=1, names=["counter", "ranking"], prefix="X"),
+}
 
 ROW_RE = re.compile(r"\{\s*0x([0-9A-Fa-f]{1,4})\s*,\s*(\d+)\s*\}")
 
@@ -59,19 +71,24 @@ def parse_id(text):
 
 
 class Table(object):
-    def __init__(self, path):
+    def __init__(self, path, kind="channel"):
+        self.kind = kind
+        spec = KINDS[kind]
+        self.BEGIN, self.END = spec["begin"], spec["end"]
+        self.lo, self.hi = spec["lo"], spec["hi"]
+        self.names, self.prefix = spec["names"], spec["prefix"]
         self.path = path
         with open(path, "r", encoding="utf-8") as fh:
             self.text = fh.read()
         try:
-            self.head_end = self.text.index(BEGIN) + len(BEGIN)
-            self.tail_start = self.text.index(END, self.head_end)
+            self.head_end = self.text.index(self.BEGIN) + len(self.BEGIN)
+            self.tail_start = self.text.index(self.END, self.head_end)
         except ValueError:
             raise SystemExit(
                 "%s: could not find the '%s' / '%s' markers.\n"
                 "The table is managed between those two lines; if they were "
                 "removed, restore them inside CHANNEL_ASSIGNMENT[]."
-                % (path, BEGIN, END))
+                % (path, self.BEGIN, self.END))
         # Everything between the markers, minus the END line's indentation.
         block = self.text[self.head_end:self.tail_start]
         self.rows = []                  # list of (id, channel, name|None)
@@ -94,11 +111,26 @@ class Table(object):
         return {r[1] for r in self.rows}
 
     def next_free(self):
-        used = self.used_channels()
-        for c in range(CHAN_LO, CHAN_HI + 1):
-            if c not in used:
-                return c
-        return None
+        """Channels are exclusive, displays are not.
+
+        A rope needs a channel of its own, so a full channel table is an error
+        worth stopping for. Two screens showing the same display is merely
+        redundant, so displays cycle by least-used: the second screen added
+        differs from the first without anyone asking for that, which is the
+        whole reason to have more than one screen.
+        """
+        counts = {}
+        for v in range(self.lo, self.hi + 1):
+            counts[v] = 0
+        for r in self.rows:
+            if r[1] in counts:
+                counts[r[1]] += 1
+        free = [v for v in sorted(counts) if counts[v] == 0]
+        if free:
+            return free[0]
+        if self.kind == "channel":
+            return None
+        return min(sorted(counts), key=lambda v: counts[v])
 
     def add(self, wanted):
         """wanted: list of (id, name). Returns list of (id, channel, name)."""
@@ -110,11 +142,10 @@ class Table(object):
             chan = self.next_free()
             if chan is None:
                 raise SystemExit(
-                    "No free channel left: %d of %d (channels %d-%d) are taken.\n"
+                    "No free channel left: all %d (channels %d-%d) are taken.\n"
                     "Board 0x%04X cannot be assigned. Free one by removing a "
                     "retired board from the table in %s."
-                    % (len(self.used_channels()), CHAN_HI - CHAN_LO + 1,
-                       CHAN_LO, CHAN_HI, dev_id, self.path))
+                    % (self.hi - self.lo + 1, self.lo, self.hi, dev_id, self.path))
             row = (dev_id, chan, name)
             self.rows.append(row)
             listed[dev_id] = row
@@ -126,7 +157,7 @@ class Table(object):
             return "\n"
         out = ["\n"]
         for dev_id, chan, name in sorted(self.rows, key=lambda r: r[1]):
-            label = name or "N-%04X" % dev_id
+            label = name or "%s-%04X" % (self.prefix, dev_id)
             line = "    { 0x%04X, %2d },   // %s" % (dev_id, chan, label)
             out.append(line.rstrip() + "\n")
         out.append("    ")
@@ -159,8 +190,10 @@ class Table(object):
             seen.setdefault(chan, []).append(dev_id)
         for chan, ids in sorted(seen.items()):
             if len(ids) > 1:
+                if self.kind != "channel":
+                    continue      # two screens showing the same display is fine
                 sys.stderr.write(
-                    "warning: channel %d is shared by %s — those ropes will "
+                    "warning: channel %d is shared by %s -- those ropes will "
                     "report as one\n" % (chan, ", ".join("0x%04X" % i for i in ids)))
 
 
@@ -168,6 +201,7 @@ def main():
     ap = argparse.ArgumentParser(add_help=True, description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--file", default=DEFAULT_HEADER)
+    ap.add_argument("--kind", choices=sorted(KINDS), default="channel")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--add", action="store_true")
@@ -175,11 +209,12 @@ def main():
     ap.add_argument("ids", nargs="*")
     args = ap.parse_args()
 
-    table = Table(args.file)
+    table = Table(args.file, args.kind)
 
     if args.list:
-        for dev_id, chan, name in sorted(table.rows, key=lambda r: r[1]):
-            print("%04X\t%d\t%s" % (dev_id, chan, name or ""))
+        for dev_id, val, name in sorted(table.rows, key=lambda r: r[1]):
+            shown = table.names[val] if table.names and val < len(table.names) else val
+            print("%04X\t%s\t%s" % (dev_id, shown, name or ""))
         table.warn_duplicates()
         return 0
 
@@ -204,10 +239,13 @@ def main():
     added = table.add(wanted)
     table.warn_duplicates()
     if not added:
-        print("Channel table unchanged — all %d board(s) already listed." % len(wanted))
+        print("%s table unchanged - all %d board(s) already listed."
+              % (table.kind.capitalize(), len(wanted)))
         return 0
-    for dev_id, chan, name in added:
-        print("  + 0x%04X -> channel %d%s" % (dev_id, chan, "  (%s)" % name if name else ""))
+    for dev_id, val, name in added:
+        shown = table.names[val] if table.names and val < len(table.names) else val
+        print("  + 0x%04X -> %s %s%s" % (dev_id, table.kind, shown,
+                                         "  (%s)" % name if name else ""))
     if args.dry_run:
         print("Dry run — %s not written." % args.file)
         return 0
