@@ -45,16 +45,18 @@ DEFAULT_HEADER = os.path.join(HERE, os.pardir, "lib", "pulleys_install",
 # and how the tool talks about it. The channel range is kept in step with
 # CHANNEL_FALLBACK_LO/HI in the header -- channel 0 is excluded on purpose, see
 # the comment there. Displays are dense from 0 and named after ScreenDisplay.
-# A column is (name, lo, hi, labels, how). `labels` renders a value as a token
-# in the C source and in listings; None means a bare integer. `how` is "spread"
-# for a value that should differ between boards (a rope wants its own channel)
-# or "fixed" for one with a right answer that only a person knows -- a rope's
-# detection mode depends on how it is rigged, so new rows get the default and
-# wait to be told, rather than being alternated into a plausible-looking lie.
+# A column is (name, lo, hi, labels, how, default). `labels` renders a value as
+# a token in the C source and in listings; None means a bare integer. `how` is
+# "spread" for a value that should differ between boards (a rope wants its own
+# channel) or "fixed" for one with a right answer that only a person knows -- a
+# rope's detection mode depends on how it is rigged, so new rows take `default`
+# and wait to be told, rather than being alternated into a plausible-looking
+# lie. `default` also fills a column absent from an older row, so "unspecified"
+# and "newly added" mean the same thing.
 COLUMNS = {
-    "channel": [("channel", 1, 12, None, "spread"),
-                ("mode", 0, 1, ["ROT", "LIN"], "fixed")],
-    "display": [("display", 0, 1, ["SCREEN_COUNTER", "SCREEN_RANKING"], "spread")],
+    "channel": [("channel", 1, 12, None, "spread", 1),
+                ("mode", 0, 1, ["ROT", "LIN"], "fixed", 1)],
+    "display": [("display", 0, 1, ["SCREEN_COUNTER", "SCREEN_RANKING"], "spread", 0)],
 }
 
 KINDS = {
@@ -123,9 +125,9 @@ class Table(object):
         columns -- an older table gains a column without needing a migration."""
         toks = [t.strip() for t in text.split(",") if t.strip()]
         vals = []
-        for i, (_, lo, hi, labels, _how) in enumerate(self.cols):
+        for i, (_, lo, hi, labels, _how, dflt) in enumerate(self.cols):
             if i >= len(toks):
-                vals.append(lo)
+                vals.append(dflt)
                 continue
             tok = toks[i]
             if labels and tok in labels:
@@ -146,9 +148,9 @@ class Table(object):
         """What a newly seen board gets: spread columns pick the least-used
         value, fixed columns take their low end and wait for a human."""
         vals = []
-        for i, (_, lo, hi, _labels, how) in enumerate(self.cols):
+        for i, (_, lo, hi, _labels, how, dflt) in enumerate(self.cols):
             if how != "spread":
-                vals.append(lo)
+                vals.append(dflt)
                 continue
             counts = {v: 0 for v in range(lo, hi + 1)}
             for r in self.rows:

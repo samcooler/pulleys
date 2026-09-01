@@ -64,7 +64,7 @@ static pulleys::Detector detector;
 static pulleys::PatternSlot patSlot;
 
 static uint8_t  myChannel = 0;
-static uint8_t  myMode    = pulleys::SENSOR_MODE_ROTATION;
+static uint8_t  myMode    = pulleys::SENSOR_MODE_LINEAR;
 static float    myRotDeg  = 180.0f;
 static uint32_t holdUntil = 0;    // envelope stays up until this moment
 static float    ledEnv    = 0.0f; // 0 = dark/idle pixels, 1 = full pattern
@@ -91,7 +91,7 @@ static void loadConfig() {
     // the default they look identical, and a whole crate of freshly flashed
     // boards silently piles onto channel 0.
     uint8_t stored = p.getUChar("ch", 0xFF);
-    myMode    = p.getUChar("mode", pulleys::SENSOR_MODE_ROTATION);
+    myMode    = p.getUChar("mode", pulleys::SENSOR_MODE_LINEAR);
     myRotDeg  = p.getFloat("rot",  180.0f);
     p.end();
     if (stored <= 15) { myChannel = stored; chanSource = CHAN_NVS; }

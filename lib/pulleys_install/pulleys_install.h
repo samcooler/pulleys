@@ -40,7 +40,9 @@ namespace pulleys {
 //
 // ROT counts turns of the pulley; LIN watches for a pull along a learned axis.
 // Which one a rope wants is a fact about how it is rigged, so it belongs here
-// beside the channel rather than in the board's NVS.
+// beside the channel rather than in the board's NVS. LIN is the default, for
+// new rows and for a board nobody has listed: most ropes are pulled rather
+// than spun, so it is the answer that is right more often when nobody has said.
 static constexpr uint8_t ROT = 0;
 static constexpr uint8_t LIN = 1;
 
