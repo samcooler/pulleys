@@ -79,9 +79,13 @@ class Table(object):
             m = ROW_RE.search(line)
             if not m:
                 continue
-            cm = re.search(r"//\s*(\S+)", line[m.end():])
-            self.rows.append((int(m.group(1), 16), int(m.group(2)),
-                              cm.group(1) if cm else None))
+            # Keep the whole trailing comment, not just the name token. Hand
+            # edits are a first-class way into this table, and "// N-EC52 west
+            # rope" is exactly the note someone leaves at a desk; silently
+            # truncating it on the next run would punish the careful path.
+            cm = re.search(r"//\s*(.*?)\s*$", line[m.end():])
+            note = cm.group(1) if cm and cm.group(1) else None
+            self.rows.append((int(m.group(1), 16), int(m.group(2)), note))
 
     def by_id(self):
         return {r[0]: r for r in self.rows}
@@ -120,11 +124,11 @@ class Table(object):
     def render(self):
         if not self.rows:
             return "\n"
-        width = max(len(r[2] or "") for r in self.rows)
         out = ["\n"]
         for dev_id, chan, name in sorted(self.rows, key=lambda r: r[1]):
-            label = (name or "N-%04X" % dev_id).ljust(width)
-            out.append("    { 0x%04X, %2d },   // %s\n" % (dev_id, chan, label))
+            label = name or "N-%04X" % dev_id
+            line = "    { 0x%04X, %2d },   // %s" % (dev_id, chan, label)
+            out.append(line.rstrip() + "\n")
         out.append("    ")
         return "".join(out)
 

@@ -70,11 +70,22 @@ inline PulleysCulture channel_culture(uint8_t ch) {
 // dead one was on. Keyed by the device ID identity_init() derives from the MAC,
 // which is the same ID the board prints in its whoami line.
 //
-// DO NOT HAND-EDIT during an install. ./flash_all.sh with no arguments adds
-// every attached board that is missing, assigning the lowest free channel, and
-// reflashes with the result — see tools/assign_channels.py, which owns this
-// block. Editing it by hand is for deliberately moving a board to a different
-// rope, at a desk, on purpose.
+// Two ways in, both intended, for two different moments:
+//
+//   ./flash_all.sh with no arguments — the install. Adds every attached board
+//   that is missing at the lowest free channel and reflashes with the result.
+//   It does not know or care which rope is which; it exists so that a crate of
+//   boards works at all, unattended, without anyone deciding anything.
+//
+//   Editing this block by hand — the calm moment. Which board drives which
+//   rope is a judgement about the physical piece that nothing can infer from a
+//   MAC address, so setting it deliberately is the better answer, not a
+//   deviation from the tool's. Reflash afterwards.
+//
+// The two do not fight: assign_channels.py only ever adds IDs it does not
+// already find here, so a channel you set by hand survives every later run.
+// Keep the marker comments, keep channels within the fallback range, and give
+// two boards the same channel only if you mean those ropes to read as one.
 struct ChannelAssignment { uint16_t id; uint8_t channel; };
 
 static const ChannelAssignment CHANNEL_ASSIGNMENT[] = {
