@@ -252,24 +252,57 @@ else
     fi
 
     # 1. register any board the install map does not know yet
-    typeset -a dry
-    [[ "$LIST_ONLY" == true ]] && dry=("--dry-run")
-    if [[ ${#prov_specs[@]} -gt 0 ]]; then
-      echo "\nChannel table:"
-      python3 "$ASSIGN" --add --kind channel "${dry[@]}" "${prov_specs[@]}" | sed 's/^/  /'
-    fi
-    if [[ ${#prov_disp[@]} -gt 0 ]]; then
-      echo "\nDisplay table:"
-      python3 "$ASSIGN" --add --kind display "${dry[@]}" "${prov_disp[@]}" | sed 's/^/  /'
+    if [[ "$LIST_ONLY" == false ]]; then
+      if [[ ${#prov_specs[@]} -gt 0 ]]; then
+        echo "\nChannel table:"
+        python3 "$ASSIGN" --add --kind channel "${prov_specs[@]}" | sed 's/^/  /'
+      fi
+      if [[ ${#prov_disp[@]} -gt 0 ]]; then
+        echo "\nDisplay table:"
+        python3 "$ASSIGN" --add --kind display "${prov_disp[@]}" | sed 's/^/  /'
+      fi
     fi
 
     if [[ "$LIST_ONLY" == true ]]; then
-      echo "\nWould provision ${#prov_ports[@]} board(s):"
-      for i in {1..${#prov_ports[@]}}; do
-        echo "  ${prov_ports[$i]} ← ${prov_envs[$i]}"
+      # The point of -l is deciding whether to edit the map before flashing, so
+      # show each board beside the entry it has or would get — not just a count.
+      echo "\nAttached boards and their install-map entries:"
+      printf "  %-22s %-8s %-6s %-7s %-22s %s\n" \
+             "PORT" "NAME" "ID" "ROLE" "ENTRY" "STATUS"
+      # Resolve each table in one call so the preview allocates exactly as a
+      # real run would; asking per board would show two new sensors the same
+      # channel, since neither call would know about the other.
+      typeset -A resolved
+      for kind spec_list in channel "${prov_specs[*]}" display "${prov_disp[*]}"; do
+        [[ -z "$spec_list" ]] && continue
+        while IFS=$'\t' read -r rid rstate rvals; do
+          [[ -z "$rid" ]] && continue
+          resolved[$rid]="$rstate"$'\t'"$rvals"
+        done < <(python3 "$ASSIGN" --resolve --kind "$kind" ${=spec_list} 2>/dev/null)
       done
-      [[ ${#prov_unknown[@]} -gt 0 ]] && \
-        echo "  (${#prov_unknown[@]} silent board(s) would need a second pass to register)"
+
+      for i in {1..${#prov_ports[@]}}; do
+        port="${prov_ports[$i]}"; tenv="${prov_envs[$i]}"
+        pid="?"; pname="?"
+        for row in "${ROWS[@]}"; do
+          if [[ "$(row_field "$row" 1)" == "$port" ]]; then
+            pid=$(row_field "$row" 5); pname=$(row_field "$row" 7)
+          fi
+        done
+        entry="—"; stat="silent — registered after flashing"   # not `status`: read-only in zsh
+        if [[ -n "${resolved[${pid:u}]:-}" ]]; then
+          state="${${resolved[${pid:u}]}%%$'\t'*}"
+          entry="${${resolved[${pid:u}]}#*$'\t'}"
+          if [[ "$state" == "listed" ]]; then stat="listed"
+          else stat="new — would be added"; fi
+        elif [[ "$tenv" != "sensor" && "$tenv" != "screen" ]]; then
+          entry="n/a"; stat="no entry needed"
+        fi
+        printf "  %-22s %-8s %-6s %-7s %-22s %s\n" \
+               "$port" "$pname" "$pid" "$tenv" "$entry" "$stat"
+      done
+      echo "\nEdit lib/pulleys_install/pulleys_install.h to change any of these,"
+      echo "then re-run. Nothing above has been written or flashed."
       exit 0
     fi
 

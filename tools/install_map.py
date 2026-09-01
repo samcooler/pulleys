@@ -16,6 +16,9 @@ exists, so a value set by hand at a desk outlives every later run.
                                               table, least-used value first
     install_map.py --add --kind display ID…   same, for the display table
     install_map.py --check ID [ID ...]        exit 1 if any ID is missing
+    install_map.py --resolve ID [ID ...]      print what each ID has, or would
+                                              get if added — the listing a
+                                              flash run shows before writing
     --kind channel|display    which table (default: channel)
     --dry-run                 say what would change, write nothing
     --file PATH               override the header location
@@ -42,14 +45,26 @@ DEFAULT_HEADER = os.path.join(HERE, os.pardir, "lib", "pulleys_install",
 # and how the tool talks about it. The channel range is kept in step with
 # CHANNEL_FALLBACK_LO/HI in the header -- channel 0 is excluded on purpose, see
 # the comment there. Displays are dense from 0 and named after ScreenDisplay.
-KINDS = {
-    "channel": dict(begin="// ASSIGNMENTS BEGIN", end="// ASSIGNMENTS END",
-                    lo=1, hi=12, names=None, prefix="N"),
-    "display": dict(begin="// DISPLAYS BEGIN", end="// DISPLAYS END",
-                    lo=0, hi=1, names=["counter", "ranking"], prefix="X"),
+# A column is (name, lo, hi, labels, how). `labels` renders a value as a token
+# in the C source and in listings; None means a bare integer. `how` is "spread"
+# for a value that should differ between boards (a rope wants its own channel)
+# or "fixed" for one with a right answer that only a person knows -- a rope's
+# detection mode depends on how it is rigged, so new rows get the default and
+# wait to be told, rather than being alternated into a plausible-looking lie.
+COLUMNS = {
+    "channel": [("channel", 1, 12, None, "spread"),
+                ("mode", 0, 1, ["ROT", "LIN"], "fixed")],
+    "display": [("display", 0, 1, ["SCREEN_COUNTER", "SCREEN_RANKING"], "spread")],
 }
 
-ROW_RE = re.compile(r"\{\s*0x([0-9A-Fa-f]{1,4})\s*,\s*(\d+)\s*\}")
+KINDS = {
+    "channel": dict(begin="// ASSIGNMENTS BEGIN", end="// ASSIGNMENTS END",
+                    prefix="N"),
+    "display": dict(begin="// DISPLAYS BEGIN", end="// DISPLAYS END",
+                    prefix="X"),
+}
+
+ROW_RE = re.compile(r"\{\s*0x([0-9A-Fa-f]{1,4})\s*,([^}]*)\}")
 
 
 def parse_id(text):
@@ -73,8 +88,8 @@ class Table(object):
         self.kind = kind
         spec = KINDS[kind]
         self.BEGIN, self.END = spec["begin"], spec["end"]
-        self.lo, self.hi = spec["lo"], spec["hi"]
-        self.names, self.prefix = spec["names"], spec["prefix"]
+        self.cols = COLUMNS[kind]
+        self.prefix = spec["prefix"]
         self.path = path
         with open(path, "r", encoding="utf-8") as fh:
             self.text = fh.read()
@@ -100,25 +115,50 @@ class Table(object):
             # truncating it on the next run would punish the careful path.
             cm = re.search(r"//\s*(.*?)\s*$", line[m.end():])
             note = cm.group(1) if cm and cm.group(1) else None
-            self.rows.append((int(m.group(1), 16), int(m.group(2)), note))
+            self.rows.append((int(m.group(1), 16),
+                              self.parse_values(m.group(2)), note))
+
+    def parse_values(self, text):
+        """Values as written in the C row, tolerant of a row missing later
+        columns -- an older table gains a column without needing a migration."""
+        toks = [t.strip() for t in text.split(",") if t.strip()]
+        vals = []
+        for i, (_, lo, hi, labels, _how) in enumerate(self.cols):
+            if i >= len(toks):
+                vals.append(lo)
+                continue
+            tok = toks[i]
+            if labels and tok in labels:
+                vals.append(labels.index(tok))
+            else:
+                try:
+                    vals.append(int(tok, 0))
+                except ValueError:
+                    raise SystemExit("%s: cannot read %r in row %r"
+                                     % (self.path, tok, text.strip()))
+        return vals
+
+    def render_value(self, i, v):
+        labels = self.cols[i][3]
+        return labels[v] if labels and 0 <= v < len(labels) else v
+
+    def default_values(self):
+        """What a newly seen board gets: spread columns pick the least-used
+        value, fixed columns take their low end and wait for a human."""
+        vals = []
+        for i, (_, lo, hi, _labels, how) in enumerate(self.cols):
+            if how != "spread":
+                vals.append(lo)
+                continue
+            counts = {v: 0 for v in range(lo, hi + 1)}
+            for r in self.rows:
+                if i < len(r[1]) and r[1][i] in counts:
+                    counts[r[1][i]] += 1
+            vals.append(min(sorted(counts), key=lambda v: counts[v]))
+        return vals
 
     def by_id(self):
         return {r[0]: r for r in self.rows}
-
-    def next_free(self):
-        """Lowest unused value, or the least-used one once they are all taken.
-
-        Sharing is legitimate for both tables: several ropes on one channel
-        report as one rope, which is a thing you might want of a cluster, and
-        two screens can perfectly well show the same display. So running out of
-        distinct values is not an error -- it just means new boards start
-        doubling up, spread as evenly as the existing rows allow.
-        """
-        counts = {v: 0 for v in range(self.lo, self.hi + 1)}
-        for r in self.rows:
-            if r[1] in counts:
-                counts[r[1]] += 1
-        return min(sorted(counts), key=lambda v: counts[v])
 
     def add(self, wanted):
         """wanted: list of (id, name). Returns list of (id, channel, name)."""
@@ -127,7 +167,7 @@ class Table(object):
         for dev_id, name in wanted:
             if dev_id in listed:
                 continue
-            row = (dev_id, self.next_free(), name)
+            row = (dev_id, self.default_values(), name)
             self.rows.append(row)
             listed[dev_id] = row
             added.append(row)
@@ -136,11 +176,16 @@ class Table(object):
     def render(self):
         if not self.rows:
             return "\n"
+        # Column widths so the block stays a readable grid when hand-edited.
+        cells = []
+        for dev_id, vals, name in sorted(self.rows, key=lambda r: r[1]):
+            cells.append([str(self.render_value(i, v)) for i, v in enumerate(vals)])
+        widths = [max(len(c[i]) for c in cells) for i in range(len(self.cols))]
         out = ["\n"]
-        for dev_id, chan, name in sorted(self.rows, key=lambda r: r[1]):
+        for (dev_id, vals, name), cs in zip(sorted(self.rows, key=lambda r: r[1]), cells):
             label = name or "%s-%04X" % (self.prefix, dev_id)
-            line = "    { 0x%04X, %2d },   // %s" % (dev_id, chan, label)
-            out.append(line.rstrip() + "\n")
+            body = ", ".join(c.rjust(widths[i]) for i, c in enumerate(cs))
+            out.append(("    { 0x%04X, %s },   // %s" % (dev_id, body, label)).rstrip() + "\n")
         out.append("    ")
         return "".join(out)
 
@@ -173,6 +218,8 @@ def main():
     ap.add_argument("--kind", choices=sorted(KINDS), default="channel")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--resolve", action="store_true",
+                    help="print each ID's current or would-be values")
     ap.add_argument("--add", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("ids", nargs="*")
@@ -181,8 +228,8 @@ def main():
     table = Table(args.file, args.kind)
 
     if args.list:
-        for dev_id, val, name in sorted(table.rows, key=lambda r: r[1]):
-            shown = table.names[val] if table.names and val < len(table.names) else val
+        for dev_id, vals, name in sorted(table.rows, key=lambda r: r[1]):
+            shown = "\t".join(str(table.render_value(i, v)) for i, v in enumerate(vals))
             print("%04X\t%s\t%s" % (dev_id, shown, name or ""))
         return 0
 
@@ -192,6 +239,23 @@ def main():
         sys.stderr.write("%s\n" % e)
         return 2
 
+    if args.resolve:
+        # Resolve the whole set in one go, accumulating as it goes: a preview
+        # that showed two new boards the same channel because each was asked
+        # about in isolation would be worse than no preview at all.
+        listed = table.by_id()
+        for dev_id, name in wanted:
+            row = listed.get(dev_id)
+            if row:
+                vals, state = row[1], "listed"
+            else:
+                vals, state = table.default_values(), "new"
+                table.rows.append((dev_id, vals, name))
+                listed[dev_id] = table.rows[-1]
+            shown = " ".join(str(table.render_value(i, v)) for i, v in enumerate(vals))
+            print("%04X\t%s\t%s" % (dev_id, state, shown))
+        return 0   # nothing written: table.write() is never called on this path
+
     if args.check:
         listed = table.by_id()
         missing = [i for i, _ in wanted if i not in listed]
@@ -200,7 +264,7 @@ def main():
         return 1 if missing else 0
 
     if not args.add:
-        ap.error("nothing to do: pass --list, --check, or --add")
+        ap.error("nothing to do: pass --list, --resolve, --check, or --add")
     if not wanted:
         ap.error("--add needs at least one device ID")
 
@@ -209,10 +273,11 @@ def main():
         print("%s table unchanged - all %d board(s) already listed."
               % (table.kind.capitalize(), len(wanted)))
         return 0
-    for dev_id, val, name in added:
-        shown = table.names[val] if table.names and val < len(table.names) else val
-        print("  + 0x%04X -> %s %s%s" % (dev_id, table.kind, shown,
-                                         "  (%s)" % name if name else ""))
+    for dev_id, vals, name in added:
+        shown = " ".join("%s=%s" % (table.cols[i][0], table.render_value(i, v))
+                         for i, v in enumerate(vals))
+        print("  + 0x%04X -> %s%s" % (dev_id, shown,
+                                      "  (%s)" % name if name else ""))
     if args.dry_run:
         print("Dry run — %s not written." % args.file)
         return 0

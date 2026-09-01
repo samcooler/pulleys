@@ -33,17 +33,31 @@
 
 namespace pulleys {
 
-// ── Sensors: which rope ───────────────────────────────────────────────────────
+// ── Sensors: which rope, and how it is read ───────────────────────────────────
+// Detection mode. These mirror SENSOR_MODE_ROTATION / _LINEAR in pulleys_mesh.h
+// rather than including it — this header is meant to stay free of the radio —
+// and src/sensor/main.cpp static_asserts that they still agree.
+//
+// ROT counts turns of the pulley; LIN watches for a pull along a learned axis.
+// Which one a rope wants is a fact about how it is rigged, so it belongs here
+// beside the channel rather than in the board's NVS.
+static constexpr uint8_t ROT = 0;
+static constexpr uint8_t LIN = 1;
+
+inline const char* sensor_mode_name(uint8_t m) { return m == LIN ? "lin" : "rot"; }
+
+
 // Several boards may share a channel, and that is a real configuration rather
 // than a mistake: ropes on one channel report as one rope, which is what you
 // want of a cluster meant to read as a single thing. New boards are given the
 // least-used channel, so sharing happens when you ask for it or when there are
 // more ropes than channels — not by accident.
-struct ChannelAssignment { uint16_t id; uint8_t channel; };
+struct ChannelAssignment { uint16_t id; uint8_t channel; uint8_t mode; };
 
 static const ChannelAssignment CHANNEL_ASSIGNMENT[] = {
+    //   id     ch  mode
     // ASSIGNMENTS BEGIN
-    { 0xEC52,  1 },   // N-EC52
+    { 0xEC52, 1, ROT },   // N-EC52
     // ASSIGNMENTS END
 };
 static constexpr uint8_t CHANNEL_ASSIGNMENT_COUNT =
@@ -69,12 +83,23 @@ inline uint8_t channel_from_id(uint16_t id) {
     return (uint8_t)(CHANNEL_FALLBACK_LO + (h % span));
 }
 
+// The row for this board, or nullptr if it is not in the table.
+inline const ChannelAssignment* sensor_row(uint16_t id) {
+    for (uint8_t i = 0; i < CHANNEL_ASSIGNMENT_COUNT; i++)
+        if (CHANNEL_ASSIGNMENT[i].id == id) return &CHANNEL_ASSIGNMENT[i];
+    return nullptr;
+}
+
 // The channel this board is assigned, or -1 if it is not in the table.
 inline int8_t channel_for_device(uint16_t id) {
-    for (uint8_t i = 0; i < CHANNEL_ASSIGNMENT_COUNT; i++)
-        if (CHANNEL_ASSIGNMENT[i].id == id)
-            return (int8_t)CHANNEL_ASSIGNMENT[i].channel;
-    return -1;
+    const ChannelAssignment* r = sensor_row(id);
+    return r ? (int8_t)r->channel : (int8_t)-1;
+}
+
+// The detection mode this board is assigned, or -1 if it is not in the table.
+inline int8_t mode_for_device(uint16_t id) {
+    const ChannelAssignment* r = sensor_row(id);
+    return r ? (int8_t)r->mode : (int8_t)-1;
 }
 
 // ── Screens: which display ────────────────────────────────────────────────────

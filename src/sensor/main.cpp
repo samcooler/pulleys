@@ -75,6 +75,12 @@ static uint32_t heardCount = 0;
 // settled, NVS is someone's field fix, HASH is a guess that works.
 enum ChanSource : uint8_t { CHAN_LISTED, CHAN_NVS, CHAN_HASH };
 static ChanSource chanSource = CHAN_HASH;
+static ChanSource modeSource = CHAN_NVS;   // mode has no hash fallback; see below
+
+// The install map mirrors these rather than including the radio header, so
+// check here — where both are visible — that the two have not drifted apart.
+static_assert(pulleys::ROT == pulleys::SENSOR_MODE_ROTATION, "ROT/SENSOR_MODE_ROTATION disagree");
+static_assert(pulleys::LIN == pulleys::SENSOR_MODE_LINEAR,   "LIN/SENSOR_MODE_LINEAR disagree");
 
 // ── Config persistence ────────────────────────────────────────────────────────
 static void loadConfig() {
@@ -106,6 +112,15 @@ static void saveConfig() {
 static void applyChannelAssignment() {
     uint16_t id     = pulleys::identity_id();
     int8_t assigned = pulleys::channel_for_device(id);
+    // Mode is taken from the same row, and unlike the channel it has no
+    // sensible fallback: guessing how a rope is rigged would be worse than
+    // keeping whatever was set by hand, so an unlisted board keeps its NVS mode.
+    int8_t listedMode = pulleys::mode_for_device(id);
+    if (listedMode >= 0) {
+        myMode     = (uint8_t)listedMode;
+        modeSource = CHAN_LISTED;
+    }
+
     if (assigned >= 0) {
         myChannel  = (uint8_t)assigned;
         chanSource = CHAN_LISTED;
@@ -145,11 +160,12 @@ static void onMeshEvent(const pulleys::MeshEvent& ev, bool relayed) {
 
 // ── Serial console — field config without a reflash ───────────────────────────
 static void printConfig() {
-    Serial.printf("  CONFIG  channel=%d (%s)  mode=%s  rotThreshold=%.0f deg\n",
+    Serial.printf("  CONFIG  channel=%d (%s)  mode=%s (%s)  rotThreshold=%.0f deg\n",
                   myChannel, chanSource == CHAN_LISTED ? "listed"
                            : chanSource == CHAN_NVS    ? "set over serial"
                                                        : "UNLISTED — hashed from ID",
                   myMode == pulleys::SENSOR_MODE_ROTATION ? "ROTATION" : "LINEAR",
+                  modeSource == CHAN_LISTED ? "listed" : "set over serial",
                   myRotDeg);
 }
 
@@ -176,7 +192,13 @@ static void handleSerial() {
                 }
             } else if (buf[0] == 'm') {          // "m0" rotation, "m1" linear
                 int v = atoi(buf + 1);
-                if (v == 0 || v == 1) { myMode = v; saveConfig(); applyConfig(); }
+                if (v == 0 || v == 1) {
+                    myMode = v; modeSource = CHAN_NVS;
+                    saveConfig(); applyConfig();
+                    if (pulleys::mode_for_device(pulleys::identity_id()) >= 0)
+                        Serial.printf("  ! this board's mode is listed;"
+                                      " the table wins again at next boot\n");
+                }
             } else if (buf[0] == 'r') {          // "r260" → rotation threshold
                 int v = atoi(buf + 1);
                 if (v >= 30 && v <= 720) { myRotDeg = v; saveConfig(); applyConfig(); }
