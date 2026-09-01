@@ -1,185 +1,218 @@
 #!/usr/bin/env zsh
 # Flash connected boards in parallel using esptool.py directly.
-# Usage: ./flash_all.sh [env] [-r] [-l] [-p <port>] [--any]
-#   env:       platformio environment (default: traveler)
-#   -r:        reset only — no flash write
-#   -l:        list detected boards and exit (no flash, no reset)
-#   -p <port>: flash only this port (repeatable); skips detection
-#   --any:     skip the board-class check and flash every port of the right chip
 #
-# Board detection
-# ---------------
-# Port names do not say what is on the other end, and several roles share a
-# chip, so flashing "every usbmodem" once meant pushing sensor firmware onto an
-# arbiter. This script now asks each board what it is (esptool --chip auto) and
-# only writes to boards whose hardware class matches the target env.
+# Usage: ./flash_all.sh [env] [options]
+#   env            platformio environment (default: sensor)
+#   -l, --list     list what is connected and exit — no flash, no reset
+#   -r, --reset    reset only, no flash write
+#   -p <port>      flash only this port (repeatable); skips detection
+#   -i <id>        flash only the board with this device ID / name / MAC
+#                  (e.g. -i A855, -i N-A855, -i 3C:0F:02:E4:52:2D)
+#   --auto         reflash every identified board with the env it already runs
+#   --any          skip the hardware-class check
 #
-# Detection reads chip type + flash size, giving these classes:
-#   s3_16mb  ESP32-S3, 16MB flash, 8MB PSRAM   → arbiter, arbiter_mesh
-#   s3_4mb   ESP32-S3, 4MB flash, 2MB PSRAM    → traveler, sensor
-#   c3       ESP32-C3                          → station
-#   esp32    ESP32-D0WD (WROOM / D1 Mini)      → station_wroom, screen
+# How a board is identified
+# -------------------------
+# Port names say nothing about what is on the other end, so the board is asked.
+# Every role answers "?" on serial with one PULLEYS-ID line (lib/pulleys_whoami,
+# probed by tools/identify.py) carrying:
 #
-# Hardware cannot distinguish two roles on the same class (sensor vs traveler,
-# screen vs station_wroom) — the env argument settles that. What detection does
-# guarantee is that a 16MB arbiter never receives a 4MB sensor image.
+#   class  hardware class — s3_16mb | s3_4mb | c3 | esp32. Decides whether an
+#          image can fit, and is read from the live chip, so it stays true even
+#          when the firmware on it is the wrong role.
+#   role   PULLEYS_TYPE_* enum name, plus `env`: the firmware it is RUNNING.
+#          Together these separate what the enum alone cannot (arbiter vs
+#          arbiter_mesh, station vs station_wroom).
+#   id     stable MAC-derived device ID, for addressing one specific board.
 #
-# Build first with: pio run -e <env>
-# Then flash all matching boards: ./flash_all.sh <env>
+# A board that does not answer — blank, crashed, or non-Pulleys firmware — falls
+# back to an esptool hardware probe, which still yields `class`. That is enough
+# to flash safely: class is the safety net, and the env argument names the role.
 
 set -euo pipefail
 
 RESET_ONLY=false
 LIST_ONLY=false
 SKIP_CLASS_CHECK=false
-ENV="traveler"
+AUTO_ENV=false
+ENV="sensor"
+ENV_GIVEN=false
 ONLY_PORTS=()
-expect_port=false
+ONLY_IDS=()
+expect=""
 for arg in "$@"; do
-  if [[ "$expect_port" == true ]]; then
-    ONLY_PORTS+=("$arg"); expect_port=false
-  elif [[ "$arg" == "-r" || "$arg" == "--reset" ]]; then
-    RESET_ONLY=true
-  elif [[ "$arg" == "-l" || "$arg" == "--list" ]]; then
-    LIST_ONLY=true
-  elif [[ "$arg" == "--any" ]]; then
-    SKIP_CLASS_CHECK=true
-  elif [[ "$arg" == "-p" || "$arg" == "--port" ]]; then
-    expect_port=true
+  if [[ -n "$expect" ]]; then
+    case "$expect" in
+      port) ONLY_PORTS+=("$arg") ;;
+      id)   ONLY_IDS+=("${arg:u}") ;;
+    esac
+    expect=""
   else
-    ENV="$arg"
+    case "$arg" in
+      -r|--reset) RESET_ONLY=true ;;
+      -l|--list)  LIST_ONLY=true ;;
+      --any)      SKIP_CLASS_CHECK=true ;;
+      --auto)     AUTO_ENV=true ;;
+      -p|--port)  expect="port" ;;
+      -i|--id)    expect="id" ;;
+      *)          ENV="$arg"; ENV_GIVEN=true ;;
+    esac
   fi
 done
-BUILD=".pio/build/$ENV"
+
 PYTHON="/Users/sam/.platformio/penv/bin/python"
 ESPTOOL="/Users/sam/.platformio/packages/tool-esptoolpy/esptool.py"
 BOOT_APP="/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
+IDENTIFY="${0:A:h}/tools/identify.py"
 
-# Auto-detect chip, bootloader address, flash mode/size from environment name,
-# plus the board class that env is allowed to be written to.
-case "$ENV" in
-  station_wroom) CHIP="esp32";   BOOT_ADDR="0x1000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="esp32"   ;;
-  screen)        CHIP="esp32";   BOOT_ADDR="0x1000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="esp32"   ;;
-  station*)      CHIP="esp32c3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="c3"      ;;
-  arbiter*)      CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="16MB"; WANT_CLASS="s3_16mb" ;;
-  *)             CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="s3_4mb"  ;;
-esac
+# Per-env flash geometry, and the hardware class the env may be written to.
+# Sets: CHIP BOOT_ADDR FLASH_MODE FLASH_SIZE WANT_CLASS
+env_params() {
+  case "$1" in
+    station_wroom|screen) CHIP="esp32";   BOOT_ADDR="0x1000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="esp32"   ;;
+    station)              CHIP="esp32c3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="c3"      ;;
+    arbiter*)             CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="16MB"; WANT_CLASS="s3_16mb" ;;
+    *)                    CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="s3_4mb"  ;;
+  esac
+}
+env_params "$ENV"
 
-# Which envs each class can legitimately carry — used for the -l listing only.
 class_roles() {
   case "$1" in
-    s3_16mb) echo "arbiter | arbiter_mesh" ;;
-    s3_4mb)  echo "traveler | sensor"      ;;
-    c3)      echo "station"                ;;
-    esp32)   echo "station_wroom | screen" ;;
+    s3_16mb) echo "arbiter_mesh"           ;;
+    s3_4mb)  echo "sensor (traveler dep.)" ;;
+    c3)      echo "station (deprecated)"   ;;
+    esp32)   echo "screen (st_wroom dep.)" ;;
     *)       echo "unknown"                ;;
   esac
 }
 
-# Ask one board what it is. Echoes "<class>\t<chip text>\t<flash>\t<mac>", or
-# "unknown" when the port does not answer the ESP bootloader handshake (a
-# Bluetooth tty, a board held in reset, an unplugged cable).
-# Detection uses hard_reset so a probed board resumes running its firmware
-# rather than being left parked in the bootloader.
-detect_port() {
-  local port="$1" out chip flash mac psram cls
+# ── esptool fallback: hardware class only, for boards that stay silent ────────
+# Uses hard_reset so a probed board resumes running rather than parking in the
+# bootloader.
+detect_class_hw() {
+  local port="$1" out chip flash psram
   set +e
   out=$("$PYTHON" "$ESPTOOL" --chip auto --port "$port" \
         --before default_reset --after hard_reset flash_id 2>&1)
   local rc=$?
   set -e
-  if [[ $rc -ne 0 ]]; then
-    print -r -- $'unknown\t-\t-\t-'
-    return 0
-  fi
+  [[ $rc -ne 0 ]] && { echo "?"; return 0; }
   chip=$(echo "$out"  | sed -n 's/^Chip is \(.*\)$/\1/p' | head -1)
   flash=$(echo "$out" | sed -n 's/^Detected flash size: \(.*\)$/\1/p' | head -1)
-  mac=$(echo "$out"   | sed -n 's/^MAC: \(.*\)$/\1/p' | head -1)
   psram=$(echo "$out" | sed -n 's/.*Embedded PSRAM \([0-9]*MB\).*/\1/p' | head -1)
-
   case "$chip" in
-    ESP32-S3*)
-      # PSRAM size is the reliable discriminator: an S3 module's flash can read
-      # back as 4MB on a 16MB part if the stub misdetects, but 8MB vs 2MB PSRAM
-      # tracks the two board variants exactly. Fall back to flash size.
-      if [[ "$psram" == "8MB" || "$flash" == "16MB" ]]; then cls="s3_16mb"
-      else cls="s3_4mb"; fi ;;
-    ESP32-C3*) cls="c3"    ;;
-    ESP32-D0WD*|ESP32-*)  cls="esp32" ;;
-    *)         cls="unknown" ;;
+    ESP32-S3*) if [[ "$psram" == "8MB" || "$flash" == "16MB" ]]; then echo "s3_16mb"; else echo "s3_4mb"; fi ;;
+    ESP32-C3*) echo "c3"    ;;
+    ESP32-*)   echo "esp32" ;;
+    *)         echo "?"     ;;
   esac
-  print -r -- "$cls\t${chip:--}\t${flash:--}\t${mac:--}"
 }
 
-# Candidate ports: native-USB parts (C3/S3) enumerate as usbmodem, the WROOM's
-# CH340 as usbserial. Detection then narrows further by actual board class.
-all_candidates=(/dev/cu.usbmodem*(N) /dev/cu.usbserial*(N))
-
-# Probe every candidate in parallel — each probe costs ~2s of serial handshake,
-# and doing them serially is the slowest part of a multi-board flash.
-probe_all() {
-  local tmpdir port
-  tmpdir=$(mktemp -d)
-  for port in "${all_candidates[@]}"; do
-    ( detect_port "$port" > "$tmpdir/${port:t}" ) &
-  done
-  wait
-  for port in "${all_candidates[@]}"; do
-    print -r -- "$port\t$(cat "$tmpdir/${port:t}")"
-  done
-  rm -rf "$tmpdir"
+# ── Build the board table ────────────────────────────────────────────────────
+# Rows are: port class role env id label name mac source
+typeset -a ROWS
+gather() {
+  local line port cls role renv id label name mac source
+  ROWS=()
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    IFS=$'\t' read -r port cls role renv id label name mac source <<< "$line"
+    if [[ "$cls" == "?" ]]; then
+      # Silent or unopenable: fall back to the hardware probe for the class.
+      cls=$(detect_class_hw "$port")
+    fi
+    ROWS+=("$port"$'\t'"$cls"$'\t'"$role"$'\t'"$renv"$'\t'"$id"$'\t'"$label"$'\t'"$name"$'\t'"$mac"$'\t'"$source")
+  done < <("$PYTHON" "$IDENTIFY" "$@" 2>/dev/null)
 }
 
-if [[ ${#all_candidates[@]} -eq 0 ]]; then
-  echo "No USB serial ports found."
-  exit 1
-fi
+row_field() { echo "$1" | cut -f"$2"; }
 
-# -p bypasses detection entirely: an explicit port is the user overriding us.
+print_row() {
+  local marker="$1" row="$2"
+  printf "  %s %-24s %-8s %-9s %-13s %-6s %-8s %-18s %s\n" \
+    "$marker" "$(row_field "$row" 1)" "$(row_field "$row" 2)" "$(row_field "$row" 3)" \
+    "$(row_field "$row" 4)" "$(row_field "$row" 5)" "$(row_field "$row" 7)" \
+    "$(row_field "$row" 8)" "$(row_field "$row" 9)"
+}
+
+print_header() {
+  printf "  %s %-24s %-8s %-9s %-13s %-6s %-8s %-18s %s\n" \
+    " " "PORT" "CLASS" "ROLE" "RUNNING" "ID" "NAME" "MAC" "VIA"
+}
+
+# ── -p: explicit ports bypass detection entirely ─────────────────────────────
 if [[ ${#ONLY_PORTS[@]} -gt 0 ]]; then
   ports=("${ONLY_PORTS[@]}")
+  if [[ "$LIST_ONLY" == true ]]; then echo "Ports: ${ports[*]}"; exit 0; fi
 else
-  echo "Detecting ${#all_candidates[@]} candidate port(s)…"
-  probe_lines=("${(@f)$(probe_all)}")
+  candidates=(/dev/cu.usbmodem*(N) /dev/cu.usbserial*(N))
+  if [[ ${#candidates[@]} -eq 0 ]]; then echo "No USB serial ports found."; exit 1; fi
+  echo "Identifying ${#candidates[@]} board(s) over serial…"
+  gather "${candidates[@]}"
+  print_header
 
-  ports=()
-  for line in "${probe_lines[@]}"; do
-    port=$(echo "$line" | cut -f1)
-    cls=$(echo "$line"  | cut -f2)
-    chip=$(echo "$line" | cut -f3)
-    flash=$(echo "$line" | cut -f4)
-    mac=$(echo "$line"  | cut -f5)
-    if [[ "$cls" == "unknown" ]]; then
-      printf "  %-24s  %s\n" "$port" "no ESP bootloader response — skipped"
-      continue
+  # ── --auto: each board gets the env it already reports running ─────────────
+  if [[ "$AUTO_ENV" == true ]]; then
+    typeset -a auto_ports auto_envs
+    for row in "${ROWS[@]}"; do
+      renv=$(row_field "$row" 4)
+      if [[ "$renv" == "?" || "$renv" == "unknown" ]]; then
+        print_row " " "$row"
+      else
+        print_row "→" "$row"
+        auto_ports+=("$(row_field "$row" 1)"); auto_envs+=("$renv")
+      fi
+    done
+    if [[ ${#auto_ports[@]} -eq 0 ]]; then
+      echo "\nNo board reported an env to reflash. Name an env explicitly."
+      exit 1
     fi
+    if [[ "$LIST_ONLY" == true ]]; then
+      echo "\n--auto would reflash ${#auto_ports[@]} board(s) with their current env."
+      exit 0
+    fi
+    echo "\nReflashing ${#auto_ports[@]} board(s) with their reported env:"
+    rc=0
+    for i in {1..${#auto_ports[@]}}; do
+      echo "  → ${auto_ports[$i]} ← ${auto_envs[$i]}"
+      "$0" "${auto_envs[$i]}" -p "${auto_ports[$i]}" 2>&1 | tail -1 || rc=1
+    done
+    exit $rc
+  fi
+
+  # ── Select by class, narrowed by -i if given ───────────────────────────────
+  ports=()
+  for row in "${ROWS[@]}"; do
+    port=$(row_field "$row" 1); cls=$(row_field "$row" 2)
+    id=$(row_field "$row" 5);   name=$(row_field "$row" 7); mac=$(row_field "$row" 8)
     marker=" "
     if [[ "$cls" == "$WANT_CLASS" || "$SKIP_CLASS_CHECK" == true ]]; then
-      marker="→"
-      ports+=("$port")
+      wanted=true
+      if [[ ${#ONLY_IDS[@]} -gt 0 ]]; then
+        wanted=false
+        for want in "${ONLY_IDS[@]}"; do
+          [[ "${id:u}" == "$want" || "${name:u}" == "$want" || "${mac:u}" == "$want" ]] && wanted=true
+        done
+      fi
+      if [[ "$wanted" == true ]]; then marker="→"; ports+=("$port"); fi
     fi
-    printf "  %s %-24s  %-8s %-26s %-6s %-17s  [%s]\n" \
-      "$marker" "$port" "$cls" "$chip" "$flash" "$mac" "$(class_roles "$cls")"
+    print_row "$marker" "$row"
   done
 
   if [[ "$LIST_ONLY" == true ]]; then
-    echo "\nDetected ${#ports[@]} board(s) matching class '$WANT_CLASS' (env $ENV)."
+    echo "\n${#ports[@]} board(s) match class '$WANT_CLASS' (env $ENV)."
+    [[ "$ENV_GIVEN" == false ]] && echo "(no env given — showed matches for the default '$ENV')"
     exit 0
   fi
-
   if [[ ${#ports[@]} -eq 0 ]]; then
-    echo "\nNo boards of class '$WANT_CLASS' found for env '$ENV'."
-    echo "Run './flash_all.sh $ENV -l' to see what is connected, or --any to override."
+    echo "\nNothing to flash for env '$ENV' (class '$WANT_CLASS')."
+    echo "Try './flash_all.sh $ENV -l' to see what is connected, or --any to override."
     exit 1
   fi
 fi
 
-if [[ "$LIST_ONLY" == true ]]; then
-  echo "Ports: ${ports[*]}"
-  exit 0
-fi
-
-# Verify build exists (not needed for reset-only)
+BUILD=".pio/build/$ENV"
 if [[ "$RESET_ONLY" == false && ! -f "$BUILD/firmware.bin" ]]; then
   echo "No firmware found at $BUILD/firmware.bin — run 'pio run -e $ENV' first."
   exit 1

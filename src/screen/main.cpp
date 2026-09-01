@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <FastLED.h>
 #include <pulleys_identity.h>
+#include <pulleys_whoami.h>
 #include <pulleys_protocol.h>
 #include <pulleys_culture.h>
 #include <pulleys_patterns.h>
@@ -232,6 +233,7 @@ static void handleSerial() {
             if (len == 0) continue;
             buf[len] = 0;
             len = 0;
+            if (pulleys::whoami_handle(buf)) continue;   // "?" → PULLEYS-ID line
             if (buf[0] == 'e') {
                 int ch = atoi(buf + 1);
                 if (ch >= 0 && ch < NUM_CHANNELS) {
@@ -289,6 +291,7 @@ void setup() {
 
     modeStartMs  = millis();
     lastAnyEvent = millis();
+    pulleys::whoami_reply();
     Serial.println("Screen ready — listening for sensor events.\n");
 }
 

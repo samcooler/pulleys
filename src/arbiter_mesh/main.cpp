@@ -14,6 +14,7 @@
 #include <LovyanGFX.hpp>
 #include <lvgl.h>
 #include <pulleys_identity.h>
+#include <pulleys_whoami.h>
 #include <pulleys_protocol.h>
 #include <pulleys_mesh.h>
 #include "monitor.h"
@@ -160,6 +161,7 @@ static void handleSerial() {
             buf[len] = 0;
             uint8_t n = len;
             len = 0;
+            if (pulleys::whoami_handle(buf)) continue;   // "?" → PULLEYS-ID line
             if (buf[0] == 'T' && n == 15) {
                 auto num = [&](uint8_t off, uint8_t w) {
                     int v = 0;
@@ -380,6 +382,7 @@ void setup() {
     // relays is a legitimate extra hop — but MESH_OBSERVE_ONLY makes it passive
     // so it cannot paper over the range gaps you are hunting for.
     pulleys::identity_init(PULLEYS_TYPE_ARBITER);
+    pulleys::whoami_reply();
     pulleys::mesh_init(pulleys::MESH_ORIGIN_ARBITER, pulleys::identity_id());
 #ifdef MESH_OBSERVE_ONLY
     pulleys::mesh_set_relay(false);

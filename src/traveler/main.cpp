@@ -8,6 +8,7 @@
 // #include <ArduinoOTA.h>
 #include <pulleys_protocol.h>
 #include <pulleys_identity.h>
+#include <pulleys_whoami.h>
 #include <pulleys_culture.h>
 #include <pulleys_patterns.h>
 #include <pulleys_proximity.h>
@@ -273,6 +274,7 @@ void setup() {
     NimBLEDevice::setPower(-6);  // reduce TX power: saves battery, tightens proximity zones
     pulleys::identity_init(PULLEYS_TYPE_TRAVELER);
     pulleys::identity_print_banner(PULLEYS_TYPE_TRAVELER);
+    pulleys::whoami_reply();
 
     // Culture — start with a random one
     randomSeed(esp_random());
@@ -379,6 +381,7 @@ static void batteryDisplay(float vbat) {
 static const char* stateNames[] = { "AWAKE", "FADE_OUT", "ASLEEP", "FADE_IN", "DREAM_IN", "DREAM_LIT", "DREAM_OUT" };
 
 void loop() {
+    pulleys::whoami_poll();          // answer "?" with the PULLEYS-ID line
     static uint32_t lastBeacon       = 0;
     static uint32_t lastLed          = 0;
     static uint32_t lastPrune        = 0;

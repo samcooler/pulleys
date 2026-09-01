@@ -3,6 +3,7 @@
 #include <FastLED.h>
 #include <pulleys_protocol.h>
 #include <pulleys_identity.h>
+#include <pulleys_whoami.h>
 #include <pulleys_culture.h>
 #include <pulleys_patterns.h>
 #include <pulleys_proximity.h>
@@ -145,6 +146,7 @@ void setup() {
     NimBLEDevice::init("");
     pulleys::identity_init(PULLEYS_TYPE_STATION);
     pulleys::identity_print_banner(PULLEYS_TYPE_STATION);
+    pulleys::whoami_reply();
 
     // LEDs — 8 cols x 32 rows, serpentine
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, LED_COUNT);
@@ -199,6 +201,7 @@ void setup() {
 
 // ── Loop ──────────────────────────────────────────────────────────────────────
 void loop() {
+    pulleys::whoami_poll();          // answer "?" with the PULLEYS-ID line
     static uint32_t lastLed   = 0;
     static uint32_t lastPrune = 0;
     static uint32_t lastReport = 0;

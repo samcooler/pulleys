@@ -2,6 +2,7 @@
 #include <FastLED.h>
 #include <Preferences.h>
 #include <pulleys_identity.h>
+#include <pulleys_whoami.h>
 #include <pulleys_protocol.h>
 #include <pulleys_imu.h>
 #include <pulleys_mesh.h>
@@ -126,6 +127,7 @@ static void handleSerial() {
             if (len == 0) continue;
             buf[len] = 0;
             len = 0;
+            if (pulleys::whoami_handle(buf)) continue;   // "?" → PULLEYS-ID line
             if (buf[0] == 'c') {                 // "c7" → channel 7
                 int v = atoi(buf + 1);
                 if (v >= 0 && v <= 15) { myChannel = v; saveConfig(); applyChannelVisual(); }
@@ -189,6 +191,7 @@ void setup() {
         FastLED.show();
         delay(120);
     }
+    pulleys::whoami_reply();
     Serial.println("Sensor ready.\n");
 }
 
