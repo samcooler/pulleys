@@ -32,14 +32,20 @@
 
 // ── Idle / active look ────────────────────────────────────────────────────────
 // The installed piece is dark until someone plays with it, so a sensor shows
-// nothing at rest and lights fully only while it is detecting and sending.
+// nothing at rest and lights up only while it is detecting and sending.
 //
 // SENSOR_IDLE_PIXELS is a debugging affordance: a few pixels stay lit in the
 // channel colour so an unlit rope can be told apart from a dead board. Set it
 // to 0 for the installed behaviour — properly dark at rest.
+//
+// ACTIVE_BRIGHTNESS is deliberately well short of full. The panel is at arm's
+// length from whoever just pulled the rope, in the dark, on eyes that have
+// been adapted for a while — at 190 it is a lamp rather than a pattern, and
+// the shape washes out into a single bright block. Raise it only if the piece
+// ends up somewhere with real ambient light to compete with.
 #define SENSOR_IDLE_PIXELS 4
 #define IDLE_BRIGHTNESS    14     // low — a presence check, not a display
-#define ACTIVE_BRIGHTNESS  190    // full pattern while awake
+#define ACTIVE_BRIGHTNESS  110    // pattern while awake — see note below
 
 // Envelope around a detection: snap up, hold, drift back down. Re-triggering
 // only pushes the hold out — the envelope keeps rising from wherever it is and
