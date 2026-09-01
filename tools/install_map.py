@@ -13,10 +13,8 @@ exists, so a value set by hand at a desk outlives every later run.
 
     install_map.py --list [--kind K]          print a table as TSV
     install_map.py --add ID [ID ...]          add missing IDs to the channel
-                                              table, lowest free channel first
-    install_map.py --add --kind display ID…   add missing IDs to the display
-                                              table, spreading them over the
-                                              available displays
+                                              table, least-used value first
+    install_map.py --add --kind display ID…   same, for the display table
     install_map.py --check ID [ID ...]        exit 1 if any ID is missing
     --kind channel|display    which table (default: channel)
     --dry-run                 say what would change, write nothing
@@ -107,29 +105,19 @@ class Table(object):
     def by_id(self):
         return {r[0]: r for r in self.rows}
 
-    def used_channels(self):
-        return {r[1] for r in self.rows}
-
     def next_free(self):
-        """Channels are exclusive, displays are not.
+        """Lowest unused value, or the least-used one once they are all taken.
 
-        A rope needs a channel of its own, so a full channel table is an error
-        worth stopping for. Two screens showing the same display is merely
-        redundant, so displays cycle by least-used: the second screen added
-        differs from the first without anyone asking for that, which is the
-        whole reason to have more than one screen.
+        Sharing is legitimate for both tables: several ropes on one channel
+        report as one rope, which is a thing you might want of a cluster, and
+        two screens can perfectly well show the same display. So running out of
+        distinct values is not an error -- it just means new boards start
+        doubling up, spread as evenly as the existing rows allow.
         """
-        counts = {}
-        for v in range(self.lo, self.hi + 1):
-            counts[v] = 0
+        counts = {v: 0 for v in range(self.lo, self.hi + 1)}
         for r in self.rows:
             if r[1] in counts:
                 counts[r[1]] += 1
-        free = [v for v in sorted(counts) if counts[v] == 0]
-        if free:
-            return free[0]
-        if self.kind == "channel":
-            return None
         return min(sorted(counts), key=lambda v: counts[v])
 
     def add(self, wanted):
@@ -139,14 +127,7 @@ class Table(object):
         for dev_id, name in wanted:
             if dev_id in listed:
                 continue
-            chan = self.next_free()
-            if chan is None:
-                raise SystemExit(
-                    "No free channel left: all %d (channels %d-%d) are taken.\n"
-                    "Board 0x%04X cannot be assigned. Free one by removing a "
-                    "retired board from the table in %s."
-                    % (self.hi - self.lo + 1, self.lo, self.hi, dev_id, self.path))
-            row = (dev_id, chan, name)
+            row = (dev_id, self.next_free(), name)
             self.rows.append(row)
             listed[dev_id] = row
             added.append(row)
@@ -184,18 +165,6 @@ class Table(object):
         self.text = new
         return True
 
-    def warn_duplicates(self):
-        seen = {}
-        for dev_id, chan, name in self.rows:
-            seen.setdefault(chan, []).append(dev_id)
-        for chan, ids in sorted(seen.items()):
-            if len(ids) > 1:
-                if self.kind != "channel":
-                    continue      # two screens showing the same display is fine
-                sys.stderr.write(
-                    "warning: channel %d is shared by %s -- those ropes will "
-                    "report as one\n" % (chan, ", ".join("0x%04X" % i for i in ids)))
-
 
 def main():
     ap = argparse.ArgumentParser(add_help=True, description=__doc__,
@@ -215,7 +184,6 @@ def main():
         for dev_id, val, name in sorted(table.rows, key=lambda r: r[1]):
             shown = table.names[val] if table.names and val < len(table.names) else val
             print("%04X\t%s\t%s" % (dev_id, shown, name or ""))
-        table.warn_duplicates()
         return 0
 
     try:
@@ -237,7 +205,6 @@ def main():
         ap.error("--add needs at least one device ID")
 
     added = table.add(wanted)
-    table.warn_duplicates()
     if not added:
         print("%s table unchanged - all %d board(s) already listed."
               % (table.kind.capitalize(), len(wanted)))

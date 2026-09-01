@@ -34,7 +34,11 @@
 namespace pulleys {
 
 // ── Sensors: which rope ───────────────────────────────────────────────────────
-// Give two boards the same channel only if you mean those ropes to read as one.
+// Several boards may share a channel, and that is a real configuration rather
+// than a mistake: ropes on one channel report as one rope, which is what you
+// want of a cluster meant to read as a single thing. New boards are given the
+// least-used channel, so sharing happens when you ask for it or when there are
+// more ropes than channels — not by accident.
 struct ChannelAssignment { uint16_t id; uint8_t channel; };
 
 static const ChannelAssignment CHANNEL_ASSIGNMENT[] = {
