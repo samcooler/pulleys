@@ -230,18 +230,27 @@ static inline void _shape_update(PatternSlot& slot, float dt, float t) {
     CRGB cA(slot.culture.colorA.r, slot.culture.colorA.g, slot.culture.colorA.b);
     CRGB cB(slot.culture.colorB.r, slot.culture.colorB.g, slot.culture.colorB.b);
 
-    // Per-shape off-zone thresholds for 3-state colorizer
-    float offLo, offHi;
+    // Per-shape thresholds for the 3-state colorizer. The two colours are not
+    // peers: colorA is the body of the pattern and colorB is a highlight on it.
+    // blend < bodyHi is colorA, blend > accentLo is colorB, and the span
+    // between them is dark. Both thresholds therefore sit above the midpoint,
+    // giving the body most of the lit area and the accent a minority of it.
+    //
+    // The accent share is smaller than the gap 1 - accentLo suggests: blend is
+    // a sine, so its values pile up at the extremes. accentLo = 0.90 needs
+    // sin > 0.8, which is about a fifth of a cycle — a glint that crosses the
+    // form, not a second half of it.
+    float bodyHi, accentLo;
     switch (shape) {
         case SHAPE_CHECKER:
-            offLo = 0.43f; offHi = 0.57f; break;  // thin dark grid lines
+            bodyHi = 0.58f; accentLo = 0.93f; break;  // thin dark grid lines
         case SHAPE_RADIAL:
         case SHAPE_DIAMONDS:
-            offLo = 0.32f; offHi = 0.68f; break;  // bold dark gaps between rings
+            bodyHi = 0.50f; accentLo = 0.88f; break;  // bold dark gaps between rings
         case SHAPE_CROSS:
-            offLo = 0.36f; offHi = 0.64f; break;  // dark halo around arm edges
+            bodyHi = 0.54f; accentLo = 0.90f; break;  // dark halo around arm edges
         default:
-            offLo = 0.38f; offHi = 0.62f; break;
+            bodyHi = 0.55f; accentLo = 0.90f; break;
     }
 
     // Blend field sampler — accepts fractional (fc, fr) for supersampling
@@ -325,9 +334,9 @@ static inline void _shape_update(PatternSlot& slot, float dt, float t) {
             float avgBlend = blendSum * SSAA_INV;
 
             // Soft ramp at each threshold: pure color in interior, fade to black at edge
-            float wA = (offLo - avgBlend) / EDGE_W;
+            float wA = (bodyHi - avgBlend) / EDGE_W;
             if (wA < 0.0f) wA = 0.0f; else if (wA > 1.0f) wA = 1.0f;
-            float wB = (avgBlend - offHi) / EDGE_W;
+            float wB = (avgBlend - accentLo) / EDGE_W;
             if (wB < 0.0f) wB = 0.0f; else if (wB > 1.0f) wB = 1.0f;
 
             CRGB c(

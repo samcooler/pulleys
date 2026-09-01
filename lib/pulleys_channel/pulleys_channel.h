@@ -19,21 +19,48 @@ namespace pulleys {
 
 static constexpr uint8_t CHANNEL_COUNT = 16;
 
-// Hue is spread evenly around the wheel: 16 channels × 16 = full 8-bit range.
-inline uint8_t channel_hue(uint8_t ch) { return (uint8_t)(ch * 16); }
+// Channel hues, hand-picked instead of spread evenly around the wheel. The
+// deep-blue band (hue ~150–200) is left out on purpose: at night, in the dark,
+// it is the band eyes focus worst, and a blue rope block reads as a smear
+// rather than a shape. The first five hues are the ones a small install
+// actually uses, so they are the five furthest apart and the easiest to name
+// out loud ("the orange one"); the rest fill the gaps for larger channel
+// counts and are correspondingly less distinct.
+static constexpr uint8_t CHANNEL_HUE[CHANNEL_COUNT] = {
+      0,  28,  60,  96, 224,        // red, orange, yellow, green, magenta
+     12,  40,  74, 110, 136,
+    208, 216, 236, 248,  20,  86
+};
+
+inline uint8_t channel_hue(uint8_t ch) { return CHANNEL_HUE[ch % CHANNEL_COUNT]; }
 
 inline CRGB channel_color(uint8_t ch) {
     return CHSV(channel_hue(ch), 235, 255);
 }
 
+// Shapes that read as one colour: a lit body with a moving edge, legible even
+// if the accent colour never appeared. CHECKER, POLKA and QUADRANTS are left
+// out because they only work when two colours alternate across the form —
+// which is exactly the complexity a rope block at a distance cannot carry.
+static constexpr uint8_t CHANNEL_SHAPE[] = {
+    SHAPE_RADIAL, SHAPE_BARS, SHAPE_DIAGONAL, SHAPE_CROSS,
+    SHAPE_DIAMONDS, SHAPE_TUNNEL, SHAPE_SPIRAL
+};
+static constexpr uint8_t CHANNEL_SHAPE_COUNT =
+    sizeof(CHANNEL_SHAPE) / sizeof(CHANNEL_SHAPE[0]);
+
 inline PulleysCulture channel_culture(uint8_t ch) {
-    CRGB a = CHSV(channel_hue(ch), 235, 255);
-    CRGB b = CHSV((uint8_t)(channel_hue(ch) + 90), 220, 255);
+    uint8_t hue = channel_hue(ch);
+    // colorB is a highlight, not a second identity: a small hue step and a
+    // good deal less saturation, so it lands as a pale glint off the body
+    // colour. The renderer keeps it to a minority of the lit pixels.
+    CRGB a = CHSV(hue, 235, 255);
+    CRGB b = CHSV((uint8_t)(hue + 18), 120, 255);
     PulleysCulture c;
     c.colorA      = { a.r, a.g, a.b };
     c.colorB      = { b.r, b.g, b.b };
     c.oscillation = 40 + (ch * 11) % 120;          // slow, distinct per channel
-    c.shape       = ch % SHAPE_COUNT;              // 16 channels over 10 shapes
+    c.shape       = CHANNEL_SHAPE[ch % CHANNEL_SHAPE_COUNT];
     return c;
 }
 
