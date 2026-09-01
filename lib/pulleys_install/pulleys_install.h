@@ -57,7 +57,8 @@ struct ChannelAssignment { uint16_t id; uint8_t channel; uint8_t mode; };
 static const ChannelAssignment CHANNEL_ASSIGNMENT[] = {
     //   id     ch  mode
     // ASSIGNMENTS BEGIN
-    { 0xEC52, 1, ROT },   // N-EC52
+    { 0xEC52, 1, LIN },   // N-EC52
+    { 0x0664, 2, LIN },   // N-0664
     // ASSIGNMENTS END
 };
 static constexpr uint8_t CHANNEL_ASSIGNMENT_COUNT =
