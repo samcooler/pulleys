@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <FastLED.h>
+#include <Preferences.h>
 #include <pulleys_identity.h>
 #include <pulleys_whoami.h>
 #include <pulleys_protocol.h>
@@ -11,11 +12,17 @@
 
 // ── Screen — activity display for the sensor mesh ─────────────────────────────
 // Listens to deduped sensor EVENTs (and relays them), maintains a per-channel
-// activity model, and shows it on the 8×32 matrix in two alternating displays:
+// activity model, and shows it on the 8×32 matrix in one of two displays:
 //
-//   COUNTER — arabic numerals counting detections, draining after inactivity
+//   COUNTER — per-channel detection counts side by side, each in its channel
+//             colour, draining after inactivity
 //   RANKING — top-4 channels as 8×8 shape patterns, most active on the left,
 //             brightness driven by each channel's activity level
+//
+// The mode is chosen at boot, not on a timer: the installed matrix has no
+// buttons, so each boot uses the mode the previous boot stored and then stores
+// the next one. Power-cycling steps COUNTER → RANKING → COUNTER … which is the
+// whole user interface.
 //
 // This is the whole "game" for v1: ranked activity, and number go up.
 
@@ -48,9 +55,18 @@
 #define COUNT_IDLE_MS     20000   // no events for this long → counter starts draining
 #define COUNT_DRAIN_MS    250     // then drop one per this interval
 
-// Display cycling
-#define MODE_COUNTER_MS   18000
-#define MODE_RANKING_MS   22000
+// Counter layout. Digits are 5 wide with a 1px gap, so an n-digit number spans
+// 6n-1 of the 32-pixel long axis; channel groups are separated by GROUP_GAP.
+// How many channels fit therefore falls out of how big their numbers are —
+// four single digits, or two three-digit counters, and so on.
+#define DIGIT_W           5
+#define DIGIT_GAP         1
+#define GROUP_GAP         2
+#define MAX_COUNT_CHANS   4
+#define COUNT_DISPLAY_MAX 9999   // clamp so one runaway channel cannot crowd the rest
+
+// NVS namespace holding the boot-alternated display mode
+#define NVS_NS            "screen"
 
 // ── Globals ───────────────────────────────────────────────────────────────────
 static CRGB leds[LED_COUNT];
@@ -72,9 +88,20 @@ static pulleys::PatternSlot patSlots[NUM_SLOTS];
 static int8_t  slotChannel[NUM_SLOTS]   = { -1, -1, -1, -1 };
 static float   slotBrightness[NUM_SLOTS] = { 0, 0, 0, 0 };  // eased toward target
 
-enum DisplayMode : uint8_t { MODE_COUNTER = 0, MODE_RANKING };
-static DisplayMode mode        = MODE_RANKING;
-static uint32_t    modeStartMs = 0;
+enum DisplayMode : uint8_t { MODE_COUNTER = 0, MODE_RANKING, MODE_COUNT };
+static DisplayMode mode = MODE_COUNTER;   // real value comes from NVS at boot
+
+// Boot-time mode select. Read what the last boot left, then immediately store
+// the next mode, so yanking power is what advances the display.
+static void loadAndAdvanceMode() {
+    Preferences p;
+    p.begin(NVS_NS, false);
+    uint8_t stored = p.getUChar("mode", MODE_COUNTER);
+    if (stored >= MODE_COUNT) stored = MODE_COUNTER;
+    mode = (DisplayMode)stored;
+    p.putUChar("mode", (uint8_t)((stored + 1) % MODE_COUNT));
+    p.end();
+}
 
 // Events arrive on the WiFi task via mesh_poll() in loop(), so no ISR race here.
 
@@ -117,50 +144,120 @@ static void decayActivity(float dt) {
     }
 }
 
-// ── Counter drain: after an idle period, the number ticks back down ───────────
+// ── Counter drain: after an idle period, the numbers tick back down ──────────
+// Per channel, so a channel that goes quiet empties and drops off the display
+// while its busier neighbours keep counting.
 static void updateCounterDrain(uint32_t now) {
-    if (totalCount == 0) return;
-    if (now - lastAnyEvent < COUNT_IDLE_MS) return;
     if (now - lastDrainMs < COUNT_DRAIN_MS) return;
     lastDrainMs = now;
-    totalCount--;
+    for (uint8_t c = 0; c < NUM_CHANNELS; c++) {
+        if (chans[c].count == 0) continue;
+        if (now - chans[c].lastEvent < COUNT_IDLE_MS) continue;
+        chans[c].count--;
+    }
+    if (totalCount > 0 && now - lastAnyEvent >= COUNT_IDLE_MS) totalCount--;
 }
 
 // ── Display: counter ──────────────────────────────────────────────────────────
-// Digits are drawn along the long axis, 5 columns wide + 1 space, so up to 5
-// digits fit across the 32-pixel span. The number is right-aligned.
-static void renderCounter(uint32_t now) {
-    fill_solid(leds, LED_COUNT, CRGB::Black);
+// One number per observed channel, side by side along the long axis, each in
+// its own channel colour. How many fit depends on how wide their numbers are:
+// four single digits, two three-digit counters, and so on. Busiest first, so
+// the channels that get squeezed off the end are the quiet ones.
 
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%lu", (unsigned long)totalCount);
-    uint8_t n = strlen(buf);
-    if (n > 5) { // clamp — show the low 5 digits
-        memmove(buf, buf + (n - 5), 6);
-        n = 5;
-    }
+// Digits in a value, clamped to what the display is willing to show.
+static uint8_t countDigits(uint32_t v) {
+    if (v > COUNT_DISPLAY_MAX) v = COUNT_DISPLAY_MAX;
+    uint8_t d = 1;
+    while (v >= 10) { v /= 10; d++; }
+    return d;
+}
 
-    uint8_t width = n * 5 + (n - 1);           // digits + 1px gaps
-    uint8_t x0    = (MAT_ROWS - width) / 2;    // centered along the long axis
+static inline uint8_t numberWidth(uint8_t digits) {
+    return digits * (DIGIT_W + DIGIT_GAP) - DIGIT_GAP;
+}
 
-    // Gentle pulse right after an event so the tick reads as a change
-    float since = (now - lastAnyEvent) / 400.0f;
-    uint8_t bri = MAX_BRIGHTNESS;
-    if (since < 1.0f) bri = (uint8_t)(MAX_BRIGHTNESS * (1.0f + 1.6f * (1.0f - since)));
-
-    CRGB col = pulleys::channel_color(lastActiveCh);
-    col.nscale8(bri);
-
+// Draw a number with its left edge at x0. Returns the width it occupied.
+static uint8_t drawNumber(uint8_t x0, const char* str, const CRGB& col) {
+    uint8_t n = strlen(str);
     for (uint8_t d = 0; d < n; d++) {
-        const uint8_t* glyph = FONT5X7_DIGITS[buf[d] - '0'];
-        for (uint8_t gx = 0; gx < 5; gx++) {
-            uint8_t x = x0 + d * 6 + gx;
+        const uint8_t* glyph = FONT5X7_DIGITS[str[d] - '0'];
+        for (uint8_t gx = 0; gx < DIGIT_W; gx++) {
+            uint8_t x = x0 + d * (DIGIT_W + DIGIT_GAP) + gx;
             if (x >= MAT_ROWS) continue;
             uint8_t colBits = glyph[gx];
             for (uint8_t gy = 0; gy < 7; gy++) {
                 if (colBits & (1 << gy)) leds[xy(x, gy)] = col;   // rows 0..6, row 7 margin
             }
         }
+    }
+    return numberWidth(n);
+}
+
+// Brightness with a short pulse right after that channel's last event, so a
+// tick reads as a change rather than a silent increment.
+static uint8_t counterBrightness(uint32_t now, uint32_t lastEvent) {
+    float since = (now - lastEvent) / 400.0f;
+    if (since >= 1.0f) return MAX_BRIGHTNESS;
+    return (uint8_t)(MAX_BRIGHTNESS * (1.0f + 1.6f * (1.0f - since)));
+}
+
+static void renderCounter(uint32_t now) {
+    fill_solid(leds, LED_COUNT, CRGB::Black);
+
+    // Rank the channels worth showing, most active first. Activity leads;
+    // count breaks ties so fully decayed channels still order sensibly.
+    uint8_t order[NUM_CHANNELS];
+    uint8_t nCand = 0;
+    bool    taken[NUM_CHANNELS] = {};
+    while (nCand < NUM_CHANNELS) {
+        int8_t   best     = -1;
+        float    bestAct  = -1.0f;
+        uint32_t bestCnt  = 0;
+        for (uint8_t c = 0; c < NUM_CHANNELS; c++) {
+            if (taken[c] || chans[c].count == 0) continue;
+            float act = chans[c].activity;
+            if (act > bestAct + 1e-6f ||
+                (act > bestAct - 1e-6f && chans[c].count > bestCnt)) {
+                bestAct = act; bestCnt = chans[c].count; best = (int8_t)c;
+            }
+        }
+        if (best < 0) break;
+        taken[best] = true;
+        order[nCand++] = (uint8_t)best;
+    }
+
+    // Nothing counted yet — show a single resting zero.
+    if (nCand == 0) {
+        CRGB col = pulleys::channel_color(lastActiveCh);
+        col.nscale8(MAX_BRIGHTNESS);
+        drawNumber((MAT_ROWS - numberWidth(1)) / 2, "0", col);
+        return;
+    }
+
+    // Take as many as the 32-pixel span allows.
+    uint8_t nShow = 0, width = 0;
+    for (uint8_t i = 0; i < nCand && nShow < MAX_COUNT_CHANS; i++) {
+        uint8_t w    = numberWidth(countDigits(chans[order[i]].count));
+        uint8_t next = width + (nShow ? GROUP_GAP : 0) + w;
+        if (next > MAT_ROWS) break;
+        width = next;
+        nShow++;
+    }
+    if (nShow == 0) nShow = 1, width = numberWidth(countDigits(chans[order[0]].count));
+
+    uint8_t x = (MAT_ROWS > width) ? (MAT_ROWS - width) / 2 : 0;
+    for (uint8_t i = 0; i < nShow; i++) {
+        uint8_t  ch = order[i];
+        uint32_t v  = chans[ch].count;
+        if (v > COUNT_DISPLAY_MAX) v = COUNT_DISPLAY_MAX;
+
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%lu", (unsigned long)v);
+
+        CRGB col = pulleys::channel_color(ch);
+        col.nscale8(counterBrightness(now, chans[ch].lastEvent));
+
+        x += drawNumber(x, buf, col) + GROUP_GAP;
     }
 }
 
@@ -252,9 +349,11 @@ static void handleSerial() {
                 pulleys::mesh_send_event(7, 0, 90, 0);
                 Serial.println("  [TX] test broadcast");
             } else if (buf[0] == 'm') {
+                // Bench override only -- does not touch the stored boot mode.
                 mode = (mode == MODE_COUNTER) ? MODE_RANKING : MODE_COUNTER;
-                modeStartMs = millis();
                 fill_solid(leds, LED_COUNT, CRGB::Black);
+                Serial.printf("  mode=%s (this boot only)\n",
+                              mode == MODE_COUNTER ? "COUNTER" : "RANKING");
             }
         } else if (len < sizeof(buf) - 1) {
             buf[len++] = c;
@@ -289,7 +388,9 @@ void setup() {
     pulleys::mesh_init(pulleys::MESH_ORIGIN_SCREEN, pulleys::identity_id());
     pulleys::mesh_on_event(onMeshEvent);
 
-    modeStartMs  = millis();
+    loadAndAdvanceMode();
+    Serial.printf("  mode=%s this boot (power-cycle for the other)\n",
+                  mode == MODE_COUNTER ? "COUNTER" : "RANKING");
     lastAnyEvent = millis();
     pulleys::whoami_reply();
     Serial.println("Screen ready — listening for sensor events.\n");
@@ -304,14 +405,8 @@ void loop() {
     pulleys::mesh_poll();
     handleSerial();
 
-    // Alternate displays
-    uint32_t dwell = (mode == MODE_COUNTER) ? MODE_COUNTER_MS : MODE_RANKING_MS;
-    if (now - modeStartMs >= dwell) {
-        mode = (mode == MODE_COUNTER) ? MODE_RANKING : MODE_COUNTER;
-        modeStartMs = now;
-        fill_solid(leds, LED_COUNT, CRGB::Black);
-    }
-
+    // No dwell timer: the mode was chosen at boot and holds until the next
+    // power cycle. 'm' on serial still flips it for bench testing.
     updateCounterDrain(now);
 
     if (now - lastLed >= (1000 / LED_FPS)) {
@@ -329,12 +424,16 @@ void loop() {
 
     if (now - lastLog >= 3000) {
         lastLog = now;
-        Serial.printf("── total=%lu  mode=%s  ranking:", totalCount,
+        Serial.printf("── total=%lu  mode=%s  counts:", totalCount,
                       mode == MODE_COUNTER ? "COUNTER" : "RANKING");
-        for (uint8_t s = 0; s < NUM_SLOTS; s++) {
-            if (slotChannel[s] < 0) Serial.print("  --");
-            else Serial.printf("  ch%d(%.2f)", slotChannel[s], chans[slotChannel[s]].activity);
+        bool any = false;
+        for (uint8_t c = 0; c < NUM_CHANNELS; c++) {
+            if (chans[c].count == 0) continue;
+            Serial.printf("  ch%d=%lu(%.2f)", c, (unsigned long)chans[c].count,
+                          chans[c].activity);
+            any = true;
         }
+        if (!any) Serial.print("  --");
         Serial.println();
         Serial.printf("  [SYNC] clock=%s meshNow=%lums\n",
                       pulleys::mesh_clock_locked() ? "locked" : "free",
