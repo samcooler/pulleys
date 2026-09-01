@@ -70,16 +70,25 @@ static uint32_t holdUntil = 0;    // envelope stays up until this moment
 static float    ledEnv    = 0.0f; // 0 = dark/idle pixels, 1 = full pattern
 static uint32_t localCount = 0;
 static uint32_t heardCount = 0;
+// Where myChannel came from, in descending order of authority. Kept apart
+// because they mean different things to whoever is holding the board: LISTED is
+// settled, NVS is someone's field fix, HASH is a guess that works.
+enum ChanSource : uint8_t { CHAN_LISTED, CHAN_NVS, CHAN_HASH };
+static ChanSource chanSource = CHAN_HASH;
 
 // ── Config persistence ────────────────────────────────────────────────────────
 static void loadConfig() {
     Preferences p;
     p.begin(NVS_NS, true);
-    myChannel = p.getUChar("ch",   0);
+    // 0xFF, not 0, as the default: a board that has never been told its channel
+    // must be distinguishable from one deliberately put on channel 0. With 0 as
+    // the default they look identical, and a whole crate of freshly flashed
+    // boards silently piles onto channel 0.
+    uint8_t stored = p.getUChar("ch", 0xFF);
     myMode    = p.getUChar("mode", pulleys::SENSOR_MODE_ROTATION);
     myRotDeg  = p.getFloat("rot",  180.0f);
     p.end();
-    if (myChannel > 15) myChannel = 0;
+    if (stored <= 15) { myChannel = stored; chanSource = CHAN_NVS; }
 }
 
 static void saveConfig() {
@@ -89,6 +98,24 @@ static void saveConfig() {
     p.putUChar("mode", myMode);
     p.putFloat("rot",  myRotDeg);
     p.end();
+}
+
+// The repo's channel table wins over the board's stored value. NVS is only
+// consulted for a board the table does not name — see pulleys_channel.h. Must
+// run after identity_init(), since the lookup is by device ID.
+static void applyChannelAssignment() {
+    uint16_t id     = pulleys::identity_id();
+    int8_t assigned = pulleys::channel_for_device(id);
+    if (assigned >= 0) {
+        myChannel  = (uint8_t)assigned;
+        chanSource = CHAN_LISTED;
+        return;
+    }
+    // Not listed, and nobody has set one over serial either: derive one rather
+    // than default. A crate of boards all defaulting to the same channel is the
+    // failure that hides itself; twelve boards scattered over twelve channels is
+    // at least visibly wrong when two collide.
+    if (chanSource == CHAN_HASH) myChannel = pulleys::channel_from_id(id);
 }
 
 static void applyConfig() {
@@ -118,8 +145,10 @@ static void onMeshEvent(const pulleys::MeshEvent& ev, bool relayed) {
 
 // ── Serial console — field config without a reflash ───────────────────────────
 static void printConfig() {
-    Serial.printf("  CONFIG  channel=%d  mode=%s  rotThreshold=%.0f deg\n",
-                  myChannel,
+    Serial.printf("  CONFIG  channel=%d (%s)  mode=%s  rotThreshold=%.0f deg\n",
+                  myChannel, chanSource == CHAN_LISTED ? "listed"
+                           : chanSource == CHAN_NVS    ? "set over serial"
+                                                       : "UNLISTED — hashed from ID",
                   myMode == pulleys::SENSOR_MODE_ROTATION ? "ROTATION" : "LINEAR",
                   myRotDeg);
 }
@@ -136,7 +165,15 @@ static void handleSerial() {
             if (pulleys::whoami_handle(buf)) continue;   // "?" → PULLEYS-ID line
             if (buf[0] == 'c') {                 // "c7" → channel 7
                 int v = atoi(buf + 1);
-                if (v >= 0 && v <= 15) { myChannel = v; saveConfig(); applyChannelVisual(); }
+                if (v >= 0 && v <= 15) {
+                    myChannel = v; chanSource = CHAN_NVS;
+                    saveConfig(); applyChannelVisual();
+                    Serial.printf("  → add to CHANNEL_ASSIGNMENT: { 0x%04X, %d },\n",
+                                  pulleys::identity_id(), v);
+                    if (chanSource == CHAN_LISTED)
+                        Serial.printf("  ! this board is listed in CHANNEL_ASSIGNMENT;"
+                                      " the table wins again at next boot\n");
+                }
             } else if (buf[0] == 'm') {          // "m0" rotation, "m1" linear
                 int v = atoi(buf + 1);
                 if (v == 0 || v == 1) { myMode = v; saveConfig(); applyConfig(); }
@@ -172,6 +209,7 @@ void setup() {
     Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     Serial.printf("  PULLEYS Sensor  %s\n", pulleys::identity_name());
     Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    applyChannelAssignment();
     printConfig();
     Serial.println("  serial: c<0-15> channel | m0/m1 mode | r<deg> | t test");
 
@@ -185,10 +223,12 @@ void setup() {
 
     applyChannelVisual();
 
-    // Boot: flash the channel color three times so the install crew can verify
+    // Boot: flash the channel color three times so the install crew can verify.
+    // An unassigned board flashes white instead — see the UNASSIGNED note above.
     FastLED.setBrightness(255);   // brightness is applied per-pixel from here on
     for (int i = 0; i < 3; i++) {
-        CRGB boot = pulleys::channel_color(myChannel);
+        CRGB boot = (chanSource == CHAN_LISTED) ? pulleys::channel_color(myChannel)
+                                                : CRGB::White;
         boot.nscale8(40);
         fill_solid(leds, LED_COUNT, boot);
         FastLED.show();
@@ -255,9 +295,14 @@ void loop() {
             fill_solid(leds, LED_COUNT, CRGB::Black);
         }
 
-        // Presence pixels cross-fade against the pattern, so the hand-off in
-        // both directions is smooth rather than a pop.
+        // An unassigned board does not get to look like a working one. The whole
+        // panel breathes white — a colour no channel ever uses — so a crate of
+        // freshly flashed boards sorts itself into "set up" and "not set up" at
+        // a glance, across a dark room, by someone who is doing three other
+        // things. This overrides the pattern entirely.
         if (ledEnv < 1.0f) {
+            // Presence pixels cross-fade against the pattern, so the hand-off in
+            // both directions is smooth rather than a pop.
             CRGB c = pulleys::channel_color(myChannel);
             c.nscale8((uint8_t)(IDLE_BRIGHTNESS * (1.0f - ledEnv)));
             for (uint8_t i = 0; i < SENSOR_IDLE_PIXELS && i < 4; i++)

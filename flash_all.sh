@@ -2,13 +2,16 @@
 # Flash connected boards in parallel using esptool.py directly.
 #
 # Usage: ./flash_all.sh [env] [options]
-#   env            platformio environment (default: sensor)
+#   env            platformio environment. With no env named, every attached
+#                  board is provisioned: registered in the channel table, built,
+#                  and flashed with the role its hardware class calls for.
 #   -l, --list     list what is connected and exit — no flash, no reset
 #   -r, --reset    reset only, no flash write
 #   -p <port>      flash only this port (repeatable); skips detection
 #   -i <id>        flash only the board with this device ID / name / MAC
 #                  (e.g. -i A855, -i N-A855, -i 3C:0F:02:E4:52:2D)
-#   --auto         reflash every identified board with the env it already runs
+#   --auto         reflash every identified board with the env it already runs,
+#                  rather than the role its class calls for; honours -i
 #   --any          skip the hardware-class check
 #
 # How a board is identified
@@ -28,6 +31,25 @@
 # A board that does not answer — blank, crashed, or non-Pulleys firmware — falls
 # back to an esptool hardware probe, which still yields `class`. That is enough
 # to flash safely: class is the safety net, and the env argument names the role.
+#
+# Provisioning (no env named)
+# ---------------------------
+# The install pass. Every attached board ends up registered in
+# CHANNEL_ASSIGNMENT and running the current firmware for its hardware:
+#
+#   1. identify every board, and pick its role from `class`, not from the
+#      firmware it happens to be running — the crate is full of boards carrying
+#      retired traveler/station images, and --auto would faithfully reflash
+#      them with those
+#   2. hand every sensor-class board to tools/assign_channels.py, which adds the
+#      missing ones at the lowest free channel and leaves the rest untouched
+#   3. build the envs actually needed, so the table edit is in the image
+#   4. flash each board with its own env
+#
+# A board that stayed silent has no device ID yet, so it cannot be registered
+# before it is flashed. Those get a second pass automatically once the new
+# firmware can answer for itself. The whole thing is idempotent: run it again
+# after swapping a board and only the new board changes.
 
 set -euo pipefail
 
@@ -35,7 +57,8 @@ RESET_ONLY=false
 LIST_ONLY=false
 SKIP_CLASS_CHECK=false
 AUTO_ENV=false
-ENV="sensor"
+PROVISION=false
+ENV=""
 ENV_GIVEN=false
 ONLY_PORTS=()
 ONLY_IDS=()
@@ -60,7 +83,23 @@ for arg in "$@"; do
   fi
 done
 
+# No env named: reflash each board with whatever it reports running. Explicit
+# ports skip identification entirely, so there is nothing to read an env from.
+if [[ "$ENV_GIVEN" == false ]]; then
+  if [[ ${#ONLY_PORTS[@]} -gt 0 ]]; then
+    echo "-p needs an explicit env: detection is skipped, so there is nothing to"
+    echo "read a running env from. e.g. ./flash_all.sh sensor -p ${ONLY_PORTS[1]}"
+    exit 1
+  fi
+  # --auto asks for "keep doing what you are doing"; bare invocation asks for
+  # "make these boards correct", which is the provisioning pass.
+  if [[ "$AUTO_ENV" == false ]]; then PROVISION=true; fi
+  ENV="sensor"   # placeholder: both modes name a real env per board
+fi
+
 PYTHON="/Users/sam/.platformio/penv/bin/python"
+PIO="/Users/sam/.platformio/penv/bin/pio"
+ASSIGN="${0:A:h}/tools/assign_channels.py"
 ESPTOOL="/Users/sam/.platformio/packages/tool-esptoolpy/esptool.py"
 BOOT_APP="/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
 IDENTIFY="${0:A:h}/tools/identify.py"
@@ -76,6 +115,19 @@ env_params() {
   esac
 }
 env_params "$ENV"
+
+# The env a board of this class should be running today. Distinct from
+# class_roles() below, which is descriptive text for the listing: this one is
+# the decision, and it deliberately names no deprecated env — provisioning a
+# crate must never reinstall a retired role.
+class_env() {
+  case "$1" in
+    s3_4mb)  echo "sensor"       ;;
+    esp32)   echo "screen"       ;;
+    s3_16mb) echo "arbiter_mesh" ;;
+    *)       echo ""             ;;   # c3/station is retired; unknown is unsafe
+  esac
+}
 
 class_roles() {
   case "$1" in
@@ -152,12 +204,130 @@ else
   gather "${candidates[@]}"
   print_header
 
+  # ── Provisioning: register, build, flash — the install pass ────────────────
+  if [[ "$PROVISION" == true ]]; then
+    typeset -a prov_ports prov_envs prov_specs prov_unknown
+    for row in "${ROWS[@]}"; do
+      port=$(row_field "$row" 1); cls=$(row_field "$row" 2)
+      id=$(row_field "$row" 5);   name=$(row_field "$row" 7); mac=$(row_field "$row" 8)
+      tenv=$(class_env "$cls")
+      wanted=true
+      if [[ ${#ONLY_IDS[@]} -gt 0 ]]; then
+        wanted=false
+        for want in "${ONLY_IDS[@]}"; do
+          [[ "${id:u}" == "$want" || "${name:u}" == "$want" || "${mac:u}" == "$want" ]] && wanted=true
+        done
+      fi
+      if [[ "$wanted" == false || -z "$tenv" ]]; then
+        print_row " " "$row"
+        continue
+      fi
+      print_row "→" "$row"
+      prov_ports+=("$port"); prov_envs+=("$tenv")
+      # Only sensors carry a channel. A board that never answered has no ID to
+      # register with; it is flashed anyway and picked up on the second pass.
+      if [[ "$tenv" == "sensor" ]]; then
+        if [[ "$id" == "?" || -z "$id" ]]; then
+          prov_unknown+=("$port")
+        else
+          prov_specs+=("${id}=${name}")
+        fi
+      fi
+    done
+
+    if [[ ${#prov_ports[@]} -eq 0 ]]; then
+      echo "\nNo board to provision. Boards of a retired class (c3/station) and"
+      echo "boards whose class could not be read are skipped — name an env"
+      echo "explicitly to flash one of those anyway."
+      exit 1
+    fi
+
+    # 1. register any board the channel table does not know yet
+    if [[ ${#prov_specs[@]} -gt 0 ]]; then
+      echo "\nChannel table:"
+      if [[ "$LIST_ONLY" == true ]]; then
+        python3 "$ASSIGN" --add --dry-run "${prov_specs[@]}" | sed 's/^/  /'
+      else
+        python3 "$ASSIGN" --add "${prov_specs[@]}" | sed 's/^/  /'
+      fi
+    fi
+
+    if [[ "$LIST_ONLY" == true ]]; then
+      echo "\nWould provision ${#prov_ports[@]} board(s):"
+      for i in {1..${#prov_ports[@]}}; do
+        echo "  ${prov_ports[$i]} ← ${prov_envs[$i]}"
+      done
+      [[ ${#prov_unknown[@]} -gt 0 ]] && \
+        echo "  (${#prov_unknown[@]} silent board(s) would need a second pass to register)"
+      exit 0
+    fi
+
+    # 2. build every env in play, so the table edit above is actually in the image
+    typeset -A seen_env
+    typeset -a build_args
+    for e in "${prov_envs[@]}"; do
+      if [[ -z "${seen_env[$e]:-}" ]]; then seen_env[$e]=1; build_args+=("-e" "$e"); fi
+    done
+    echo "\nBuilding: ${(k)seen_env}"
+    if ! "$PIO" run "${build_args[@]}" >/dev/null 2>&1; then
+      echo "Build FAILED — not flashing. Run 'pio run ${build_args[*]}' to see why."
+      exit 1
+    fi
+
+    # 3. flash each board with its own env
+    echo "\nFlashing ${#prov_ports[@]} board(s):"
+    rc=0
+    for i in {1..${#prov_ports[@]}}; do
+      echo "  → ${prov_ports[$i]} ← ${prov_envs[$i]}"
+      "$0" "${prov_envs[$i]}" -p "${prov_ports[$i]}" 2>&1 | tail -1 || rc=1
+    done
+
+    # 4. second pass for boards that could not identify themselves before. They
+    #    can now, so register them and reflash just those with the real table.
+    if [[ ${#prov_unknown[@]} -gt 0 && $rc -eq 0 ]]; then
+      echo "\n${#prov_unknown[@]} board(s) were silent before flashing; asking again…"
+      gather "${prov_unknown[@]}"
+      typeset -a late_specs late_ports
+      for row in "${ROWS[@]}"; do
+        id=$(row_field "$row" 5); name=$(row_field "$row" 7)
+        [[ "$id" == "?" || -z "$id" ]] && continue
+        late_specs+=("${id}=${name}"); late_ports+=("$(row_field "$row" 1)")
+      done
+      if [[ ${#late_specs[@]} -gt 0 ]]; then
+        python3 "$ASSIGN" --add "${late_specs[@]}" | sed 's/^/  /'
+        if "$PIO" run -e sensor >/dev/null 2>&1; then
+          for port in "${late_ports[@]}"; do
+            echo "  → $port ← sensor (re-flash with channel)"
+            "$0" sensor -p "$port" 2>&1 | tail -1 || rc=1
+          done
+        else
+          echo "  Build FAILED on the second pass — those boards keep a hashed channel."
+          rc=1
+        fi
+      else
+        echo "  Still silent — they will run on a hashed channel until they answer."
+      fi
+    fi
+
+    echo "\nChannel table now:"
+    python3 "$ASSIGN" --list | awk -F'\t' '{printf "  %s  ch%-3s %s\n", $1, $2, $3}'
+    exit $rc
+  fi
+
   # ── --auto: each board gets the env it already reports running ─────────────
   if [[ "$AUTO_ENV" == true ]]; then
     typeset -a auto_ports auto_envs
     for row in "${ROWS[@]}"; do
       renv=$(row_field "$row" 4)
-      if [[ "$renv" == "?" || "$renv" == "unknown" ]]; then
+      id=$(row_field "$row" 5); name=$(row_field "$row" 7); mac=$(row_field "$row" 8)
+      wanted=true
+      if [[ ${#ONLY_IDS[@]} -gt 0 ]]; then
+        wanted=false
+        for want in "${ONLY_IDS[@]}"; do
+          [[ "${id:u}" == "$want" || "${name:u}" == "$want" || "${mac:u}" == "$want" ]] && wanted=true
+        done
+      fi
+      if [[ "$wanted" == false || "$renv" == "?" || "$renv" == "unknown" ]]; then
         print_row " " "$row"
       else
         print_row "→" "$row"
@@ -165,18 +335,35 @@ else
       fi
     done
     if [[ ${#auto_ports[@]} -eq 0 ]]; then
-      echo "\nNo board reported an env to reflash. Name an env explicitly."
+      if [[ ${#ONLY_IDS[@]} -gt 0 ]]; then
+        echo "\nNo board matched ${ONLY_IDS[*]} with an env to reflash."
+      else
+        echo "\nNo board reported an env to reflash. Name an env explicitly."
+      fi
       exit 1
     fi
     if [[ "$LIST_ONLY" == true ]]; then
-      echo "\n--auto would reflash ${#auto_ports[@]} board(s) with their current env."
+      if [[ "$RESET_ONLY" == true ]]; then
+        echo "\nWould reset ${#auto_ports[@]} board(s)."
+      else
+        echo "\nWould reflash ${#auto_ports[@]} board(s) with their current env."
+      fi
+      [[ "$ENV_GIVEN" == false ]] && echo "(no env given — each board keeps the env it runs)"
       exit 0
     fi
-    echo "\nReflashing ${#auto_ports[@]} board(s) with their reported env:"
+    # -r must ride along, or a reset-only run would flash the boards instead.
+    typeset -a pass_flags
+    [[ "$RESET_ONLY" == true ]] && pass_flags+=("-r")
+    [[ "$SKIP_CLASS_CHECK" == true ]] && pass_flags+=("--any")
+    if [[ "$RESET_ONLY" == true ]]; then
+      echo "\nResetting ${#auto_ports[@]} board(s):"
+    else
+      echo "\nReflashing ${#auto_ports[@]} board(s) with their reported env:"
+    fi
     rc=0
     for i in {1..${#auto_ports[@]}}; do
       echo "  → ${auto_ports[$i]} ← ${auto_envs[$i]}"
-      "$0" "${auto_envs[$i]}" -p "${auto_ports[$i]}" 2>&1 | tail -1 || rc=1
+      "$0" "${auto_envs[$i]}" -p "${auto_ports[$i]}" "${pass_flags[@]}" 2>&1 | tail -1 || rc=1
     done
     exit $rc
   fi
@@ -202,7 +389,6 @@ else
 
   if [[ "$LIST_ONLY" == true ]]; then
     echo "\n${#ports[@]} board(s) match class '$WANT_CLASS' (env $ENV)."
-    [[ "$ENV_GIVEN" == false ]] && echo "(no env given — showed matches for the default '$ENV')"
     exit 0
   fi
   if [[ ${#ports[@]} -eq 0 ]]; then
@@ -273,4 +459,8 @@ if [[ $failed -gt 0 ]]; then
   echo "FAILED — $failed of ${#ports[@]} board(s) did not flash."
   exit 1
 fi
-echo "Done — ${#ports[@]} board(s) flashed."
+if [[ "$RESET_ONLY" == true ]]; then
+  echo "Done — ${#ports[@]} board(s) reset."
+else
+  echo "Done — ${#ports[@]} board(s) flashed."
+fi
