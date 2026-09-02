@@ -3,15 +3,19 @@
 #
 # Usage: ./flash_all.sh [env] [options]
 #   env            platformio environment. With no env named, every attached
-#                  board is provisioned: registered in the channel table, built,
-#                  and flashed with the role its hardware class calls for.
+#                  board is reflashed with the env it already runs — the same
+#                  thing --auto asks for, which is the default.
 #   -l, --list     list what is connected and exit — no flash, no reset
 #   -r, --reset    reset only, no flash write
 #   -p <port>      flash only this port (repeatable); skips detection
 #   -i <id>        flash only the board with this device ID / name / MAC
 #                  (e.g. -i A855, -i N-A855, -i 3C:0F:02:E4:52:2D)
-#   --auto         reflash every identified board with the env it already runs,
-#                  rather than the role its class calls for; honours -i
+#   --auto         the default: reflash every board with the env it already
+#                  runs, falling back to the role its class calls for when a
+#                  board cannot say; honours -i
+#   --install      the provisioning pass instead: register every board in the
+#                  channel table and flash the role its class calls for,
+#                  ignoring the (possibly retired) firmware it runs now
 #   --any          skip the hardware-class check
 #
 # How a board is identified
@@ -32,15 +36,16 @@
 # back to an esptool hardware probe, which still yields `class`. That is enough
 # to flash safely: class is the safety net, and the env argument names the role.
 #
-# Provisioning (no env named)
-# ---------------------------
-# The install pass. Every attached board ends up registered in
-# CHANNEL_ASSIGNMENT and running the current firmware for its hardware:
+# Provisioning (--install)
+# ------------------------
+# The install pass, for a crate of boards rather than a bench of them. Every
+# attached board ends up registered in CHANNEL_ASSIGNMENT and running the
+# current firmware for its hardware:
 #
 #   1. identify every board, and pick its role from `class`, not from the
 #      firmware it happens to be running — the crate is full of boards carrying
-#      retired traveler/station images, and --auto would faithfully reflash
-#      them with those
+#      retired traveler/station images, and the default pass would faithfully
+#      reflash them with those
 #   2. hand every board to tools/install_map.py: sensors get the lowest free
 #      rope channel, screens get a display spread across the ones available.
 #      Boards already listed are left exactly as they are, so anything set by
@@ -60,6 +65,7 @@ LIST_ONLY=false
 SKIP_CLASS_CHECK=false
 AUTO_ENV=false
 PROVISION=false
+PROVISION_ASKED=false
 ENV=""
 ENV_GIVEN=false
 ONLY_PORTS=()
@@ -78,6 +84,7 @@ for arg in "$@"; do
       -l|--list)  LIST_ONLY=true ;;
       --any)      SKIP_CLASS_CHECK=true ;;
       --auto)     AUTO_ENV=true ;;
+      --install|--provision) PROVISION_ASKED=true ;;
       -p|--port)  expect="port" ;;
       -i|--id)    expect="id" ;;
       *)          ENV="$arg"; ENV_GIVEN=true ;;
@@ -93,10 +100,17 @@ if [[ "$ENV_GIVEN" == false ]]; then
     echo "read a running env from. e.g. ./flash_all.sh sensor -p ${ONLY_PORTS[1]}"
     exit 1
   fi
-  # --auto asks for "keep doing what you are doing"; bare invocation asks for
-  # "make these boards correct", which is the provisioning pass.
-  if [[ "$AUTO_ENV" == false ]]; then PROVISION=true; fi
+  # Bare invocation means "keep every board doing what it is doing", the same
+  # thing --auto asks for. Reinstalling the crate is the rarer, more invasive
+  # act, so it has to be asked for by name: --install.
+  if [[ "$PROVISION_ASKED" == true ]]; then PROVISION=true; else AUTO_ENV=true; fi
   ENV="sensor"   # placeholder: both modes name a real env per board
+fi
+
+if [[ "$PROVISION_ASKED" == true && "$ENV_GIVEN" == true ]]; then
+  echo "--install picks each board's env from its hardware class, so it cannot"
+  echo "also be given one. Drop '$ENV', or drop --install."
+  exit 1
 fi
 
 PYTHON="/Users/sam/.platformio/penv/bin/python"
@@ -383,7 +397,14 @@ else
           [[ "${id:u}" == "$want" || "${name:u}" == "$want" || "${mac:u}" == "$want" ]] && wanted=true
         done
       fi
-      if [[ "$wanted" == false || "$renv" == "?" || "$renv" == "unknown" ]]; then
+      # A board that cannot say what it runs — blank, crashed, or carrying
+      # non-Pulleys firmware — still reported a hardware class, and that is
+      # enough to name an env. Falling back to it is the whole reason a silent
+      # board is worth plugging in: refusing would leave it silent forever.
+      if [[ "$renv" == "?" || "$renv" == "unknown" ]]; then
+        renv=$(class_env "$(row_field "$row" 2)")
+      fi
+      if [[ "$wanted" == false || -z "$renv" ]]; then
         print_row " " "$row"
       else
         print_row "→" "$row"
@@ -394,7 +415,8 @@ else
       if [[ ${#ONLY_IDS[@]} -gt 0 ]]; then
         echo "\nNo board matched ${ONLY_IDS[*]} with an env to reflash."
       else
-        echo "\nNo board reported an env to reflash. Name an env explicitly."
+        echo "\nNo attached board has an env to flash: none reported one, and"
+        echo "none is a hardware class with a current role. Name an env explicitly."
       fi
       exit 1
     fi
@@ -414,7 +436,7 @@ else
     if [[ "$RESET_ONLY" == true ]]; then
       echo "\nResetting ${#auto_ports[@]} board(s):"
     else
-      echo "\nReflashing ${#auto_ports[@]} board(s) with their reported env:"
+      echo "\nReflashing ${#auto_ports[@]} board(s) with their own env:"
     fi
     rc=0
     for i in {1..${#auto_ports[@]}}; do

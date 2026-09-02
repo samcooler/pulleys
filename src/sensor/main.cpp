@@ -34,18 +34,40 @@
 // The installed piece is dark until someone plays with it, so a sensor shows
 // nothing at rest and lights up only while it is detecting and sending.
 //
-// SENSOR_IDLE_PIXELS is a debugging affordance: a few pixels stay lit in the
-// channel colour so an unlit rope can be told apart from a dead board. Set it
-// to 0 for the installed behaviour — properly dark at rest.
+// The idle state is a 3x3 candle in the middle of the panel: an unlit rope can
+// still be told apart from a dead board, but it reads as something quietly
+// alive rather than as a status LED. Set SENSOR_IDLE_CANDLE to 0 for a panel
+// that is properly dark at rest.
+//
+// Two independent motions make it look like a flame rather than a blinking
+// block. The breath is the whole candle swelling and fading on a long cycle;
+// the flicker is each of the nine pixels wandering on its own. Neither is
+// phase-locked to the mesh clock the way the active pattern is — a row of
+// sensors pulsing in unison reads as one machine blinking, where independent
+// phases read as several quiet things idling. Each board picks its breath
+// offset at boot, and each pixel its own flicker stream.
 //
 // ACTIVE_BRIGHTNESS is deliberately well short of full. The panel is at arm's
 // length from whoever just pulled the rope, in the dark, on eyes that have
 // been adapted for a while — at 190 it is a lamp rather than a pattern, and
 // the shape washes out into a single bright block. Raise it only if the piece
 // ends up somewhere with real ambient light to compete with.
-#define SENSOR_IDLE_PIXELS 4
+#define SENSOR_IDLE_CANDLE 1
 #define IDLE_BRIGHTNESS    14     // low — a presence check, not a display
-#define ACTIVE_BRIGHTNESS  110    // pattern while awake — see note below
+
+// Breath: dark for a long stretch, swell, brief hold at full, fade back.
+#define IDLE_OFF_MS   10000
+#define IDLE_RISE_MS   3000
+#define IDLE_HOLD_MS   1000
+#define IDLE_FALL_MS   3000
+#define IDLE_CYCLE_MS (IDLE_OFF_MS + IDLE_RISE_MS + IDLE_HOLD_MS + IDLE_FALL_MS)
+
+// Flicker: how deep each pixel's own wander goes, and how fast it wanders.
+// FLICKER_FLOOR is the dimmest a pixel gets as a fraction of the breath, so a
+// candle never fully gutters out mid-swell.
+#define FLICKER_FLOOR  0.05f
+#define FLICKER_SPEED  9        // inoise8 steps per ms/16 — higher is twitchier
+#define ACTIVE_BRIGHTNESS  77     // 30% of full — pattern while awake; see note below
 
 // Envelope around a detection: snap up, hold, drift back down. Re-triggering
 // only pushes the hold out — the envelope keeps rising from wherever it is and
@@ -67,15 +89,16 @@ static uint8_t  myChannel = 0;
 static uint8_t  myMode    = pulleys::SENSOR_MODE_LINEAR;
 static float    myRotDeg  = 180.0f;
 static uint32_t holdUntil = 0;    // envelope stays up until this moment
+static uint32_t idlePhase = 0;    // per-board offset into the breath cycle
 static float    ledEnv    = 0.0f; // 0 = dark/idle pixels, 1 = full pattern
 static uint32_t localCount = 0;
 static uint32_t heardCount = 0;
 // Where myChannel came from, in descending order of authority. Kept apart
 // because they mean different things to whoever is holding the board: LISTED is
 // settled, NVS is someone's field fix, HASH is a guess that works.
-enum ChanSource : uint8_t { CHAN_LISTED, CHAN_NVS, CHAN_HASH };
+enum ChanSource : uint8_t { CHAN_LISTED, CHAN_NVS, CHAN_HASH, CHAN_DEFAULT };
 static ChanSource chanSource = CHAN_HASH;
-static ChanSource modeSource = CHAN_NVS;   // mode has no hash fallback; see below
+static ChanSource modeSource = CHAN_DEFAULT;   // no hash fallback for mode
 
 // The install map mirrors these rather than including the radio header, so
 // check here — where both are visible — that the two have not drifted apart.
@@ -90,11 +113,16 @@ static void loadConfig() {
     // must be distinguishable from one deliberately put on channel 0. With 0 as
     // the default they look identical, and a whole crate of freshly flashed
     // boards silently piles onto channel 0.
-    uint8_t stored = p.getUChar("ch", 0xFF);
-    myMode    = p.getUChar("mode", pulleys::SENSOR_MODE_LINEAR);
+    uint8_t stored     = p.getUChar("ch",   0xFF);
+    uint8_t storedMode = p.getUChar("mode", 0xFF);
     myRotDeg  = p.getFloat("rot",  180.0f);
     p.end();
     if (stored <= 15) { myChannel = stored; chanSource = CHAN_NVS; }
+    // Same sentinel reasoning as the channel above: with LINEAR as the read
+    // default, a board nobody has configured is indistinguishable from one
+    // deliberately set to linear, and the boot line then claims someone chose
+    // it. Report what is actually known.
+    if (storedMode <= pulleys::LIN) { myMode = storedMode; modeSource = CHAN_NVS; }
 }
 
 static void saveConfig() {
@@ -140,8 +168,37 @@ static void applyConfig() {
     detector.init(c);
 }
 
-// Centre 2x2 of the 8x8 panel — the idle presence pixels.
-static const uint8_t IDLE_PIXEL_IDX[4] = { 27, 28, 35, 36 };
+// Centre 3x3 of the 8x8 panel — the idle candle. Rows 3-5, cols 3-5 of a
+// non-serpentine 8x8, which keeps the old centre pixels inside the block.
+static const uint8_t IDLE_PIXEL_IDX[9] = {
+    27, 28, 29,
+    35, 36, 37,
+    43, 44, 45,
+};
+static constexpr uint8_t IDLE_PIXEL_COUNT =
+    sizeof(IDLE_PIXEL_IDX) / sizeof(IDLE_PIXEL_IDX[0]);
+
+// 0 at rest, 1 at the top of the swell. Linear ramps: the eye reads the long
+// dark gap and the slow rise, not the curve shape, so easing would not earn
+// its complexity here.
+static float idleBreath(uint32_t now) {
+    uint32_t t = (now + idlePhase) % IDLE_CYCLE_MS;
+    if (t < IDLE_OFF_MS)  return 0.0f;
+    t -= IDLE_OFF_MS;
+    if (t < IDLE_RISE_MS) return (float)t / IDLE_RISE_MS;
+    t -= IDLE_RISE_MS;
+    if (t < IDLE_HOLD_MS) return 1.0f;
+    t -= IDLE_HOLD_MS;
+    return 1.0f - (float)t / IDLE_FALL_MS;
+}
+
+// Per-pixel flicker in FLICKER_FLOOR..1. Perlin noise rather than random8 so
+// each pixel wanders smoothly instead of buzzing; the large y offset keeps the
+// nine streams from correlating with one another.
+static float idleFlicker(uint8_t i, uint32_t now) {
+    uint8_t n = inoise8((uint16_t)(now * FLICKER_SPEED / 16), (uint16_t)(i * 977));
+    return FLICKER_FLOOR + (1.0f - FLICKER_FLOOR) * (n / 255.0f);
+}
 
 // Point the pattern slot at the current channel. Call after any channel change.
 static void applyChannelVisual() {
@@ -165,7 +222,9 @@ static void printConfig() {
                            : chanSource == CHAN_NVS    ? "set over serial"
                                                        : "UNLISTED — hashed from ID",
                   myMode == pulleys::SENSOR_MODE_ROTATION ? "ROTATION" : "LINEAR",
-                  modeSource == CHAN_LISTED ? "listed" : "set over serial",
+                  modeSource == CHAN_LISTED ? "listed"
+                           : modeSource == CHAN_NVS ? "set over serial"
+                                                    : "nobody set one — default",
                   myRotDeg);
 }
 
@@ -239,6 +298,8 @@ void setup() {
         Serial.println("  [IMU] 6-axis init FAILED — no detection possible");
     }
     applyConfig();
+
+    idlePhase = esp_random() % IDLE_CYCLE_MS;
 
     pulleys::mesh_init(pulleys::MESH_ORIGIN_SENSOR, pulleys::identity_id());
     pulleys::mesh_on_event(onMeshEvent);
@@ -326,9 +387,14 @@ void loop() {
             // Presence pixels cross-fade against the pattern, so the hand-off in
             // both directions is smooth rather than a pop.
             CRGB c = pulleys::channel_color(myChannel);
-            c.nscale8((uint8_t)(IDLE_BRIGHTNESS * (1.0f - ledEnv)));
-            for (uint8_t i = 0; i < SENSOR_IDLE_PIXELS && i < 4; i++)
-                leds[IDLE_PIXEL_IDX[i]] += c;
+            float breath = IDLE_BRIGHTNESS * (1.0f - ledEnv) * idleBreath(now);
+            if (SENSOR_IDLE_CANDLE && breath > 0.0f) {
+                for (uint8_t i = 0; i < IDLE_PIXEL_COUNT; i++) {
+                    CRGB p = c;
+                    p.nscale8((uint8_t)(breath * idleFlicker(i, now)));
+                    leds[IDLE_PIXEL_IDX[i]] += p;
+                }
+            }
         }
         FastLED.show();
     }

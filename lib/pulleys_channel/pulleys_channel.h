@@ -52,11 +52,18 @@ static constexpr uint8_t CHANNEL_SHAPE_COUNT =
 
 inline PulleysCulture channel_culture(uint8_t ch) {
     uint8_t hue = channel_hue(ch);
-    // colorB is a highlight, not a second identity: a small hue step and a
-    // good deal less saturation, so it lands as a pale glint off the body
-    // colour. The renderer keeps it to a minority of the lit pixels.
+    // colorB is a highlight by AREA, not by tint: the renderer already keeps it
+    // to a minority of the lit pixels (accentLo in pulleys_patterns.h gives it
+    // about a fifth of the form), so the colour itself does not also need to be
+    // pale to read as subordinate. It should be a contrasting hue, fully
+    // saturated, and only slightly dimmer than the body.
+    //
+    // Desaturating it was the old mistake: CHSV holds value at 255, so lowering
+    // saturation lifts all three RGB channels together instead of tinting, and
+    // the accent came out white. Keep saturation at full and carry the contrast
+    // in the hue step; carry the subordination in value and in area.
     CRGB a = CHSV(hue, 235, 255);
-    CRGB b = CHSV((uint8_t)(hue + 18), 120, 255);
+    CRGB b = CHSV((uint8_t)(hue + 85), 255, 205);
     PulleysCulture c;
     c.colorA      = { a.r, a.g, a.b };
     c.colorB      = { b.r, b.g, b.b };
