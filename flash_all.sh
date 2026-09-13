@@ -3,19 +3,20 @@
 #
 # Usage: ./flash_all.sh [env] [options]
 #   env            platformio environment. With no env named, every attached
-#                  board is reflashed with the env it already runs — the same
-#                  thing --auto asks for, which is the default.
+#                  board is converged: registered in the install map, rebuilt,
+#                  and reflashed with the role it already runs. This is the
+#                  one command that brings the boards and the map up to date.
 #   -l, --list     list what is connected and exit — no flash, no reset
 #   -r, --reset    reset only, no flash write
 #   -p <port>      flash only this port (repeatable); skips detection
 #   -i <id>        flash only the board with this device ID / name / MAC
 #                  (e.g. -i A855, -i N-A855, -i 3C:0F:02:E4:52:2D)
-#   --auto         the default: reflash every board with the env it already
-#                  runs, falling back to the role its class calls for when a
-#                  board cannot say; honours -i
-#   --install      the provisioning pass instead: register every board in the
-#                  channel table and flash the role its class calls for,
-#                  ignoring the (possibly retired) firmware it runs now
+#   --auto         reflash only: skip the install map and the build, and write
+#                  each board the env it already runs. The escape hatch for
+#                  when the map must not be touched; honours -i
+#   --install      converge, but override each board's role with the one its
+#                  hardware class calls for. How a board carrying a retired
+#                  traveler/station image gets moved onto a current one
 #   --any          skip the hardware-class check
 #
 # How a board is identified
@@ -36,16 +37,16 @@
 # back to an esptool hardware probe, which still yields `class`. That is enough
 # to flash safely: class is the safety net, and the env argument names the role.
 #
-# Provisioning (--install)
-# ------------------------
-# The install pass, for a crate of boards rather than a bench of them. Every
-# attached board ends up registered in CHANNEL_ASSIGNMENT and running the
-# current firmware for its hardware:
+# The converge pass (no env named)
+# -------------------------------
+# The default, and the one to reach for. Every attached board ends up
+# registered in the install map and running a current image built from the
+# working tree:
 #
-#   1. identify every board, and pick its role from `class`, not from the
-#      firmware it happens to be running — the crate is full of boards carrying
-#      retired traveler/station images, and the default pass would faithfully
-#      reflash them with those
+#   1. identify every board and pick its role: whatever current env it already
+#      reports, or — if that env is retired, or the board stayed silent — the
+#      role its hardware class calls for. `--install` forces the latter for
+#      every board, which is how a crate of retired images gets migrated.
 #   2. hand every board to tools/install_map.py: sensors get the lowest free
 #      rope channel, screens get a display spread across the ones available.
 #      Boards already listed are left exactly as they are, so anything set by
@@ -66,6 +67,7 @@ SKIP_CLASS_CHECK=false
 AUTO_ENV=false
 PROVISION=false
 PROVISION_ASKED=false
+FORCE_CLASS_ROLE=false
 ENV=""
 ENV_GIVEN=false
 ONLY_PORTS=()
@@ -100,10 +102,18 @@ if [[ "$ENV_GIVEN" == false ]]; then
     echo "read a running env from. e.g. ./flash_all.sh sensor -p ${ONLY_PORTS[1]}"
     exit 1
   fi
-  # Bare invocation means "keep every board doing what it is doing", the same
-  # thing --auto asks for. Reinstalling the crate is the rarer, more invasive
-  # act, so it has to be asked for by name: --install.
-  if [[ "$PROVISION_ASKED" == true ]]; then PROVISION=true; else AUTO_ENV=true; fi
+  # Bare invocation is the converge pass: bring every attached board, and the
+  # install map they share, up to date in one go. It registers, builds, and
+  # flashes. Roles are kept as each board reports them (see role_for below), so
+  # this is still "keep doing what you are doing" — it just also records the
+  # board and puts the current table in the image, which is the part that was
+  # easy to forget when it lived behind a separate flag.
+  PROVISION=true
+  # --install additionally overrides the running env with the role the hardware
+  # class calls for, which is how a board carrying a retired image gets moved.
+  if [[ "$PROVISION_ASKED" == true ]]; then FORCE_CLASS_ROLE=true; fi
+  # --auto stays as the narrow escape hatch: reflash only, touch no table.
+  if [[ "$AUTO_ENV" == true ]]; then PROVISION=false; fi
   ENV="sensor"   # placeholder: both modes name a real env per board
 fi
 
@@ -143,6 +153,28 @@ class_env() {
     s3_16mb) echo "arbiter_mesh" ;;
     *)       echo ""             ;;   # c3/station is retired; unknown is unsafe
   esac
+}
+
+# Envs still in service. A board running one of these is already the thing it
+# should be, so the converge pass leaves its role alone. Anything else — a
+# retired traveler/station image, a blank board — is asked to become whatever
+# its hardware class calls for instead.
+is_current_env() {
+  case "$1" in
+    sensor|screen|arbiter_mesh) return 0 ;;
+    *)                          return 1 ;;
+  esac
+}
+
+# The env a board should be flashed with: what it already runs, unless that is
+# retired or unreadable, or --install was asked for. Empty means "skip it".
+role_for() {
+  local renv="$1" cls="$2"
+  if [[ "$FORCE_CLASS_ROLE" == false ]] && is_current_env "$renv"; then
+    echo "$renv"
+  else
+    class_env "$cls"
+  fi
 }
 
 class_roles() {
@@ -226,7 +258,7 @@ else
     for row in "${ROWS[@]}"; do
       port=$(row_field "$row" 1); cls=$(row_field "$row" 2)
       id=$(row_field "$row" 5);   name=$(row_field "$row" 7); mac=$(row_field "$row" 8)
-      tenv=$(class_env "$cls")
+      tenv=$(role_for "$(row_field "$row" 4)" "$cls")
       wanted=true
       if [[ ${#ONLY_IDS[@]} -gt 0 ]]; then
         wanted=false
@@ -349,7 +381,7 @@ else
       for row in "${ROWS[@]}"; do
         id=$(row_field "$row" 5); name=$(row_field "$row" 7); cls=$(row_field "$row" 2)
         [[ "$id" == "?" || -z "$id" ]] && continue
-        tenv=$(class_env "$cls"); [[ -z "$tenv" ]] && continue
+        tenv=$(role_for "$(row_field "$row" 4)" "$cls"); [[ -z "$tenv" ]] && continue
         late_ports+=("$(row_field "$row" 1)"); late_envs+=("$tenv")
         if [[ "$tenv" == "sensor" ]]; then late_chan+=("${id}=${name}")
         else                                late_disp+=("${id}=${name}"); fi
@@ -477,6 +509,21 @@ else
 fi
 
 BUILD=".pio/build/$ENV"
+# Build before flashing. Without this the script happily writes whatever binary
+# happens to be sitting in .pio — so a broken platformio.ini, or simply an edit
+# nobody rebuilt, flashes a stale image and reports success. That failure is
+# invisible at the panel: the board comes up fine, just running yesterday's
+# code, and the next hour goes into debugging firmware that was never on it.
+#
+# Recursive calls pass -p (one per board, from the passes above) and have
+# already been built by their caller, so only a top-level run builds.
+if [[ "$RESET_ONLY" == false && ${#ONLY_PORTS[@]} -eq 0 ]]; then
+  echo "Building $ENV…"
+  if ! "$PIO" run -e "$ENV" >/dev/null 2>&1; then
+    echo "Build FAILED — not flashing. Run 'pio run -e $ENV' to see why."
+    exit 1
+  fi
+fi
 if [[ "$RESET_ONLY" == false && ! -f "$BUILD/firmware.bin" ]]; then
   echo "No firmware found at $BUILD/firmware.bin — run 'pio run -e $ENV' first."
   exit 1

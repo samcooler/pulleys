@@ -61,6 +61,13 @@ static const ChannelAssignment CHANNEL_ASSIGNMENT[] = {
     // ASSIGNMENTS BEGIN
     { 0xEC52, 1, LIN },   // N-EC52
     { 0x0664, 2, LIN },   // N-0664
+    { 0x611D, 3, LIN },   // N-611D
+    { 0x8A32, 4, LIN },   // N-8A32
+    { 0xA855, 5, LIN },   // N-A855
+    { 0xE250, 6, LIN },   // N-E250
+    { 0x2452, 7, LIN },   // N-2452
+    { 0x08FF, 8, LIN },   // N-08FF
+    { 0x026D, 9, LIN },   // N-026D
     // ASSIGNMENTS END
 };
 static constexpr uint8_t CHANNEL_ASSIGNMENT_COUNT =
@@ -126,6 +133,12 @@ struct DisplayAssignment { uint16_t id; uint8_t display; };
 
 static const DisplayAssignment DISPLAY_ASSIGNMENT[] = {
     // DISPLAYS BEGIN
+    { 0x59A4, SCREEN_RANKING },   // X-59A4
+    { 0xCC6B, SCREEN_COUNTER },   // X-CC6B
+    { 0x460B, SCREEN_COUNTER },   // X-460B
+    { 0x4466, SCREEN_RANKING },   // X-4466
+    { 0x28A2, SCREEN_RANKING },   // X-28A2
+    { 0xD08E, SCREEN_RANKING },   // X-D08E
     // DISPLAYS END
 };
 static constexpr uint8_t DISPLAY_ASSIGNMENT_COUNT =
