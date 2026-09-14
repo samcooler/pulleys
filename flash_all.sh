@@ -7,6 +7,10 @@
 #                  and reflashed with the role it already runs. This is the
 #                  one command that brings the boards and the map up to date.
 #   -l, --list     list what is connected and exit — no flash, no reset
+#   --survey       ask the whole mesh what it is and what it is running, over
+#                  the air, and exit. Plug into any one board; every board
+#                  answers with its role, env, build stamp and uptime. Nothing
+#                  is interrupted. See tools/survey.py
 #   -r, --reset    reset only, no flash write
 #   -p <port>      flash only this port (repeatable); skips detection
 #   -i <id>        flash only the board with this device ID / name / MAC
@@ -17,6 +21,13 @@
 #   --install      converge, but override each board's role with the one its
 #                  hardware class calls for. How a board carrying a retired
 #                  traveler/station image gets moved onto a current one
+#   --ota          flash over the air instead of over the cable. Plug into any
+#                  one board: it is written by esptool and then hosts the image
+#                  for every other board on its own SoftAP, on the mesh channel.
+#                  With no env this is the whole piece in one command -- every
+#                  live env in turn, then the tethered board over its cable.
+#                  With an env, just that env; honours -i. Needs no network of
+#                  any kind. See tools/ota.py
 #   --any          skip the hardware-class check
 #
 # How a board is identified
@@ -73,6 +84,29 @@ ENV_GIVEN=false
 ONLY_PORTS=()
 ONLY_IDS=()
 expect=""
+# Over the air is a different delivery entirely: the tethered board is the host,
+# not the target (see lib/pulleys_ota for why the image travels that way). Hand
+# over before parsing anything, and pass the rest through untouched -- ota.py
+# takes the same env, -i and -p, plus flags of its own that mean nothing here.
+# The wireless counterpart to -l: -l sees what is plugged in, --survey sees what
+# is out there. Same handoff shape, and it disturbs nothing -- boards answer
+# from inside their normal loop.
+if [[ " $* " == *" --survey "* ]]; then
+  survey_args=()
+  for arg in "$@"; do
+    [[ "$arg" == "--survey" ]] || survey_args+=("$arg")
+  done
+  exec "/Users/sam/.platformio/penv/bin/python" "${0:A:h}/tools/survey.py" "${survey_args[@]}"
+fi
+
+if [[ " $* " == *" --ota "* ]]; then
+  ota_args=()
+  for arg in "$@"; do
+    [[ "$arg" == "--ota" ]] || ota_args+=("$arg")
+  done
+  exec "/Users/sam/.platformio/penv/bin/python" "${0:A:h}/tools/ota.py" "${ota_args[@]}"
+fi
+
 for arg in "$@"; do
   if [[ -n "$expect" ]]; then
     case "$expect" in
@@ -127,6 +161,7 @@ PYTHON="/Users/sam/.platformio/penv/bin/python"
 PIO="/Users/sam/.platformio/penv/bin/pio"
 ASSIGN="${0:A:h}/tools/install_map.py"
 ESPTOOL="/Users/sam/.platformio/packages/tool-esptoolpy/esptool.py"
+
 BOOT_APP="/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
 IDENTIFY="${0:A:h}/tools/identify.py"
 

@@ -6,6 +6,8 @@
 #include <pulleys_protocol.h>
 #include <pulleys_imu.h>
 #include <pulleys_mesh.h>
+#include <pulleys_ota.h>
+#include <pulleys_census.h>
 #include <pulleys_detect.h>
 #include <pulleys_culture.h>
 #include <pulleys_patterns.h>
@@ -166,6 +168,13 @@ static void applyConfig() {
     c.mode            = myMode;
     c.rotThresholdDeg = myRotDeg;
     detector.init(c);
+
+    // Which rope, read which way: the one fact that tells two sensors apart in
+    // a survey. Set here so it follows every change, not just the boot value.
+    char detail[16];
+    snprintf(detail, sizeof(detail), "ch%d %s", myChannel,
+             pulleys::sensor_mode_name(myMode));
+    pulleys::census_set_detail(detail);
 }
 
 // Centre 3x3 of the 8x8 panel — the idle candle. Rows 3-5, cols 3-5 of a
@@ -229,7 +238,10 @@ static void printConfig() {
 }
 
 static void handleSerial() {
-    static char buf[32];
+    // Long enough for the OTA intake header, which is the longest line any
+    // role accepts: "OTA-IMG env=… size=… md5=<32 hex> id=…" runs past 70
+    // characters, and a short buffer truncates it silently rather than failing.
+    static char buf[96];
     static uint8_t len = 0;
     while (Serial.available()) {
         char c = Serial.read();
@@ -238,6 +250,12 @@ static void handleSerial() {
             buf[len] = 0;
             len = 0;
             if (pulleys::whoami_handle(buf)) continue;   // "?" → PULLEYS-ID line
+            if (pulleys::ota_handle_serial(buf)) continue;   // "OTA-SLOT" / "OTA-SERVE"
+            if (pulleys::census_handle_serial(buf)) continue; // "CENSUS" → who is out there
+            if (buf[0] == 'O') {                 // "O" → become the OTA host
+                pulleys::ota_host_begin();
+                continue;
+            }
             if (buf[0] == 'c') {                 // "c7" → channel 7
                 int v = atoi(buf + 1);
                 if (v >= 0 && v <= 15) {
@@ -302,6 +320,8 @@ void setup() {
     idlePhase = esp_random() % IDLE_CYCLE_MS;
 
     pulleys::mesh_init(pulleys::MESH_ORIGIN_SENSOR, pulleys::identity_id());
+    pulleys::ota_init();
+    pulleys::census_init();
     pulleys::mesh_on_event(onMeshEvent);
 
     applyChannelVisual();
@@ -332,6 +352,16 @@ void loop() {
     uint32_t now = millis();
 
     pulleys::mesh_poll();
+    pulleys::census_poll();
+
+    // OTA owns the board while it runs: the radio wants the airtime, and
+    // FastLED.show() turns interrupts off for long enough to cost packets.
+    if (pulleys::ota_active()) {
+        pulleys::ota_poll();
+        handleSerial();
+        return;
+    }
+
     handleSerial();
 
     // Detection

@@ -37,6 +37,10 @@ enum : uint8_t {
     MESH_MSG_EVENT  = 0x10,
     MESH_MSG_SYNC   = 0x20,   // shared clock beacon
     MESH_MSG_DIGEST = 0x30,   // reserved
+    MESH_MSG_OTA_ANNOUNCE = 0x40,   // host: "my AP is up, this image is for you"
+    MESH_MSG_OTA_READY    = 0x41,   // node: "joined, here is my address"
+    MESH_MSG_HELLO        = 0x50,   // "everyone say what you are"
+    MESH_MSG_CENSUS       = 0x51,   // the answer to that
 };
 
 // Clock sync: every node beacons its own mesh clock, and each listener pulls a
@@ -81,10 +85,96 @@ struct __attribute__((packed)) MeshSync {
     uint16_t originId;    // appended after meshNow — older nodes ignore the tail
 };  // 10 bytes
 
+// ── OTA control ──────────────────────────────────────────────────────────────
+// Firmware never travels over ESP-NOW — only the invitation does. The host
+// raises a SoftAP on this same channel and repeats an announce; a node that
+// recognises its own env joins the AP and pulls the image over HTTP.
+//
+// Repeated rather than flooded: these are not events, so they skip the dedupe
+// ring and the relay entirely. A node that misses one hears the next, and a
+// node that boots mid-window still gets invited.
+struct __attribute__((packed)) MeshOtaAnnounce {
+    uint8_t  magic0;      // 'P'
+    uint8_t  magic1;      // 'M'
+    uint8_t  msgType;     // MESH_MSG_OTA_ANNOUNCE
+    uint8_t  originType;  // MESH_ORIGIN_* of the host
+    uint16_t originId;    // host's device ID
+    char     ssid[32];    // the host's SoftAP
+    char     pass[16];
+    char     env[16];     // PlatformIO env this image is for — a node whose own
+                          // PULLEYS_ENV differs stays in the art and ignores it
+    uint16_t idFilter;    // 0 = every board of that env; else only this device ID
+    uint16_t windowSecs;  // how long the host will keep serving
+    char     md5[33];     // md5 of the image on offer. A node remembers what it
+                          // last took, so it can tell "there is an update" from
+                          // "the invitation I already accepted is still being
+                          // repeated" -- without this a node reboots into the
+                          // new image, hears the same announce, and takes it
+                          // again, forever.
+};  // 109 bytes
+
+struct __attribute__((packed)) MeshOtaReady {
+    uint8_t  magic0;      // 'P'
+    uint8_t  magic1;      // 'M'
+    uint8_t  msgType;     // MESH_MSG_OTA_READY
+    uint8_t  originType;  // MESH_ORIGIN_* of the node checking in
+    uint16_t originId;    // node's device ID
+    char     env[16];     // what the node is running now
+    uint8_t  ip[4];       // its address on the host's AP
+    uint8_t  state;       // OTA_STATE_*
+    int16_t  err;         // updater error code when state is FAILED; else 0.
+                          // A node up a rope has no USB port to be debugged
+                          // through, so the reason has to come back over the
+                          // air or it is not available at all.
+};  // 30 bytes
+
+enum : uint8_t {
+    OTA_STATE_READY       = 0,   // joined the AP, about to pull
+    OTA_STATE_DOWNLOADING = 1,
+    OTA_STATE_OK          = 2,   // written; rebooting into it
+    OTA_STATE_FAILED      = 3,
+};
+
+// ── Census ───────────────────────────────────────────────────────────────────
+// The clock beacon already proves a board is alive, but it carries only an ID
+// and a type -- not what firmware that board is running, which is the question
+// that matters once boards are reflashed without a cable. HELLO asks; every
+// board answers with a CENSUS naming itself.
+//
+// Replies are spread over a window the asker names, because a dozen boards
+// answering the same instant is a dozen boards colliding.
+struct __attribute__((packed)) MeshHello {
+    uint8_t  magic0;      // 'P'
+    uint8_t  magic1;      // 'M'
+    uint8_t  msgType;     // MESH_MSG_HELLO
+    uint8_t  originType;  // MESH_ORIGIN_* of the asker
+    uint16_t originId;
+    uint16_t nonce;       // ties answers to the round that asked for them
+    uint16_t spreadMs;    // answer at a random point inside this window
+};  // 10 bytes
+
+struct __attribute__((packed)) MeshCensus {
+    uint8_t  magic0;      // 'P'
+    uint8_t  magic1;      // 'M'
+    uint8_t  msgType;     // MESH_MSG_CENSUS
+    uint8_t  originType;  // MESH_ORIGIN_*
+    uint16_t originId;
+    uint16_t nonce;       // echoed from the HELLO
+    char     env[16];     // the PlatformIO env this board is running
+    char     build[24];   // its compile stamp -- the same token whoami prints
+    char     detail[16];  // whatever the role thinks identifies it in a list:
+                          // a sensor's rope and mode, a screen's display
+    uint32_t uptimeSecs;
+};  // 70 bytes
+
 // Every node beacons, so this is also the presence signal for roles that emit
 // no events of their own: without it a Screen is invisible to a monitor.
 typedef void (*MeshEventCb)(const MeshEvent& ev, bool relayed);
 typedef void (*MeshSyncCb)(uint8_t originType, uint16_t originId, int32_t skewMs);
+typedef void (*MeshOtaAnnounceCb)(const MeshOtaAnnounce& a);
+typedef void (*MeshOtaReadyCb)(const MeshOtaReady& r);
+typedef void (*MeshHelloCb)(const MeshHello& h);
+typedef void (*MeshCensusCb)(const MeshCensus& c);
 
 // ── Internal state ──────────────────────────────────────────────────────────
 namespace _mesh {
@@ -112,6 +202,10 @@ struct State {
     uint16_t    seqCounter = 0;
     MeshEventCb eventCb    = nullptr;
     MeshSyncCb  syncCb     = nullptr;
+    MeshOtaAnnounceCb otaAnnounceCb = nullptr;
+    MeshOtaReadyCb    otaReadyCb    = nullptr;
+    MeshHelloCb       helloCb       = nullptr;
+    MeshCensusCb      censusCb      = nullptr;
     bool        relayOn    = true;
 
     // Deduplication ring — linear scan, fine at this node count / event rate.
@@ -135,6 +229,23 @@ struct State {
     MeshSync syncRx[4]    = {};
     volatile uint8_t syncHead = 0;
     volatile uint8_t syncTail = 0;
+
+    // OTA control rings. The announce repeats, so one slot is enough — a
+    // missed copy costs nothing. Check-ins come from every node at once, so
+    // those get a ring deep enough for a crate of boards answering together.
+    MeshOtaAnnounce otaRx     = {};
+    volatile bool   otaRxFull = false;
+    MeshOtaReady    readyRx[8] = {};
+    volatile uint8_t readyHead = 0;
+    volatile uint8_t readyTail = 0;
+
+    // Census. The reply ring is deep enough for every board in the piece to
+    // answer one round before anything is drained.
+    MeshHello       helloRx    = {};
+    volatile bool   helloRxFull = false;
+    MeshCensus      censusRx[16] = {};
+    volatile uint8_t censusHead = 0;
+    volatile uint8_t censusTail = 0;
 
     // Diagnostics — every frame the radio hands us, before and after filtering.
     volatile uint32_t statRaw      = 0;
@@ -189,6 +300,40 @@ static void onRecv(const uint8_t* /*mac*/, const uint8_t* data, int len) {
         if (nh != st.syncTail) {
             memcpy(&st.syncRx[st.syncHead], data, sizeof(MeshSync));
             st.syncHead = nh;
+        }
+        return;
+    }
+
+    if (data[2] == MESH_MSG_OTA_ANNOUNCE) {
+        if (len < (int)sizeof(MeshOtaAnnounce)) { st.statBadMagic++; return; }
+        memcpy((void*)&st.otaRx, data, sizeof(MeshOtaAnnounce));
+        st.otaRxFull = true;      // latest wins; the announce repeats anyway
+        return;
+    }
+
+    if (data[2] == MESH_MSG_OTA_READY) {
+        if (len < (int)sizeof(MeshOtaReady)) { st.statBadMagic++; return; }
+        uint8_t rh = (st.readyHead + 1) & 7;
+        if (rh != st.readyTail) {
+            memcpy(&st.readyRx[st.readyHead], data, sizeof(MeshOtaReady));
+            st.readyHead = rh;
+        }
+        return;
+    }
+
+    if (data[2] == MESH_MSG_HELLO) {
+        if (len < (int)sizeof(MeshHello)) { st.statBadMagic++; return; }
+        memcpy((void*)&st.helloRx, data, sizeof(MeshHello));
+        st.helloRxFull = true;
+        return;
+    }
+
+    if (data[2] == MESH_MSG_CENSUS) {
+        if (len < (int)sizeof(MeshCensus)) { st.statBadMagic++; return; }
+        uint8_t ch = (st.censusHead + 1) & 15;
+        if (ch != st.censusTail) {
+            memcpy(&st.censusRx[st.censusHead], data, sizeof(MeshCensus));
+            st.censusHead = ch;
         }
         return;
     }
@@ -278,6 +423,78 @@ inline void mesh_on_event(MeshEventCb cb) { _mesh::S().eventCb = cb; }
 // Observe every clock beacon: node presence plus that node's skew from ours.
 inline void mesh_on_sync(MeshSyncCb cb) { _mesh::S().syncCb = cb; }
 
+// OTA control. The host subscribes to check-ins, every other role to announces.
+inline void mesh_on_ota_announce(MeshOtaAnnounceCb cb) { _mesh::S().otaAnnounceCb = cb; }
+inline void mesh_on_ota_ready(MeshOtaReadyCb cb)       { _mesh::S().otaReadyCb    = cb; }
+
+// Sent straight out rather than through the burst queue: the host repeats the
+// announce for the whole window, so retry is built into the caller's cadence.
+inline void mesh_send_ota_announce(const char* ssid, const char* pass, const char* env,
+                                   uint16_t idFilter, uint16_t windowSecs,
+                                   const char* md5) {
+    MeshOtaAnnounce a = {};
+    a.magic0     = 'P';
+    a.magic1     = 'M';
+    a.msgType    = MESH_MSG_OTA_ANNOUNCE;
+    a.originType = _mesh::S().originType;
+    a.originId   = _mesh::S().originId;
+    strncpy(a.ssid, ssid, sizeof(a.ssid) - 1);
+    strncpy(a.pass, pass, sizeof(a.pass) - 1);
+    strncpy(a.env,  env,  sizeof(a.env)  - 1);
+    a.idFilter   = idFilter;
+    a.windowSecs = windowSecs;
+    if (md5) strncpy(a.md5, md5, sizeof(a.md5) - 1);
+    esp_now_send(_mesh::BCAST, (const uint8_t*)&a, sizeof(a));
+}
+
+inline void mesh_send_ota_ready(const char* env, const uint8_t ip[4], uint8_t state,
+                                int16_t err = 0) {
+    MeshOtaReady r = {};
+    r.magic0     = 'P';
+    r.magic1     = 'M';
+    r.msgType    = MESH_MSG_OTA_READY;
+    r.originType = _mesh::S().originType;
+    r.originId   = _mesh::S().originId;
+    strncpy(r.env, env, sizeof(r.env) - 1);
+    if (ip) memcpy(r.ip, ip, 4);
+    r.state = state;
+    r.err   = err;
+    esp_now_send(_mesh::BCAST, (const uint8_t*)&r, sizeof(r));
+}
+
+// Census. Every role subscribes to HELLO; whoever asked subscribes to CENSUS.
+inline void mesh_on_hello(MeshHelloCb cb)   { _mesh::S().helloCb  = cb; }
+inline void mesh_on_census(MeshCensusCb cb) { _mesh::S().censusCb = cb; }
+
+inline uint16_t mesh_send_hello(uint16_t spreadMs) {
+    MeshHello h = {};
+    h.magic0     = 'P';
+    h.magic1     = 'M';
+    h.msgType    = MESH_MSG_HELLO;
+    h.originType = _mesh::S().originType;
+    h.originId   = _mesh::S().originId;
+    h.nonce      = (uint16_t)random(1, 65535);
+    h.spreadMs   = spreadMs;
+    esp_now_send(_mesh::BCAST, (const uint8_t*)&h, sizeof(h));
+    return h.nonce;
+}
+
+inline void mesh_send_census(uint16_t nonce, const char* env, const char* build,
+                             const char* detail, uint32_t uptimeSecs) {
+    MeshCensus c = {};
+    c.magic0     = 'P';
+    c.magic1     = 'M';
+    c.msgType    = MESH_MSG_CENSUS;
+    c.originType = _mesh::S().originType;
+    c.originId   = _mesh::S().originId;
+    c.nonce      = nonce;
+    if (env)    strncpy(c.env,    env,    sizeof(c.env)    - 1);
+    if (build)  strncpy(c.build,  build,  sizeof(c.build)  - 1);
+    if (detail) strncpy(c.detail, detail, sizeof(c.detail) - 1);
+    c.uptimeSecs = uptimeSecs;
+    esp_now_send(_mesh::BCAST, (const uint8_t*)&c, sizeof(c));
+}
+
 // Turn off rebroadcasting to observe the field without altering it. A monitor
 // that relays is a legitimate extra hop and helps coverage, but it also masks
 // the very range gaps you might be trying to find.
@@ -347,6 +564,28 @@ inline void mesh_poll() {
         s.meshNow    = mesh_now();
         s.originId   = st.originId;
         esp_now_send(_mesh::BCAST, (const uint8_t*)&s, sizeof(s));
+    }
+
+    // 0b. OTA control — delivered straight to the callback, no dedupe, no relay
+    if (st.otaRxFull) {
+        MeshOtaAnnounce a = (MeshOtaAnnounce&)st.otaRx;
+        st.otaRxFull = false;
+        if (st.otaAnnounceCb) st.otaAnnounceCb(a);
+    }
+    while (st.readyTail != st.readyHead) {
+        MeshOtaReady r = st.readyRx[st.readyTail];
+        st.readyTail = (st.readyTail + 1) & 7;
+        if (st.otaReadyCb) st.otaReadyCb(r);
+    }
+    if (st.helloRxFull) {
+        MeshHello h = (MeshHello&)st.helloRx;
+        st.helloRxFull = false;
+        if (st.helloCb) st.helloCb(h);
+    }
+    while (st.censusTail != st.censusHead) {
+        MeshCensus c = st.censusRx[st.censusTail];
+        st.censusTail = (st.censusTail + 1) & 15;
+        if (st.censusCb) st.censusCb(c);
     }
 
     // 1. drain received packets (dedupe + user callback + relay enqueue)

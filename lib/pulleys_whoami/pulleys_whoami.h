@@ -27,6 +27,11 @@
 //   which one    — `id`, the stable MAC-derived device ID (also `mac`, and
 //                  `label` for its registry number). Lets a host address one
 //                  specific board rather than every board of a class.
+//   which image  — `build`, the compile timestamp of the firmware running.
+//                  Once boards are reflashed over the air (lib/pulleys_ota)
+//                  there is no cable to infer freshness from, and "did that
+//                  board actually take the update?" needs an answer that does
+//                  not depend on remembering what was flashed when.
 //
 // The reply is also emitted once at boot, so a listener that catches startup
 // does not have to ask.
@@ -76,6 +81,19 @@ inline const char* whoami_hw_class() {
 #endif
 }
 
+// Compile timestamp of the running image, as one space-free token: __DATE__
+// is "Sep 12 2026", and a value with spaces in it would break the parse-by-key
+// contract this line promises. Single-digit days are space-padded, so those
+// come out as "Sep--2-2026" -- ugly, but unambiguous and still one token.
+inline const char* whoami_build() {
+    static char buf[28];
+    if (!buf[0]) {
+        snprintf(buf, sizeof(buf), "%s-%s", __DATE__, __TIME__);
+        for (char* p = buf; *p; ++p) if (*p == ' ') *p = '-';
+    }
+    return buf;
+}
+
 // Emit the identity line. Safe to call before identity_init(): the MAC is read
 // directly here, so it is always right, and id/name simply read back as unset.
 //
@@ -89,7 +107,7 @@ inline void whoami_reply() {
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     const char* name = identity_name();
     Serial.printf("%s v=%d type=%u role=%s env=%s class=%s id=%04X label=%u name=%s "
-                  "mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
+                  "mac=%02X:%02X:%02X:%02X:%02X:%02X build=%s\n",
                   PULLEYS_ID_PREFIX, PULLEYS_ID_VERSION,
                   (unsigned)PULLEYS_DEVICE_TYPE,
                   whoami_role_name(PULLEYS_DEVICE_TYPE),
@@ -98,7 +116,8 @@ inline void whoami_reply() {
                   identity_id(),
                   (unsigned)identity_label(),
                   (name && name[0]) ? name : "?",
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                  whoami_build());
 }
 
 // Hook for roles that already parse line-oriented serial commands: pass the

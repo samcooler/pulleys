@@ -8,6 +8,8 @@
 #include <pulleys_patterns.h>
 #include <pulleys_channel.h>
 #include <pulleys_mesh.h>
+#include <pulleys_ota.h>
+#include <pulleys_census.h>
 #include "font5x7.h"
 
 // ── Screen — activity display for the sensor mesh ─────────────────────────────
@@ -336,7 +338,10 @@ static void renderRanking(float dt, float t) {
 //   r      reset all activity and the counter
 //   m      force the other display mode now
 static void handleSerial() {
-    static char buf[16];
+    // Long enough for the OTA intake header, which is the longest line any
+    // role accepts: "OTA-IMG env=… size=… md5=<32 hex> id=…" runs past 70
+    // characters, and a short buffer truncates it silently rather than failing.
+    static char buf[96];
     static uint8_t len = 0;
     while (Serial.available()) {
         char c = Serial.read();
@@ -345,7 +350,11 @@ static void handleSerial() {
             buf[len] = 0;
             len = 0;
             if (pulleys::whoami_handle(buf)) continue;   // "?" → PULLEYS-ID line
-            if (buf[0] == 'e') {
+            if (pulleys::ota_handle_serial(buf)) continue;   // "OTA-SLOT" / "OTA-SERVE"
+            if (pulleys::census_handle_serial(buf)) continue; // "CENSUS" → who is out there
+            if (buf[0] == 'O') {                 // "O" → become the OTA host
+                pulleys::ota_host_begin();
+            } else if (buf[0] == 'e') {
                 int ch = atoi(buf + 1);
                 if (ch >= 0 && ch < NUM_CHANNELS) {
                     pulleys::MeshEvent ev = {};
@@ -365,6 +374,7 @@ static void handleSerial() {
             } else if (buf[0] == 'm') {
                 // Bench override only -- does not touch the stored boot mode.
                 mode = (mode + 1) % pulleys::SCREEN_DISPLAY_COUNT;
+                pulleys::census_set_detail(pulleys::screen_display_name(mode));
                 fill_solid(leds, LED_COUNT, CRGB::Black);
                 Serial.printf("  display=%s (this boot only)\n",
                               pulleys::screen_display_name(mode));
@@ -400,9 +410,12 @@ void setup() {
     }
 
     pulleys::mesh_init(pulleys::MESH_ORIGIN_SCREEN, pulleys::identity_id());
+    pulleys::ota_init();
+    pulleys::census_init();
     pulleys::mesh_on_event(onMeshEvent);
 
     loadDisplayMode();
+    pulleys::census_set_detail(pulleys::screen_display_name(mode));
     Serial.printf("  display=%s (%s)\n", pulleys::screen_display_name(mode),
                   modeIsListed ? "from the install map"
                                : "unlisted — power-cycle for the next one");
@@ -418,6 +431,16 @@ void loop() {
     uint32_t now = millis();
 
     pulleys::mesh_poll();
+    pulleys::census_poll();
+
+    // OTA owns the board while it runs: the radio wants the airtime, and
+    // FastLED.show() turns interrupts off for long enough to cost packets.
+    if (pulleys::ota_active()) {
+        pulleys::ota_poll();
+        handleSerial();
+        return;
+    }
+
     handleSerial();
 
     // No dwell timer: the mode was chosen at boot and holds until the next
