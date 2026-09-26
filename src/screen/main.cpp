@@ -43,7 +43,7 @@
 #define MAT_COLS       8      // short axis
 #define MAT_ROWS       32     // long axis
 #define LED_FPS        60
-#define MAX_BRIGHTNESS 60
+#define MAX_BRIGHTNESS 42   // 30% down from 60
 
 // Hard current cap. 256 WS2812Bs can pull ~15 A flat out, which trips a USB
 // port and takes the whole bus down with it. FastLED scales global brightness
