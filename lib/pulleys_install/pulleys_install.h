@@ -119,13 +119,24 @@ inline int8_t mode_for_device(uint16_t id) {
 enum ScreenDisplay : uint8_t {
     SCREEN_COUNTER = 0,   // per-channel detection counts, side by side
     SCREEN_RANKING = 1,   // top-4 channels as 8×8 shape patterns
-    SCREEN_DISPLAY_COUNT
+    SCREEN_ALLON   = 2,   // every pixel lit: four yellow symbols, no mesh input
+    SCREEN_WAVE    = 3,   // gold/amber sine sliding along a 16×2 panel
+    SCREEN_DISPLAY_COUNT,
+
+    // Displays the power-cycle steps through on an unlisted board. The ones
+    // past it are not in the cycle on purpose: ALLON answers a question about
+    // the hardware rather than about the piece, and WAVE is for a different
+    // LED surface altogether (16×2, not the 8×32 matrix), so a board must be
+    // built for it -- see [env:screen_allon] and [env:screen_wave].
+    SCREEN_CYCLE_COUNT = SCREEN_ALLON
 };
 
 inline const char* screen_display_name(uint8_t d) {
     switch (d) {
         case SCREEN_COUNTER: return "counter";
         case SCREEN_RANKING: return "ranking";
+        case SCREEN_ALLON:   return "allon";
+        case SCREEN_WAVE:    return "wave";
         default:             return "?";
     }
 }

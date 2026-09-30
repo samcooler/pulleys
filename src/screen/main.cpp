@@ -7,6 +7,8 @@
 #include <pulleys_culture.h>
 #include <pulleys_patterns.h>
 #include <pulleys_channel.h>
+#include <pulleys_panel.h>
+#include <pulleys_wave.h>
 #include <pulleys_mesh.h>
 #include <pulleys_ota.h>
 #include <pulleys_census.h>
@@ -20,6 +22,11 @@
 //             colour, draining after inactivity
 //   RANKING — top-4 channels as 8×8 shape patterns, most active on the left,
 //             brightness driven by each channel's activity level
+//   ALLON   — four yellow symbols, every pixel lit, ignoring the mesh: the
+//             bench display, for looking at the panel itself
+//   WAVE    — three wandering sines bubbling in gold on a 16×2 panel (16, skip
+//             1, 16) instead of the 8×32 matrix. A different LED surface, so a
+//             board is built for it rather than switched into it
 //
 // Which one it shows is chosen at boot, not on a timer. A board named in the
 // install map (lib/pulleys_install) runs the display assigned to it, so an
@@ -35,6 +42,21 @@
 #endif
 #ifndef LED_COUNT
   #define LED_COUNT 256
+#endif
+
+// The display and the LED surface have to agree. COUNTER, RANKING and ALLON
+// address the whole 8×32 matrix; WAVE addresses a 33-LED 16×2 panel. Mixing
+// them would walk off the end of leds[], so an env that pins one display gets
+// checked against its own LED_COUNT here rather than at run time.
+#ifdef SCREEN_FORCE_DISPLAY
+static_assert(SCREEN_FORCE_DISPLAY != pulleys::SCREEN_WAVE ||
+              LED_COUNT >= pulleys::PANEL_16X2_LEDS,
+              "the wave display needs at least 33 LEDs (16, skip 1, 16)");
+static_assert(SCREEN_FORCE_DISPLAY == pulleys::SCREEN_WAVE ||
+              LED_COUNT >= 256,
+              "the matrix displays need the whole 8x32 (256 LEDs)");
+#else
+static_assert(LED_COUNT >= 256, "the matrix displays need the whole 8x32 (256 LEDs)");
 #endif
 
 #define NUM_CHANNELS   16
@@ -69,6 +91,15 @@
 #define MAX_COUNT_CHANS   4
 #define COUNT_DISPLAY_MAX 9999   // clamp so one runaway channel cannot crowd the rest
 
+// All-on display. The four slots show four different symbols in one colour, and
+// the shapes' dark gaps are lifted to a dim version of it instead of going out,
+// so no pixel on the panel is ever off while this display runs. Brightness is
+// the full range rather than MAX_BRIGHTNESS: this is the display to look at a
+// panel with, and how bright it actually ends up is LED_MAX_MA's decision.
+#define ALLON_CHANNEL     2      // the channel whose colour this is — yellow
+#define ALLON_FLOOR       70     // dim floor, 0..255 of the lit colour
+#define ALLON_BRIGHTNESS  255
+
 // NVS namespace holding the boot-alternated display mode (unlisted boards only)
 #define NVS_NS            "screen"
 
@@ -93,7 +124,8 @@ static int8_t  slotChannel[NUM_SLOTS]   = { -1, -1, -1, -1 };
 static float   slotBrightness[NUM_SLOTS] = { 0, 0, 0, 0 };  // eased toward target
 
 static uint8_t mode        = pulleys::SCREEN_COUNTER;
-static bool    modeIsListed = false;   // pinned by the install map, not cycled
+static bool    modeIsListed  = false;  // pinned by the install map, not cycled
+static bool    forcedByBuild = false;  // pinned by SCREEN_FORCE_DISPLAY instead
 
 // Display select. A board named in DISPLAY_ASSIGNMENT runs what the install map
 // says and nothing else — power-cycling it is then just a restart, which is
@@ -104,6 +136,15 @@ static bool    modeIsListed = false;   // pinned by the install map, not cycled
 // COUNTER → RANKING → COUNTER. On a matrix with no buttons that is still the
 // only way to change it in the field.
 static void loadDisplayMode() {
+#ifdef SCREEN_FORCE_DISPLAY
+    // Built to run one display and nothing else ([env:screen_allon]). Beats the
+    // install map, because the image is the more deliberate of the two: someone
+    // flashed this board on purpose and will flash it back.
+    mode         = SCREEN_FORCE_DISPLAY;
+    modeIsListed = true;
+    forcedByBuild = true;
+    return;
+#endif
     int8_t listed = pulleys::display_for_device(pulleys::identity_id());
     if (listed >= 0) {
         mode         = (uint8_t)listed;
@@ -113,9 +154,9 @@ static void loadDisplayMode() {
     Preferences p;
     p.begin(NVS_NS, false);
     uint8_t stored = p.getUChar("mode", pulleys::SCREEN_COUNTER);
-    if (stored >= pulleys::SCREEN_DISPLAY_COUNT) stored = pulleys::SCREEN_COUNTER;
+    if (stored >= pulleys::SCREEN_CYCLE_COUNT) stored = pulleys::SCREEN_COUNTER;
     mode = stored;
-    p.putUChar("mode", (uint8_t)((stored + 1) % pulleys::SCREEN_DISPLAY_COUNT));
+    p.putUChar("mode", (uint8_t)((stored + 1) % pulleys::SCREEN_CYCLE_COUNT));
     p.end();
 }
 
@@ -277,6 +318,21 @@ static void renderCounter(uint32_t now) {
     }
 }
 
+// ── Slot defaults for the activity displays ──────────────────────────────────
+// The resting state of the four pattern slots: shape patterns whose brightness
+// the ranking display drives per slot. allOnInit() overwrites this, so it is
+// also how the board gets back to ranking after a bench flip out of ALLON.
+static void applyActivitySlots() {
+    for (uint8_t s = 0; s < NUM_SLOTS; s++) {
+        patSlots[s].buffer     = leds + (uint16_t)s * SLOT_ROWS * MAT_COLS;
+        patSlots[s].serpentine = true;
+        patSlots[s].maxBri     = 255;   // slot brightness applied separately
+        patSlots[s].init(pulleys::PATTERN_SHAPE, SLOT_ROWS, MAT_COLS);
+        slotChannel[s]     = -1;
+        slotBrightness[s]  = 0.0f;
+    }
+}
+
 // ── Display: ranking ──────────────────────────────────────────────────────────
 // Top-4 channels by activity fill the 4 slots, most active first.
 static void updateRanking() {
@@ -333,10 +389,96 @@ static void renderRanking(float dt, float t) {
     }
 }
 
+// ── Display: all-on ───────────────────────────────────────────────────────────
+// No mesh, no activity, no ranking: four symbols in yellow, held forever, with
+// every pixel of the panel carrying at least the dim floor. What it answers is
+// whether the panel is whole — a dead pixel, a dark block, a colour channel
+// that never comes up, a feed that sags under load — none of which a display
+// with black in it can show you.
+//
+// The symbols are four different shapes, so the four 8×8 blocks stay legible as
+// blocks rather than merging into one field of yellow.
+static const uint8_t ALLON_SHAPE_CH[NUM_SLOTS] = { 1, 2, 3, 4 };
+
+static void allOnInit() {
+    // Shape and oscillation come from four different channels; the colour comes
+    // from one, so all four read as the same yellow.
+    PulleysCulture yellow = pulleys::channel_culture(ALLON_CHANNEL);
+    for (uint8_t s = 0; s < NUM_SLOTS; s++) {
+        pulleys::channel_slot_init(patSlots[s], ALLON_SHAPE_CH[s],
+                                   leds + (uint16_t)s * SLOT_ROWS * MAT_COLS,
+                                   SLOT_ROWS, MAT_COLS, /*serpentine=*/true);
+        patSlots[s].culture.colorA = yellow.colorA;
+        patSlots[s].culture.colorB = yellow.colorB;
+        patSlots[s].maxBri         = ALLON_BRIGHTNESS;
+        slotBrightness[s]          = 1.0f;
+    }
+    // Ranking re-derives its slots from activity, so forget these channels
+    // rather than leave them looking like a ranking it already rendered.
+    for (uint8_t s = 0; s < NUM_SLOTS; s++) slotChannel[s] = -1;
+}
+
+static void renderAllOn(float dt, float t) {
+    CRGB floorCol = pulleys::channel_color(ALLON_CHANNEL);
+    floorCol.nscale8(ALLON_FLOOR);
+
+    for (uint8_t s = 0; s < NUM_SLOTS; s++) {
+        pulleys::pattern_slot_update(patSlots[s], dt, t);
+
+        // Lift the shape's dark gaps to the floor instead of letting them go
+        // out. Component-wise max, not a blend: the floor is the same hue, so
+        // the symbol stays exactly as bright as the pattern drew it.
+        CRGB* buf = leds + (uint16_t)s * SLOT_ROWS * MAT_COLS;
+        for (uint16_t j = 0; j < SLOT_ROWS * MAT_COLS; j++) {
+            if (buf[j].r < floorCol.r) buf[j].r = floorCol.r;
+            if (buf[j].g < floorCol.g) buf[j].g = floorCol.g;
+            if (buf[j].b < floorCol.b) buf[j].b = floorCol.b;
+        }
+    }
+}
+
+// ── Display: wave ─────────────────────────────────────────────────────────────
+// A 16×2 panel — 16 pixels out, one dead pixel at the fold, 16 back — carrying
+// three summed sines bubbling around one gold hue. Geometry lives in
+// pulleys_panel and the pattern in pulleys_wave, so this is only the wiring
+// between them: which surface, at which point on the strip, and what drives it.
+//
+// The Sensor gets an 8×8 and a 16×2 chained on one output next, which is why
+// neither of those two libraries knows anything about a Screen.
+static pulleys::Panel      wavePanel;
+static pulleys::WaveParams waveCfg;
+static pulleys::WaveState  waveState;
+
+// Which way the second run is wired. It is the one thing about a folded strip
+// you cannot tell by looking at the code, so it is a build setting here and 'w'
+// on serial flips it live — check it once on the bench, then set the default.
+#ifndef PANEL_16X2_SERPENTINE
+  #define PANEL_16X2_SERPENTINE 1
+#endif
+
+static void waveInit() {
+    wavePanel = pulleys::panel_16x2(leds, /*origin=*/0,
+                                    /*serpentine=*/PANEL_16X2_SERPENTINE);
+    waveCfg   = pulleys::WaveParams{};
+    waveCfg.maxBri = MAX_BRIGHTNESS;
+    pulleys::wave_init(waveState, waveCfg);
+    fill_solid(leds, LED_COUNT, CRGB::Black);   // the fold pixel stays dark
+}
+
+// dt, not the mesh clock: the pot integrates its own phases, and each board
+// bubbles from its own random state. See pulleys_wave on why this one pattern
+// deliberately does not match across boards.
+static void renderWave(float dt) {
+    pulleys::wave_render(wavePanel, waveCfg, waveState, dt);
+}
+
 // ── Serial console — inject fake events to test the display standalone ────────
 //   e<ch>  simulate one detection on that channel
 //   r      reset all activity and the counter
-//   m      force the other display mode now
+//   m      force the other display mode now (refused on a board built for one)
+//   w      flip the 16×2 panel's row direction, for matching the wiring
+//   h<c>,<s>  set the wave's centre hue and its swing (0-255), for finding the
+//             arc on the bench before writing it into WaveParams
 static void handleSerial() {
     // Long enough for the OTA intake header, which is the longest line any
     // role accepts: "OTA-IMG env=… size=… md5=<32 hex> id=…" runs past 70
@@ -371,10 +513,34 @@ static void handleSerial() {
             } else if (buf[0] == 'x') {          // broadcast a test event onto the mesh
                 pulleys::mesh_send_event(7, 0, 90, 0);
                 Serial.println("  [TX] test broadcast");
+            } else if (buf[0] == 'h') {
+                int c = -1, sw = -1;
+                if (sscanf(buf + 1, "%d,%d", &c, &sw) == 2 &&
+                    c >= 0 && c < 256 && sw >= 0 && sw < 128) {
+                    waveCfg.centerHue = (uint8_t)c;
+                    waveCfg.hueSwing  = (uint8_t)sw;
+                }
+                Serial.printf("  wave hue: centre=%u swing=±%u "
+                              "(put an arc you like in WaveParams)\n",
+                              waveCfg.centerHue, waveCfg.hueSwing);
+            } else if (buf[0] == 'w') {
+                wavePanel.serpentine = !wavePanel.serpentine;
+                Serial.printf("  16x2 rows: %s (set PANEL_16X2_SERPENTINE to keep it)\n",
+                              wavePanel.serpentine ? "serpentine" : "straight");
+            } else if (buf[0] == 'm' && forcedByBuild) {
+                // A board built for one display has an LED surface to match it;
+                // cycling to a matrix display on a 33-LED strip would render
+                // off the end of the array. Reflash to change it.
+                Serial.printf("  display=%s is built in — reflash to change it\n",
+                              pulleys::screen_display_name(mode));
             } else if (buf[0] == 'm') {
                 // Bench override only -- does not touch the stored boot mode.
                 mode = (mode + 1) % pulleys::SCREEN_DISPLAY_COUNT;
                 pulleys::census_set_detail(pulleys::screen_display_name(mode));
+                // 'm' reaches every display, ALLON included -- unlike the boot
+                // cycle, which stops short of it.
+                if (mode == pulleys::SCREEN_ALLON) allOnInit();
+                else                               applyActivitySlots();
                 fill_solid(leds, LED_COUNT, CRGB::Black);
                 Serial.printf("  display=%s (this boot only)\n",
                               pulleys::screen_display_name(mode));
@@ -402,12 +568,7 @@ void setup() {
     Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
     randomSeed(esp_random());
-    for (uint8_t s = 0; s < NUM_SLOTS; s++) {
-        patSlots[s].buffer     = leds + (uint16_t)s * SLOT_ROWS * MAT_COLS;
-        patSlots[s].serpentine = true;
-        patSlots[s].maxBri     = 255;   // slot brightness applied separately
-        patSlots[s].init(pulleys::PATTERN_SHAPE, SLOT_ROWS, MAT_COLS);
-    }
+    applyActivitySlots();
 
     pulleys::mesh_init(pulleys::MESH_ORIGIN_SCREEN, pulleys::identity_id());
     pulleys::ota_init();
@@ -415,10 +576,13 @@ void setup() {
     pulleys::mesh_on_event(onMeshEvent);
 
     loadDisplayMode();
+    if      (mode == pulleys::SCREEN_ALLON) allOnInit();
+    else if (mode == pulleys::SCREEN_WAVE)  waveInit();
     pulleys::census_set_detail(pulleys::screen_display_name(mode));
     Serial.printf("  display=%s (%s)\n", pulleys::screen_display_name(mode),
-                  modeIsListed ? "from the install map"
-                               : "unlisted — power-cycle for the next one");
+                  forcedByBuild ? "built in — reflash to change it"
+                  : modeIsListed ? "from the install map"
+                                 : "unlisted — power-cycle for the next one");
     lastAnyEvent = millis();
     pulleys::whoami_reply();
     Serial.println("Screen ready — listening for sensor events.\n");
@@ -454,8 +618,10 @@ void loop() {
 
         decayActivity(dt);
 
-        if (mode == pulleys::SCREEN_COUNTER) renderCounter(now);
-        else                      renderRanking(dt, pulleys::mesh_now_secs());
+        if      (mode == pulleys::SCREEN_COUNTER) renderCounter(now);
+        else if (mode == pulleys::SCREEN_ALLON)   renderAllOn(dt, pulleys::mesh_now_secs());
+        else if (mode == pulleys::SCREEN_WAVE)    renderWave(dt);
+        else                                      renderRanking(dt, pulleys::mesh_now_secs());
 
         FastLED.show();
     }

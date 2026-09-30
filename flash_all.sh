@@ -169,7 +169,8 @@ IDENTIFY="${0:A:h}/tools/identify.py"
 # Sets: CHIP BOOT_ADDR FLASH_MODE FLASH_SIZE WANT_CLASS
 env_params() {
   case "$1" in
-    station_wroom|screen) CHIP="esp32";   BOOT_ADDR="0x1000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="esp32"   ;;
+    station_wroom|screen|screen_allon|screen_wave)
+                          CHIP="esp32";   BOOT_ADDR="0x1000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="esp32"   ;;
     station)              CHIP="esp32c3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="c3"      ;;
     arbiter*)             CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="16MB"; WANT_CLASS="s3_16mb" ;;
     *)                    CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="s3_4mb"  ;;
