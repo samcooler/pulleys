@@ -48,6 +48,31 @@ python3 overlord.py --test --windowed --mpv-arg=--mute=yes
 On start you should see `starting audio loop: idle.wav` and
 `starting idle loop: idle.mp4` (each only if the file exists).
 
+## Deploying on a Raspberry Pi
+
+Targets Raspberry Pi OS Lite (Bookworm). On the Pi, clone the repo and run:
+
+```sh
+sudo overlord/deploy/install.sh
+```
+
+This installs mpv/rclone/plymouth and sets up:
+
+- **Splash:** a plymouth theme showing `deploy/splash.png` (replace it with your
+  art, then re-run `install.sh`) with the console quieted. The splash stays up
+  until mpv takes over the screen.
+- **Kiosk:** `overlord.service` starts at boot and restarts on crash. mpv draws
+  straight to the display over DRM/KMS, so no desktop is needed. The login
+  prompt on tty1 is masked; ssh still works.
+- **Boot update:** `overlord-update.service` runs before the app on every boot:
+  `git pull --ff-only`, then `rclone sync` of `OVERLORD_MEDIA_REMOTE` into
+  `/var/lib/overlord/media` (the app reads it via `OVERLORD_MEDIA`). Both are
+  best-effort: with no network the panel starts on the code and media it has.
+  The sync mirrors the remote, so files deleted there are deleted on the Pi.
+
+Config lives in `/etc/overlord.env` (media remote, serial port, mpv audio
+device). Logs: `journalctl -u overlord-update -u overlord -b`.
+
 ## Trigger events
 
 With overlord running in `--test` mode, from another terminal:

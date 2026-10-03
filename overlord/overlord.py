@@ -10,6 +10,7 @@ Events (one per line):
 """
 
 import argparse
+import os
 import signal
 import threading
 from pathlib import Path
@@ -17,7 +18,8 @@ from pathlib import Path
 from mpv_ipc import Mpv, MpvError, SoundPlayer
 from serial_reader import SerialReader
 
-MEDIA = Path(__file__).resolve().parent / "media"
+# On the Pi, media is synced into a directory outside the git checkout (see deploy/).
+MEDIA = Path(os.environ.get("OVERLORD_MEDIA") or Path(__file__).resolve().parent / "media")
 DEFAULT_LOOP = "idle"  # played at startup from video_loops/ and audio_loops/ if present
 
 

@@ -1,0 +1,7 @@
+Window.SetBackgroundTopColor(0, 0, 0);
+Window.SetBackgroundBottomColor(0, 0, 0);
+
+splash = Image("splash.png");
+sprite = Sprite(splash);
+sprite.SetX(Window.GetWidth() / 2 - splash.GetWidth() / 2);
+sprite.SetY(Window.GetHeight() / 2 - splash.GetHeight() / 2);
