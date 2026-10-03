@@ -171,7 +171,7 @@ env_params() {
   case "$1" in
     station_wroom|screen|screen_allon|screen_wave)
                           CHIP="esp32";   BOOT_ADDR="0x1000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="esp32"   ;;
-    station)              CHIP="esp32c3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="c3"      ;;
+    station|bridge)       CHIP="esp32c3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="c3"      ;;
     arbiter*)             CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="16MB"; WANT_CLASS="s3_16mb" ;;
     *)                    CHIP="esp32s3"; BOOT_ADDR="0x0000"; FLASH_MODE="dio"; FLASH_SIZE="4MB";  WANT_CLASS="s3_4mb"  ;;
   esac
@@ -197,7 +197,7 @@ class_env() {
 # its hardware class calls for instead.
 is_current_env() {
   case "$1" in
-    sensor|screen|arbiter_mesh) return 0 ;;
+    sensor|screen|bridge|arbiter_mesh) return 0 ;;
     *)                          return 1 ;;
   esac
 }
@@ -217,7 +217,7 @@ class_roles() {
   case "$1" in
     s3_16mb) echo "arbiter_mesh"           ;;
     s3_4mb)  echo "sensor (traveler dep.)" ;;
-    c3)      echo "station (deprecated)"   ;;
+    c3)      echo "bridge (station dep.)"  ;;
     esp32)   echo "screen (st_wroom dep.)" ;;
     *)       echo "unknown"                ;;
   esac

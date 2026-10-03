@@ -173,12 +173,34 @@ Battery voltage (raw + scaled) is also included in the 1Hz serial status log dur
 - **BLE off during sleep** — NimBLE deinit during sleep, re-init on wake
 - **TX power -6 dBm** — reduced BLE transmit power saves battery and tightens proximity zones
 
+## Bridge (mesh → Raspberry Pi)
+
+The detection mesh (sensor, screen, arbiter_mesh) floods ESP-NOW events between
+nodes. The **bridge** is a mesh node with no display whose only output is a
+serial link to a Raspberry Pi:
+
+```
+ sensor ──ESP-NOW flood──► (relays) ──► BRIDGE ──UART1 "EV …" lines──► Raspberry Pi
+```
+
+- **Role registration:** `PULLEYS_TYPE_BRIDGE` (0x06) and `MESH_ORIGIN_BRIDGE` (0x07),
+  named `B-xxxx`, reported as `BRIDGE` by whoami and census. It is a normal mesh
+  citizen: it relays, beacons the shared clock, answers census and takes OTA.
+- **Forwarding:** the mesh event callback only queues the event; `loop()` writes
+  it to UART1. A slow or unplugged Pi therefore cannot stall the radio path.
+  The queue holds 32 events and drops (and counts) the rest.
+- **Two ports:** UART1 is the Pi link; the native USB console carries logs,
+  whoami and OTA. Keeping them apart means the Pi never sees boot banners.
+- **Hardware:** always an ESP32-C3. See `DEVELOPING.md` for pins, wiring, the
+  `EV` line format and how to read it.
+
 ## Build Environments
 
 | Environment | Board | Target | LEDs |
 |-------------|-------|--------|------|
 | `traveler` | ESP32-S3-Matrix (custom JSON) | Traveler | 64 (GPIO 14), 8×8 matrix |
 | `station` | Seeed XIAO ESP32-C3 | Station | 256 (GPIO 10), 8×32 matrix |
+| `bridge` | Seeed XIAO ESP32-C3 profile | Bridge | none; UART1 to a Pi |
 
 Both environments use Arduino framework, FastLED, and NimBLE-Arduino. All library code is shared. Device-specific behavior is driven by `PULLEYS_DEVICE_TYPE`, `LED_PIN`, and `LED_COUNT` build flags.
 
