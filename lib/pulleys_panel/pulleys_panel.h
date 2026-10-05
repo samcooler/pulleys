@@ -24,16 +24,34 @@
 // `origin` is what makes them stack: a Sensor carrying an 8×8 with a 16×2
 // chained after it is panel_8x8(leds, 0) and panel_16x2(leds, 64) over one
 // array, with no renderer aware of the other's existence.
+//
+// `swap` is there because two surfaces on one chain can want different channel
+// orders, and a FastLED controller emits exactly one order for the whole chain.
+// Adding a second controller on the same pin does not help: it latches between
+// the two, and a WS2812 chain reads anything after a latch as a new frame, so
+// the second surface's data would land on the first surface's pixels. The
+// surface that disagrees therefore has its channels permuted in the buffer,
+// which is this -- see panel_fix_order().
 
 namespace pulleys {
 
+// Which two channels this surface's chip has exchanged, relative to the order
+// the chain's controller was told. SWAP_NONE is a surface that agrees with it.
+enum ChannelSwap : uint8_t {
+    SWAP_NONE = 0,
+    SWAP_RB,          // red and blue exchanged — e.g. a GBR panel on a GRB chain
+    SWAP_RG,          // red and green exchanged
+    SWAP_GB,          // green and blue exchanged
+};
+
 struct Panel {
-    CRGB*    strip      = nullptr;  // the LED array this surface lives in
-    uint16_t origin     = 0;        // strip index of logical (0, 0)
-    uint8_t  cols       = 8;        // pixels per run
-    uint8_t  rows       = 8;        // number of runs
-    uint8_t  gap        = 0;        // dead pixels between one run and the next
-    bool     serpentine = true;     // every other run is wired backwards
+    CRGB*       strip      = nullptr;  // the LED array this surface lives in
+    uint16_t    origin     = 0;        // strip index of logical (0, 0)
+    uint8_t     cols       = 8;        // pixels per run
+    uint8_t     rows       = 8;        // number of runs
+    uint8_t     gap        = 0;        // dead pixels between one run and the next
+    bool        serpentine = true;     // every other run is wired backwards
+    ChannelSwap swap       = SWAP_NONE;// this chip's order vs the chain's
 };
 
 // Strip pixels this panel occupies, dead ones included. The next panel chained
@@ -57,10 +75,12 @@ inline void panel_set(const Panel& p, uint8_t x, uint8_t y, const CRGB& c) {
 
 // ── The two surfaces ──────────────────────────────────────────────────────────
 
-inline Panel panel_8x8(CRGB* strip, uint16_t origin = 0) {
+inline Panel panel_8x8(CRGB* strip, uint16_t origin = 0,
+                       bool serpentine = true, ChannelSwap swap = SWAP_NONE) {
     Panel p;
     p.strip = strip; p.origin = origin;
-    p.cols = 8; p.rows = 8; p.gap = 0; p.serpentine = true;
+    p.cols = 8; p.rows = 8; p.gap = 0; p.serpentine = serpentine;
+    p.swap = swap;
     return p;
 }
 
@@ -70,11 +90,35 @@ inline Panel panel_8x8(CRGB* strip, uint16_t origin = 0) {
 // something a caller subtracts -- get it wrong and row 1 is off by one for its
 // whole length, which reads as a wiring fault.
 inline Panel panel_16x2(CRGB* strip, uint16_t origin = 0,
-                        bool serpentine = true) {
+                        bool serpentine = true, ChannelSwap swap = SWAP_NONE) {
     Panel p;
     p.strip = strip; p.origin = origin;
     p.cols = 16; p.rows = 2; p.gap = 1; p.serpentine = serpentine;
+    p.swap = swap;
     return p;
+}
+
+// Permute this surface's pixels in place so a chip that disagrees with the
+// chain's declared order still shows the colour that was asked for.
+//
+// Call it on the whole surface after everything has drawn and immediately
+// before FastLED.show(), never from a renderer: it is an output-stage fixup,
+// and a pattern that applied it would be undone by the next pattern to write
+// the same pixel -- or applied twice, which cancels out and looks like nothing
+// happened. Dead pixels in the span are included; permuting black costs
+// nothing and skipping them would need the geometry walked for no reason.
+inline void panel_fix_order(const Panel& p) {
+    if (p.swap == SWAP_NONE) return;
+    const uint16_t n = panel_leds(p);
+    for (uint16_t i = 0; i < n; i++) {
+        CRGB& c = p.strip[p.origin + i];
+        switch (p.swap) {
+            case SWAP_RB: { uint8_t t = c.r; c.r = c.b; c.b = t; break; }
+            case SWAP_RG: { uint8_t t = c.r; c.r = c.g; c.g = t; break; }
+            case SWAP_GB: { uint8_t t = c.g; c.g = c.b; c.b = t; break; }
+            default: break;
+        }
+    }
 }
 
 static constexpr uint16_t PANEL_8X8_LEDS  = 64;
