@@ -31,6 +31,7 @@ enum : uint8_t {
     MESH_ORIGIN_SENSOR  = 0x04,
     MESH_ORIGIN_SCREEN  = 0x05,
     MESH_ORIGIN_ARBITER = 0x06,   // monitor; joins the mesh but shows no art
+    MESH_ORIGIN_BRIDGE  = 0x07,   // forwards mesh events to a Pi over serial
 };
 
 enum : uint8_t {

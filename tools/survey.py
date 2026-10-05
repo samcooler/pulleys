@@ -100,7 +100,7 @@ def render(rows):
     def sort_key(f):
         # Sensors first and in rope order, since that is how the piece is read.
         role = f.get("role", "")
-        rank = {"SENSOR": 0, "SCREEN": 1, "ARBITER": 2}.get(role, 3)
+        rank = {"SENSOR": 0, "SCREEN": 1, "ARBITER": 2, "BRIDGE": 3}.get(role, 4)
         m = re.match(r"ch(\d+)", f.get("detail", ""))
         return (rank, int(m.group(1)) if m else 99, f.get("id", ""))
 

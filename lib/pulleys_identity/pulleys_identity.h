@@ -58,6 +58,8 @@ inline void identity_init(uint8_t deviceType) {
         reg = _travelerRegistry; regSize = _travelerRegistrySize; prefix = 'N';
     } else if (deviceType == PULLEYS_TYPE_SCREEN) {
         reg = _stationRegistry;  regSize = _stationRegistrySize;  prefix = 'X';
+    } else if (deviceType == PULLEYS_TYPE_BRIDGE) {
+        reg = nullptr;           regSize = 0;                     prefix = 'B';
     } else {
         reg = _stationRegistry;  regSize = _stationRegistrySize;  prefix = 'S';
     }

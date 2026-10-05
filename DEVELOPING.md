@@ -7,6 +7,7 @@
 | **Traveler** | Waveshare ESP32-S3-Matrix | 8×8 WS2812B matrix, 64 LEDs (GPIO 14) | QMI8658 IMU, battery ADC (GPIO 2) |
 | **Station (C3)** | Seeed XIAO ESP32-C3 | 8×32 WS2812B matrix, 256 LEDs (GPIO 10) | — |
 | **Station (WROOM)** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | hardware FPU, CH340 USB-serial |
+| **Bridge** | ESP32-C3 (4MB, native USB) | none | UART1 to a Raspberry Pi (GPIO 21 TX, 20 RX) |
 
 ## Build Environments
 
@@ -15,6 +16,7 @@
 | `traveler` | ESP32-S3 custom | default |
 | `station` | XIAO ESP32-C3 | default |
 | `station_wroom` | D1 Mini ESP32-WROOM-32 | hardware FPU, SSAA=3 |
+| `bridge` | ESP32-C3 (`seeed_xiao_esp32c3`) | mesh → Pi serial bridge, default env, always a C3 |
 
 ```sh
 pio run                      # build traveler + station (defaults)
@@ -114,7 +116,8 @@ pulleys/
 │   └── pulleys_imu/        # QMI8658 accelerometer + WoM driver (traveler)
 ├── src/
 │   ├── traveler/main.cpp   # Traveler firmware
-│   └── station/main.cpp    # Station firmware
+│   ├── station/main.cpp    # Station firmware
+│   └── bridge/main.cpp     # Bridge: mesh events → Pi over UART1
 ├── flash_all.sh            # Parallel flash script
 ├── serial_watch.sh         # Auto-reconnecting serial monitor
 └── docs (in root)
@@ -122,6 +125,65 @@ pulleys/
     ├── ARCHITECTURE.md     # System design
     └── MANIFESTO.md        # Art + tech vision
 ```
+
+## Bridge (mesh → Raspberry Pi)
+
+The `bridge` node joins the ESP-NOW mesh like any other role (it relays, answers
+census and takes OTA) and forwards every deduped sensor event to a Raspberry Pi
+as one text line on a second serial port. Source: `src/bridge/main.cpp`.
+
+```sh
+pio run -e bridge                                              # build
+pio run -e bridge -t upload --upload-port /dev/cu.usbmodemXXXX # flash
+```
+
+The bridge is always an ESP32-C3. `flash_all.sh` maps `bridge` to the `c3`
+hardware class, but its listing and converge pass skip C3 boards as "retired"
+unless an env is named, so flash a fresh board with the command above or
+`./flash_all.sh bridge -p <port>`. Once a board reports `env=bridge` it is kept.
+
+### Two serial ports
+
+| Port | Where | Carries |
+|------|-------|---------|
+| Console | native USB (`/dev/cu.usbmodem*`) | boot banner, `★` event log, `[PI]` echo, whoami / census / OTA |
+| Pi link | UART1: GPIO 21 = TX, GPIO 20 = RX, 115200 8N1 | the `EV` lines below |
+
+They are separate on purpose, so boot banners and whoami replies never end up in
+front of whatever reads the Pi link. Do not use GPIO 18/19: they are the C3's USB
+data lines. Pins and baud can be overridden with `-D BRIDGE_TX_PIN`,
+`BRIDGE_RX_PIN` and `BRIDGE_BAUD` in the env's `build_flags`.
+
+Wiring to the Pi: bridge TX (21) → Pi RX, bridge RX (20) ← Pi TX, ground to
+ground. Both sides are 3.3 V logic. On the Pi the port is `/dev/serial0` (enable
+the UART in `raspi-config`) or `/dev/ttyUSB0` for a USB adapter.
+
+### Line format
+
+```
+EV <channel> <mode> <magnitude> <originId hex> <flags>\n
+```
+
+e.g. `EV 3 1 90 A855 0`: channel 3, linear mode (`0` = rotation, `1` = linear),
+magnitude 90, from sensor `0xA855`, flags 0 (bit 0 = battery low). Fields are
+space-separated and positional; new fields are appended. Events are deduped by
+the mesh, so one pull yields one line however many copies were heard. Lines the
+Pi writes back are echoed to the console as `[PI] ...`.
+
+Read it from a shell:
+
+```sh
+stty -F /dev/serial0 115200 raw -echo && cat /dev/serial0     # Linux / Pi
+stty -f /dev/cu.usbserial-XXXX 115200 raw -echo && cat /dev/cu.usbserial-XXXX   # macOS adapter
+```
+
+Test without a sensor: type `e<channel>` (for example `e3`) on the console to
+inject a fake event, and it comes out on the Pi link. The console also answers
+`?` (whoami) and `CENSUS`, and prints `forwarded=` / `dropped=` every 3 s. The
+bridge queues up to 32 events and counts any it has to drop if the UART backs up.
+
+The Pi-side player lives in `overlord/` (`overlord.py`, `mpv_ipc.py`). It does not
+read this link yet.
 
 ## OTA Updates (Future)
 

@@ -1,0 +1,86 @@
+# Example game. Format reference: GAME_FORMAT.md
+#
+# GLOSSARY
+#   cue          Something the panel does: play a sound, play a video clip, or
+#                switch the background music or video. The name starts with its
+#                kind, and the rest is the file name in overlord/media/:
+#                  audio_loop_*  background music; repeats until changed
+#                  clip_*        a short video that plays once on screen
+#                  sound_*       a short sound effect played on top of everything
+#                  video_loop_*  background video; repeats until changed
+#   event        Something that happens in the world, which a state can react to:
+#                  component_activated         One of the major components is activated.
+#                  component_deactivated       One of the major components is deactivated.
+#                  all_components_activated    Every major component is now activated.
+#                  all_components_deactivated  Every major component is now deactivated.
+#   state        What the game is doing right now. It is always in exactly one.
+#   on_enter_cue Cues to fire the moment the game arrives in a state.
+#   on           What to do when an event happens in a state. An event a state
+#                does not list is ignored.
+#   cue (in on)  Cues to fire for that event.
+#   goto         The state to move to.
+#   after        Move to another state once this much time has passed.
+#   placeholder  Media that does not exist yet.
+
+game: pulley-party
+start: boot
+
+cues:
+  audio_loop:
+    - audio_loop_idle
+    - audio_loop_dull
+    - audio_loop_off
+  clip:
+    - clip_test1
+    - clip_test2
+    - clip_encouragement            # placeholder
+  sound:
+    - sound_beep
+    - sound_chime
+    - sound_steam
+    - sound_component_powerup       # placeholder
+    - sound_component_powerdown     # placeholder
+  video_loop:
+    - video_loop_idle
+
+states:
+
+  boot:
+    on_enter_cue:
+      - video_loop_idle
+      - audio_loop_off
+    after:
+      delay: 3s
+      goto: phase1_idle
+
+  phase1_idle:
+    on_enter_cue:
+      - audio_loop_idle
+      - video_loop_idle
+    on:
+      component_activated:
+        cue:
+          - sound_component_powerup
+        goto: phase1_at_least_one_component_active
+
+  phase1_at_least_one_component_active:
+    on:
+      component_activated:
+        cue:
+          - sound_component_powerup
+          - clip_encouragement
+      component_deactivated:
+        cue:
+          - sound_component_powerdown
+      all_components_activated:
+        goto: party
+      all_components_deactivated:
+        goto: phase1_idle
+
+  party:
+    on_enter_cue:
+      - clip_test2
+      - audio_loop_dull
+    after:
+      delay: 2m
+      goto: phase1_idle
