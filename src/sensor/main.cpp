@@ -12,6 +12,8 @@
 #include <pulleys_culture.h>
 #include <pulleys_patterns.h>
 #include <pulleys_channel.h>
+#include <pulleys_panel.h>
+#include <pulleys_wave.h>
 
 // ── Sensor — rope-mounted motion detector ─────────────────────────────────────
 // Runs the traveler board (ESP32-S3 + QMI8658). No sleep: mains-class battery.
@@ -19,13 +21,60 @@
 //
 // Per-unit config lives in NVS (namespace "sensor"): channel + mode + threshold.
 // Set it over serial at boot — see handleSerial() below.
+//
+// Two LED surfaces on the one output, in this order along the strip:
+//
+//   8x8 panel   the channel's pattern — pixel for pixel what that channel's
+//               block shows on a Screen, which is how a rope and its slot in
+//               the array are visibly the same thing
+//   16x2 bar    a pot of colour bubbling around the same channel hue (16, skip
+//               1, 16 — see lib/pulleys_panel)
+//
+// Both are the channel's colour: the panel's pattern is built from it, and the
+// bar's hue arc is centred on it. One rope reads as one colour from either
+// surface, and a rope that is re-channelled changes both at once.
 
 #ifndef LED_PIN
   #define LED_PIN   14
 #endif
 #ifndef LED_COUNT
-  #define LED_COUNT 64
+  #define LED_COUNT 97
 #endif
+
+// Wire order of the chain on the output. WS2812B is normally GRB, which is what
+// the 16x2 bar wants, so the controller is told that and the bar needs nothing
+// further. Get it wrong and hues are permuted rather than absent -- channel 11's
+// purple comes out green when R and G are swapped, which reads as "wrong
+// channel" rather than as "wrong wiring". 'p' on serial shows solid primaries
+// to settle it: see handleSerial.
+#ifndef LED_COLOR_ORDER
+  #define LED_COLOR_ORDER GRB
+#endif
+
+// The 8x8 panel on this hardware is a plain RGB chip, where the bar after it is
+// standard GRB. Measured with the 'p' probe rather than inferred: sending a
+// logical RED (byte 1 under a GRB chain) lit the panel green and the bar red,
+// sending GREEN (byte 0) lit the panel red and the bar green, and BLUE (byte 2)
+// lit both blue. So the panel reads bytes as R, G, B and the bar as G, R, B.
+//
+// One controller emits one order for the whole chain, so the surface that
+// disagrees is permuted in the buffer instead. Against a GRB chain, an RGB chip
+// is red and green exchanged.
+#ifndef GRID_CHANNEL_SWAP
+  #define GRID_CHANNEL_SWAP pulleys::SWAP_RG
+#endif
+
+// Where each surface starts on the strip. The bar follows the panel, so its
+// origin is the panel's length -- say it that way rather than writing 64, and
+// a third surface chained on later needs no arithmetic done by hand.
+static constexpr uint16_t GRID_ORIGIN = 0;
+static constexpr uint16_t BAR_ORIGIN  = GRID_ORIGIN + pulleys::PANEL_8X8_LEDS;
+static_assert(LED_COUNT >= BAR_ORIGIN + pulleys::PANEL_16X2_LEDS,
+              "LED_COUNT must cover the 8x8 panel and the 16x2 bar after it");
+
+// For printing a -D token (LED_COLOR_ORDER) rather than its expansion.
+#define _STRINGIFY(x) #x
+#define STRINGIFY(x)  _STRINGIFY(x)
 
 #define IMU_HZ          100
 #define IMU_INTERVAL_MS (1000 / IMU_HZ)
@@ -55,7 +104,7 @@
 // the shape washes out into a single bright block. Raise it only if the piece
 // ends up somewhere with real ambient light to compete with.
 #define SENSOR_IDLE_CANDLE 1
-#define IDLE_BRIGHTNESS    14     // low — a presence check, not a display
+#define IDLE_BRIGHTNESS    10     // low — a presence check, not a display; 30% down from 14
 
 // Breath: dark for a long stretch, swell, brief hold at full, fade back.
 #define IDLE_OFF_MS   10000
@@ -64,12 +113,20 @@
 #define IDLE_FALL_MS   3000
 #define IDLE_CYCLE_MS (IDLE_OFF_MS + IDLE_RISE_MS + IDLE_HOLD_MS + IDLE_FALL_MS)
 
+// The bar sleeps as an ember in its middle four columns, not as the whole bar
+// dimmed. Dimming the whole thing to the breath measured correct -- 0 to 14 of
+// 255, in step with the candle -- and read as nothing: 32 pixels at 5% is a
+// faint wash, where the candle's nine pixels against 55 dark ones reads as a
+// thing breathing. Same light, concentrated instead of spread.
+#define IDLE_BAR_X0   6
+#define IDLE_BAR_X1   9
+
 // Flicker: how deep each pixel's own wander goes, and how fast it wanders.
 // FLICKER_FLOOR is the dimmest a pixel gets as a fraction of the breath, so a
 // candle never fully gutters out mid-swell.
 #define FLICKER_FLOOR  0.05f
 #define FLICKER_SPEED  9        // inoise8 steps per ms/16 — higher is twitchier
-#define ACTIVE_BRIGHTNESS  77     // 30% of full — pattern while awake; see note below
+#define ACTIVE_BRIGHTNESS  54     // pattern while awake; 30% down from 77, see note below
 
 // Envelope around a detection: snap up, hold, drift back down. Re-triggering
 // only pushes the hold out — the envelope keeps rising from wherever it is and
@@ -85,7 +142,21 @@ static pulleys::Detector detector;
 
 // The sensor renders its own channel's pattern — the same one that channel's
 // block shows on a Screen, so a rope and its slot in the array visibly match.
+// The panel keeps going through PatternSlot rather than through a Panel: that
+// match with the Screen's block is the point of it, and both ends get their
+// mapping from channel_slot_init.
 static pulleys::PatternSlot patSlot;
+
+// The grid is drawn through patSlot, but it is still a surface: this is what
+// carries its wiring -- the serpentine run and the channel swap above -- for
+// the output-stage fixup in showPixels().
+static pulleys::Panel      gridPanel;
+
+// The bar is the other way round — its own surface, its own pattern, sharing
+// only the channel hue. pulleys_panel holds the fold, pulleys_wave the motion.
+static pulleys::Panel      barPanel;
+static pulleys::WaveParams barCfg;
+static pulleys::WaveState  barState;
 
 static uint8_t  myChannel = 0;
 static uint8_t  myMode    = pulleys::SENSOR_MODE_LINEAR;
@@ -209,10 +280,98 @@ static float idleFlicker(uint8_t i, uint32_t now) {
     return FLICKER_FLOOR + (1.0f - FLICKER_FLOOR) * (n / 255.0f);
 }
 
-// Point the pattern slot at the current channel. Call after any channel change.
+// Point both surfaces at the current channel. Call after any channel change --
+// 'c7' on serial has to move the bar as well as the panel, or a re-channelled
+// rope ends up showing two different ropes' colours.
 static void applyChannelVisual() {
-    pulleys::channel_slot_init(patSlot, myChannel, leds, 8, 8, /*serpentine=*/false);
+    pulleys::channel_slot_init(patSlot, myChannel, leds + GRID_ORIGIN,
+                               8, 8, /*serpentine=*/false);
+    gridPanel = pulleys::panel_8x8(leds, GRID_ORIGIN, /*serpentine=*/false,
+                                   GRID_CHANNEL_SWAP);
+
+    barPanel = pulleys::panel_16x2(leds, BAR_ORIGIN);
+    // The channel hue is the centre of the arc the pot bubbles within, which is
+    // the same hue the panel's pattern is built from (pulleys_channel). Full
+    // brightness here: the envelope below does all the scaling, exactly as it
+    // does for the panel.
+    barCfg            = pulleys::WaveParams{};
+    barCfg.centerHue  = pulleys::channel_hue(myChannel);
+    barCfg.maxBri     = 255;
+    pulleys::wave_init(barState, barCfg);
 }
+
+// Every show goes through here, because the grid's channel swap has to be
+// applied once to a finished frame -- applying it twice cancels out, and
+// applying it inside a renderer gets overwritten by the next one to draw.
+static void showPixels() {
+    pulleys::panel_fix_order(gridPanel);
+    pulleys::panel_fix_order(barPanel);
+    FastLED.show();
+}
+
+// ── The bar ───────────────────────────────────────────────────────────────────
+// Rendered every frame, lit by the same envelope as the panel. It has to run
+// even while dark: the pot integrates its own phases, so a bar that stopped at
+// rest would resume mid-stride and jump the moment someone pulls the rope.
+//
+// At rest it carries the idle breath rather than going fully black, for the
+// reason the candle exists on the panel -- a strip that is properly dark is
+// indistinguishable from a strip that was never plugged in.
+static uint8_t barBri   = 0;  // last level the bar's pattern was lit at
+static uint8_t barEmber = 0;  // ...and its sleeping ember, for the status log
+
+static void renderBar(float dt, uint32_t now) {
+    pulleys::wave_render(barPanel, barCfg, barState, dt);
+
+    // The pot is lit by the detection envelope alone, so at rest the bar goes
+    // dark exactly as the panel's pattern does.
+    barBri = (uint8_t)(ledEnv * ACTIVE_BRIGHTNESS);
+    for (uint16_t i = 0; i < pulleys::PANEL_16X2_LEDS; i++)
+        leds[BAR_ORIGIN + i].nscale8(barBri);
+
+    // ...and the ember takes over underneath it, on the same breath and the
+    // same flicker as the candle, so one creature is asleep on both surfaces
+    // rather than two things idling differently. Additive and cross-faded
+    // against the pattern for the same reason the candle is.
+    float breath = IDLE_BRIGHTNESS * (1.0f - ledEnv) * idleBreath(now);
+    if (!SENSOR_IDLE_CANDLE || breath <= 0.0f) return;
+
+    CRGB c = pulleys::channel_color(myChannel);
+    uint8_t k = 0;
+    for (uint8_t y = 0; y < barPanel.rows; y++) {
+        for (uint8_t x = IDLE_BAR_X0; x <= IDLE_BAR_X1; x++, k++) {
+            CRGB px = c;
+            // Offset past the candle's streams so the two surfaces flicker
+            // independently -- in step, they read as one wired-together blink.
+            px.nscale8((uint8_t)(breath * idleFlicker(IDLE_PIXEL_COUNT + k, now)));
+            leds[pulleys::panel_index(barPanel, x, y)] += px;
+        }
+    }
+    barEmber = (uint8_t)breath;
+}
+
+// ── Colour-order probe ────────────────────────────────────────────────────────
+// Cycles pure red, green, blue across both surfaces, one every PROBE_STEP_MS,
+// so the wire order can be read off the strip instead of inferred from a
+// pattern. A pattern is a bad instrument for this: channel 11's purple is
+// (155, 18, 115), where red and blue are close enough that a permuted version
+// of it and the real thing are both describable as "blue".
+//
+// Primaries have no such problem, and each one answers for exactly one byte
+// position: with the chain declared GRB, a logical RED lands in byte 1, GREEN
+// in byte 0 and BLUE in byte 2. So the colour the strip shows for each primary
+// names the hardware channel at that position, and the three answers together
+// give the chip's order outright.
+//
+// It deliberately bypasses panel_fix_order: the point is the raw wiring, and a
+// fixup in the way would hide the thing being measured. Every pixel is lit,
+// the fold included -- nothing is excluded from a wiring test for looks.
+#define PROBE_STEP_MS 1500
+static const CRGB PROBE_COLOR[3] = { CRGB(255, 0, 0), CRGB(0, 255, 0), CRGB(0, 0, 255) };
+static const char* PROBE_NAME[3] = { "RED", "GREEN", "BLUE" };
+static bool     probeOn   = false;
+static uint8_t  probeIdx  = 0;
+static uint32_t probeNext = 0;
 
 // ── Mesh RX — sensors listen too, so they relay for each other ────────────────
 static void onMeshEvent(const pulleys::MeshEvent& ev, bool relayed) {
@@ -225,6 +384,8 @@ static void onMeshEvent(const pulleys::MeshEvent& ev, bool relayed) {
 }
 
 // ── Serial console — field config without a reflash ───────────────────────────
+//   c<0-15> channel | m0/m1 mode | r<deg> threshold | t test event
+//   p       colour-order probe: cycles raw RED, GREEN, BLUE on both surfaces
 static void printConfig() {
     Serial.printf("  CONFIG  channel=%d (%s)  mode=%s (%s)  rotThreshold=%.0f deg\n",
                   myChannel, chanSource == CHAN_LISTED ? "listed"
@@ -279,6 +440,16 @@ static void handleSerial() {
             } else if (buf[0] == 'r') {          // "r260" → rotation threshold
                 int v = atoi(buf + 1);
                 if (v >= 30 && v <= 720) { myRotDeg = v; saveConfig(); applyConfig(); }
+            } else if (buf[0] == 'p') {          // "p" → the colour-order probe
+                probeOn = !probeOn;
+                probeIdx = 0;
+                probeNext = 0;
+                Serial.printf(probeOn
+                    ? "  probe on — raw %s order, cycling RED, GREEN, BLUE every"
+                      " %dms. What the strip shows for each names that byte's"
+                      " hardware channel.\n"
+                    : "  probe off — back to the pattern (%s, %dms)\n",
+                    STRINGIFY(LED_COLOR_ORDER), PROBE_STEP_MS);
             } else if (buf[0] == 't') {          // "t" → fire a test event
                 pulleys::mesh_send_event(myChannel, myMode, 90, 0);
                 localCount++;
@@ -299,7 +470,7 @@ void setup() {
 
     loadConfig();
 
-    FastLED.addLeds<WS2812B, LED_PIN, RGB>(leds, LED_COUNT);
+    FastLED.addLeds<WS2812B, LED_PIN, LED_COLOR_ORDER>(leds, LED_COUNT);
     FastLED.setBrightness(255);
     fill_solid(leds, LED_COUNT, CRGB::Black);
     FastLED.show();
@@ -332,12 +503,12 @@ void setup() {
     for (int i = 0; i < 3; i++) {
         CRGB boot = (chanSource == CHAN_LISTED) ? pulleys::channel_color(myChannel)
                                                 : CRGB::White;
-        boot.nscale8(40);
+        boot.nscale8(28);         // 30% down from 40, with the rest of the panel
         fill_solid(leds, LED_COUNT, boot);
-        FastLED.show();
+        showPixels();
         delay(120);
         fill_solid(leds, LED_COUNT, CRGB::Black);
-        FastLED.show();
+        showPixels();
         delay(120);
     }
     pulleys::whoami_reply();
@@ -398,15 +569,39 @@ void loop() {
         if (ledEnv > 1.0f) ledEnv = 1.0f;
         if (ledEnv < 0.0f) ledEnv = 0.0f;
 
+        // The probe owns the whole strip while it runs: it is answering a
+        // question about the wiring, and a pattern underneath it would only
+        // make the answer harder to read. It goes through the same fixup as
+        // everything else, so the two surfaces agreeing on a primary is the
+        // pass condition -- if one of them disagrees, its swap is wrong.
+        if (probeOn) {
+            if ((int32_t)(now - probeNext) >= 0) {
+                probeNext = now + PROBE_STEP_MS;
+                Serial.printf("  probe: sending %s\n", PROBE_NAME[probeIdx]);
+                probeIdx = (probeIdx + 1) % 3;
+            }
+            uint8_t shown = (probeIdx + 2) % 3;    // the one currently up
+            CRGB c = PROBE_COLOR[shown];
+            c.nscale8(ACTIVE_BRIGHTNESS);
+            fill_solid(leds, LED_COUNT, c);
+            FastLED.show();                        // raw: no panel_fix_order
+            return;
+        }
+
+        // The panel. Scoped to its own 64 pixels now that the bar lives on the
+        // same strip -- clearing or scaling LED_COUNT would reach into it.
         if (ledEnv > 0.002f) {
             // Awake: the channel's own pattern, the same one this channel's
             // block shows on a Screen.
             pulleys::pattern_slot_update(patSlot, dt, pulleys::mesh_now_secs());
             uint8_t bri = (uint8_t)(ledEnv * ACTIVE_BRIGHTNESS);
-            for (uint16_t i = 0; i < LED_COUNT; i++) leds[i].nscale8(bri);
+            for (uint16_t i = 0; i < pulleys::PANEL_8X8_LEDS; i++)
+                leds[GRID_ORIGIN + i].nscale8(bri);
         } else {
-            fill_solid(leds, LED_COUNT, CRGB::Black);
+            fill_solid(leds + GRID_ORIGIN, pulleys::PANEL_8X8_LEDS, CRGB::Black);
         }
+
+        renderBar(dt, now);
 
         // An unassigned board does not get to look like a working one. The whole
         // panel breathes white — a colour no channel ever uses — so a crate of
@@ -422,11 +617,11 @@ void loop() {
                 for (uint8_t i = 0; i < IDLE_PIXEL_COUNT; i++) {
                     CRGB p = c;
                     p.nscale8((uint8_t)(breath * idleFlicker(i, now)));
-                    leds[IDLE_PIXEL_IDX[i]] += p;
+                    leds[GRID_ORIGIN + IDLE_PIXEL_IDX[i]] += p;
                 }
             }
         }
-        FastLED.show();
+        showPixels();
     }
 
     // 2 Hz status
@@ -448,6 +643,8 @@ void loop() {
                           detector.measure(), detector.lastRate(), detector.lastResid(),
                           localCount, heardCount);
         }
+        Serial.printf("  [LED] env=%.3f breath=%.2f  bar=%u/%u ember=%u\n",
+                      ledEnv, idleBreath(now), barBri, ACTIVE_BRIGHTNESS, barEmber);
         Serial.printf("  [SYNC] clock=%s meshNow=%lums\n",
                       pulleys::mesh_clock_locked() ? "locked" : "free",
                       (unsigned long)pulleys::mesh_now());
