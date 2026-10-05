@@ -69,6 +69,8 @@ static const ChannelAssignment CHANNEL_ASSIGNMENT[] = {
     { 0x08FF,  8, LIN },   // N-08FF
     { 0x026D,  9, LIN },   // N-026D
     { 0xA08A, 10, LIN },   // N-A08A
+    { 0x4B37, 11, LIN },   // N-4B37
+    { 0x2C24, 12, LIN },   // N-2C24
     // ASSIGNMENTS END
 };
 static constexpr uint8_t CHANNEL_ASSIGNMENT_COUNT =
