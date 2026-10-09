@@ -10,7 +10,7 @@ HERE="$DIR/deploy"
 BOOT=/boot/firmware
 
 apt-get update
-apt-get install -y mpv python3-serial rclone git plymouth plymouth-themes
+apt-get install -y mpv python3-serial python3-yaml rclone git plymouth plymouth-themes
 
 # --- splash: plymouth theme from deploy/splash.png ---
 THEME=/usr/share/plymouth/themes/overlord

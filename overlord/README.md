@@ -19,6 +19,7 @@ macOS:
 ```sh
 brew install mpv ffmpeg      # ffmpeg is only needed to cut clips
 pip install pyserial         # only needed for real serial; --test mode works without it
+pip install pyyaml           # only needed for --game
 ```
 
 Python 3.10+.
@@ -47,6 +48,109 @@ python3 overlord.py --test --windowed --mpv-arg=--mute=yes
 
 On start you should see `starting audio loop: idle.wav` and
 `starting idle loop: idle.mp4` (each only if the file exists).
+
+## Game
+
+`--game` runs a state machine from `../game_state_machine/` (format in
+`GAME_FORMAT.md` there; draw it with `python3 ../tools/state_chart.py`). Game
+events coming in over serial or the test socket (`component_activated`,
+`final_component_activated`, ...) go to the game, which fires cues; anything
+else is still played as a cue directly. State changes are printed as
+`game: passive -> game1`.
+
+```sh
+python3 overlord.py --test --windowed --game                  # state_config.yaml
+python3 overlord.py --test --windowed --game path/to/other.yaml
+./send.sh component_activated                                 # drive it by hand
+```
+
+The game file is read once at startup; restart overlord after editing it.
+
+## Simulator
+
+The simulator stands in for the real components so the game can be played
+from the keyboard, with no hardware. It is a separate module (`simulate.py`)
+and is only loaded with `--simulate`, which needs `--game`.
+
+### Start it
+
+```sh
+pip install pyyaml        # once
+python3 overlord.py --test --windowed --game --simulate
+```
+
+Click the video window to focus it; keys only reach the simulator while that
+window has focus. Drop `--windowed` to run it fullscreen, and add
+`--mpv-arg=--mute=yes` for silence. Ctrl-C in the terminal quits.
+
+### Keys
+
+| Key   | Component        | Colour                           |
+| ----- | ---------------- | -------------------------------- |
+| `1-5` | major components | red, orange, yellow, green, blue |
+| `6-8` | final components | purple                           |
+
+- A key lights its component, which wears out after 5 s.
+- Pressing a lit key refills it to full.
+- `game2` shows bars 6-8 (it is the state that reacts to the final
+  components). Every other state shows bars 1-5.
+
+### The overlay
+
+The bottom half of the screen shows the current state name and one bar per
+component, labelled with its key. A bar starts full when its key is pressed and
+drains right to left as the component wears out.
+
+### Play through the game
+
+1. **passive**: press any of `1-5` to start; the game moves to `game1`.
+2. **game1**: light all of `1-5` at once (each lasts 5 s, so press them
+   quickly). The game moves to `victory1`.
+3. **victory1**, then **reveal**: these play on their own timers and move to
+   `game2`.
+4. **game2**: light all of `6-8` at once to win; the game moves to `victory2`.
+5. **victory2**, then **kickout**: these run on timers and return to `passive`.
+
+If you don't win, `game1` and `game2` time out (back to `passive` and on to
+`kickout`). Timings come from the game file.
+
+### Faster timers for testing
+
+The game file uses minute-long timers in places. To step through the whole
+flow quickly, run a copy with short delays:
+
+```sh
+sed -E 's/delay: [0-9]+[sm]/delay: 3s/' ../game_state_machine/state_config.yaml > /tmp/fast.yaml
+python3 overlord.py --test --windowed --game /tmp/fast.yaml --simulate
+```
+
+### What it sends
+
+The simulator sends the same game events the real hardware will:
+
+| When                                | Event                                 |
+| ----------------------------------- | ------------------------------------- |
+| one of `1-5` lights                 | `component_activated`                 |
+| the last of `1-5` lights            | then `all_components_activated`       |
+| one of `1-5` wears out              | `component_deactivated`               |
+| the last lit one of `1-5` wears out | then `all_components_deactivated`     |
+| one of `6-8` lights                 | `final_component_activated`           |
+| the last of `6-8` lights            | then `all_final_components_activated` |
+| one of `6-8` wears out              | `final_component_deactivated`         |
+
+Each is logged in the terminal (`simulate: component 3 lit`, then
+`game: component_activated in game1`, or `... ignored in <state>` when the
+current state does not react to it).
+
+### Troubleshooting
+
+- **Keys do nothing**: the video window isn't focused; click it.
+- **Stuck in a state**: check the terminal for `ignored`; the current state may
+  not react to that key. Timer states move on by themselves.
+- **`cue not played: ...`**: the cue's media file doesn't exist yet
+  (placeholder). The game still moves on.
+- **Bars never show 6-8**: only states that react to final components show
+  them; you need to reach `game2`.
 
 ## Deploying on a Raspberry Pi
 
@@ -187,6 +291,8 @@ remote needs the same folder names.
 - `mpv_ipc.py` - `Mpv` drives one mpv over its JSON IPC socket (fullscreen kiosk, or headless audio with `kiosk=False`); `SoundPlayer` spawns one throwaway mpv per sound effect.
 - `serial_reader.py` - line-based event source: serial port (auto-reconnects) or, with `--test`, the Unix socket.
 - `send.sh` - sends trigger events to the test socket.
+- `game.py` - `--game`: loads a state machine YAML, runs its timers, fires cues through `dispatch`.
+- `simulate.py` - `--simulate`: keys 1-8 as stand-in components, plus the charge overlay (mpv `osd-overlay`). Imported only when enabled.
 
 ## Design notes / gotchas
 

@@ -47,7 +47,7 @@ cues:
     - video_loop_idle
 
 # Flow: passive -> game1 -> victory1 -> reveal -> game2 -> victory2 -> kickout -> passive
-# All delays are placeholders until real timings are chosen.
+# Delays marked placeholder are not final timings yet.
 states:
 
   passive:
@@ -79,22 +79,16 @@ states:
     on_enter_cue:
       - video_once_test2
       - audio_loop_dull
-    on:
-      component_deactivated:
-        goto: game1
     after:
-      delay: 2m                    # placeholder
+      delay: 10s
       goto: reveal
 
   reveal:
     on_enter_cue:
       - video_once_test1
-    on:
-      final_component_activated:
-        goto: game2
     after:
-      delay: 2m                     # placeholder
-      goto: kickout
+      delay: 10s                    # placeholder
+      goto: game2
 
   game2:
     on:

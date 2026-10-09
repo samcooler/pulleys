@@ -7,6 +7,10 @@ Events (one per line):
   video_loop_<name>  switch the background video loop to media/video_loops/<name>.*
   audio_loop_<name>  switch the background audio loop to media/audio_loops/<name>.*
   audio_loop_off     stop the background audio loop
+
+With --game, game events (component_activated, ...) drive the state machine in
+game_state_machine/, which fires the cues above. --simulate adds keyboard
+stand-ins for the components and an overlay showing their charge.
 """
 
 import argparse
@@ -39,7 +43,13 @@ def main():
     ap.add_argument("--test", action="store_true",
                     help="test mode: listen on $OVERLORD_SOCK (default /tmp/overlord.sock)")
     ap.add_argument("--serial-port", help="explicit serial port path")
+    ap.add_argument("--game", nargs="?", const="", metavar="YAML",
+                    help="run a game state machine (default: game_state_machine/state_config.yaml)")
+    ap.add_argument("--simulate", action="store_true",
+                    help="keys 1-8 stand in for the components; needs --game")
     args = ap.parse_args()
+    if args.simulate and args.game is None:
+        ap.error("--simulate needs --game")
 
     extra = list(args.mpv_arg)
     video_extra = list(extra)
@@ -54,7 +64,21 @@ def main():
         "playing_clip": False,
     }
 
+    # Loaded before mpv starts so a broken game file fails fast. Optional modules
+    # are imported only when asked for.
+    game = None
+    if args.game is not None:
+        from game import DEFAULT_GAME, Game
+        game = Game(args.game or DEFAULT_GAME, lambda cue: fire_cue(cue))
+    sim = None
+    if args.simulate:
+        from simulate import Simulator
+        sim = Simulator(game, game.event)
+        video_extra += sim.mpv_args()
+
     def on_event(ev):
+        if sim:
+            sim.on_mpv_event(ev)
         if ev["event"] in ("file-loaded", "end-file"):
             print(f"mpv: {ev['event']}", ev.get("reason", ""), flush=True)
 
@@ -72,6 +96,10 @@ def main():
     sounds = SoundPlayer(extra)
 
     def shutdown(*_):
+        if sim:
+            sim.stop()
+        if game:
+            game.stop()
         sounds.stop_all()
         audio.quit()
         video.quit()
@@ -121,9 +149,19 @@ def main():
                 return True
         return False
 
+    def fire_cue(cue):
+        try:
+            if not dispatch(cue):
+                print(f"cue not played: {cue}", flush=True)
+        except MpvError as e:
+            print(f"cue {cue} failed: {e}", flush=True)
+
     def on_serial_event(event_name):
         event_name = event_name.strip()
         if not event_name:
+            return
+        if game and game.handles(event_name):
+            game.event(event_name)
             return
         try:
             if dispatch(event_name):
@@ -149,6 +187,10 @@ def main():
             print(f"starting idle loop: {state['video_loop'].name}", flush=True)
         else:
             print(f"no media/video_loops/{DEFAULT_LOOP}.* found; showing black", flush=True)
+        if game:
+            game.start()
+        if sim:
+            sim.start(video)
         video.proc.wait()
     except KeyboardInterrupt:
         pass
