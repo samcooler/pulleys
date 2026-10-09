@@ -2,8 +2,8 @@
 """Overlord: fullscreen video/audio panel driven by an ESP32 over serial.
 
 Events (one per line):
-  clip_<name>        play media/clips/<name>.* once on the video, then back to the video loop
-  sound_<name>       overlay media/sounds/<name>.* on top of everything (overlaps freely)
+  video_once_<name>  play media/video_once/<name>.* once on the video, then back to the video loop
+  audio_once_<name>  overlay media/audio_once/<name>.* on top of everything (overlaps freely)
   video_loop_<name>  switch the background video loop to media/video_loops/<name>.*
   audio_loop_<name>  switch the background audio loop to media/audio_loops/<name>.*
   audio_loop_off     stop the background audio loop
@@ -103,8 +103,8 @@ def main():
     prefixed = [
         ("video_loop_", "video_loops", set_video_loop),
         ("audio_loop_", "audio_loops", set_audio_loop),
-        ("clip_", "clips", play_clip),
-        ("sound_", "sounds", sounds.play),
+        ("video_once_", "video_once", play_clip),
+        ("audio_once_", "audio_once", sounds.play),
     ]
 
     def dispatch(event_name):

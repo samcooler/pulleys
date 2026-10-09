@@ -36,7 +36,7 @@ So far only tested with `--test` mode and the Unix socket.
 
 - [ ] Plug in the bridge node, confirm overlord auto-detects the port and prints `serial: connected`
 - [ ] Trigger an event on the ESP-NOW network and confirm overlord receives and plays it
-- [ ] Check the line format the bridge sends matches what overlord expects (bare `clip_test1`, not `EV ...`; see ARCHITECTURE.md bridge section)
+- [ ] Check the line format the bridge sends matches what overlord expects (bare `video_once_test1`, not `EV ...`; see ARCHITECTURE.md bridge section)
 - [ ] Unplug and replug the bridge: reader reconnects
 - [ ] Reboot the Pi with the bridge attached: events work after boot
 - [ ] Measure latency from sensor trigger to playback

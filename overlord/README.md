@@ -78,14 +78,14 @@ device). Logs: `journalctl -u overlord-update -u overlord -b`.
 With overlord running in `--test` mode, from another terminal:
 
 ```sh
-./send.sh clip_test1                # play media/clips/test1.* once on the video
-./send.sh sound_beep                # overlay media/sounds/beep.* (overlaps with everything)
+./send.sh video_once_test1          # play media/video_once/test1.* once on the video
+./send.sh audio_once_beep           # overlay media/audio_once/beep.* (overlaps with everything)
 ./send.sh audio_loop_idle           # switch the background audio loop (generated test tone)
 ./send.sh audio_loop_ambient        # switch to the ambient music loop
-./send.sh sound_steam               # overlay the steam hiss
+./send.sh audio_once_steam          # overlay the steam hiss
 ./send.sh audio_loop_off            # stop the background audio loop
 ./send.sh video_loop_idle           # switch the background video loop
-./send.sh sound_beep sound_chime    # several events in one call
+./send.sh audio_once_beep audio_once_chime    # several events in one call
 ```
 
 `send.sh` writes to `/tmp/overlord.sock` and exits immediately. Override the
@@ -95,7 +95,7 @@ starting `overlord.py --test`; handy for a second instance).
 Expected overlord output for a clip:
 
 ```
-event: clip_test1
+event: video_once_test1
 mpv: file-loaded
 mpv: end-file eof
 clip finished, returning to loop
@@ -103,25 +103,25 @@ clip finished, returning to loop
 
 An unrecognised event prints `unknown event: <name>` and changes nothing. A
 recognised prefix with no matching file prints
-`no media for sound_nope in media/sounds/`.
+`no media for audio_once_nope in media/audio_once/`.
 
 On real hardware the same event names are sent as newline-terminated text over
 serial. To fake it without the bridge node, write a line to the port, e.g.
-`echo clip_test1 > /dev/cu.usbmodemXXXX`.
+`echo video_once_test1 > /dev/cu.usbmodemXXXX`.
 
 ### Events
 
 Events are matched by prefix and then by file name, so adding media needs no
-code change: drop `media/sounds/door.mp3` in and `sound_door` works. The
+code change: drop `media/audio_once/door.mp3` in and `audio_once_door` works. The
 extension is ignored (first match by name wins), and names can't contain `/`.
 
-| Event                | Action                                                                  |
-| -------------------- | ----------------------------------------------------------------------- |
-| `clip_<name>`        | Play `media/clips/<name>.*` once on the video, then back to the video loop |
-| `sound_<name>`       | Play `media/sounds/<name>.*` once, overlaid; sounds overlap freely      |
-| `video_loop_<name>`  | Switch the background video to `media/video_loops/<name>.*`             |
-| `audio_loop_<name>`  | Switch the background audio to `media/audio_loops/<name>.*`             |
-| `audio_loop_off`     | Stop the background audio loop                                          |
+| Event                | Action                                                                          |
+| -------------------- | ------------------------------------------------------------------------------- |
+| `video_once_<name>`  | Play `media/video_once/<name>.*` once on the video, then back to the video loop |
+| `audio_once_<name>`  | Play `media/audio_once/<name>.*` once, overlaid; sounds overlap freely          |
+| `video_loop_<name>`  | Switch the background video to `media/video_loops/<name>.*`                     |
+| `audio_loop_<name>`  | Switch the background audio to `media/audio_loops/<name>.*`                     |
+| `audio_loop_off`     | Stop the background audio loop                                                  |
 
 Behaviour details:
 
@@ -141,15 +141,15 @@ Behaviour details:
 media/video_loops/idle.mp4   background video loop, played at start and after every clip
 media/audio_loops/idle.wav   background audio loop, played at start (generated test tone)
 media/audio_loops/ambient.mp3  56 s ambient music loop (audio_loop_ambient)
-media/clips/*.mp4            one-shot video clips (clip_<name>)
-media/sounds/*.wav           one-shot overlay sounds (sound_<name>)
-media/sounds/steam.mp3       1.1 s steam hiss (sound_steam)
+media/video_once/*.mp4       one-shot video clips (video_once_<name>)
+media/audio_once/*.wav       one-shot overlay sounds (audio_once_<name>)
+media/audio_once/steam.mp3   1.1 s steam hiss (audio_once_steam)
 test_full.mp4                1080p 60s source used to cut test1
 test2_full.mp4               4K 20s source used to cut test2
 ```
 
-`audio_loops/idle.wav`, `sounds/beep.wav` and `sounds/chime.wav` are generated
-test tones. `audio_loops/ambient.mp3` and `sounds/steam.mp3` are real
+`audio_loops/idle.wav`, `audio_once/beep.wav` and `audio_once/chime.wav` are generated
+test tones. `audio_loops/ambient.mp3` and `audio_once/steam.mp3` are real
 third-party audio files (originally `artifystudio-looping-ambient-7-203914.mp3`
 and `dragon-studio-steam-hissing-386157.mp3`); check their licences before
 shipping. Levels are untouched, so the steam hiss may sit louder or quieter than
@@ -158,8 +158,8 @@ test tones with:
 
 ```sh
 ffmpeg -y -f lavfi -i "sine=frequency=220:duration=4" -af "tremolo=f=2:d=0.6,volume=0.4" media/audio_loops/idle.wav
-ffmpeg -y -f lavfi -i "sine=frequency=880:duration=0.4" -af "afade=t=out:st=0.2:d=0.2" media/sounds/beep.wav
-ffmpeg -y -f lavfi -i "sine=frequency=520:duration=1.2" -af "afade=t=out:st=0.6:d=0.6" media/sounds/chime.wav
+ffmpeg -y -f lavfi -i "sine=frequency=880:duration=0.4" -af "afade=t=out:st=0.2:d=0.2" media/audio_once/beep.wav
+ffmpeg -y -f lavfi -i "sine=frequency=520:duration=1.2" -af "afade=t=out:st=0.6:d=0.6" media/audio_once/chime.wav
 ```
 
 For a seamless audio loop use a file whose end joins its start; `loop-file=inf`
@@ -169,12 +169,17 @@ Re-cut the test clips (3 s from the start of each source). This ffmpeg build has
 no `libx264`, so use the VideoToolbox encoder:
 
 ```sh
-ffmpeg -y -i test_full.mp4  -t 3 -c:v h264_videotoolbox -b:v 20M -pix_fmt yuv420p -c:a aac media/clips/test1.mp4
-ffmpeg -y -i test2_full.mp4 -t 3 -c:v h264_videotoolbox -b:v 40M -pix_fmt yuv420p -c:a aac media/clips/test2.mp4
+ffmpeg -y -i test_full.mp4  -t 3 -c:v h264_videotoolbox -b:v 20M -pix_fmt yuv420p -c:a aac media/video_once/test1.mp4
+ffmpeg -y -i test2_full.mp4 -t 3 -c:v h264_videotoolbox -b:v 40M -pix_fmt yuv420p -c:a aac media/video_once/test2.mp4
 ```
 
 The folders were renamed from `media/loops` to `media/video_loops`; if you have
 an older checkout, move it.
+
+The one-shot folders and events were renamed too: `media/clips` is now
+`media/video_once` (`clip_<name>` is `video_once_<name>`) and `media/sounds` is
+now `media/audio_once` (`sound_<name>` is `audio_once_<name>`). The rclone
+remote needs the same folder names.
 
 ## Files
 

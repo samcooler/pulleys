@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Send one or more trigger events to a running `overlord.py --test`, then exit.
-# usage: ./send.sh clip_test1 [clip_test2 ...]
+# usage: ./send.sh video_once_test1 [video_once_test2 ...]
 set -euo pipefail
 
 SOCK="${OVERLORD_SOCK:-/tmp/overlord.sock}"

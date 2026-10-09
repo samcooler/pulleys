@@ -1,7 +1,7 @@
 # Media
 
 The folder a file is in and its name decide when it plays. The file name
-(without extension) is the event name: `sounds/door.mp3` plays on `sound_door`.
+(without extension) is the event name: `audio_once/door.mp3` plays on `audio_once_door`.
 Keep names lowercase with no spaces.
 
 ## `video_loops/`
@@ -16,15 +16,15 @@ Background music or ambience that loops forever, independent of the video. Use
 a file whose end joins its start. `idle.*` plays at startup. Switched with
 `audio_loop_<name>`, stopped with `audio_loop_off`.
 
-## `clips/`
+## `video_once/`
 
 Short videos (with their audio) that play once on screen, then return to the
-video loop. Triggered with `clip_<name>`.
+video loop. Triggered with `video_once_<name>`.
 
-## `sounds/`
+## `audio_once/`
 
 Short sound effects played once on top of everything. They can overlap each
-other. Triggered with `sound_<name>`.
+other. Triggered with `audio_once_<name>`.
 
 ---
 

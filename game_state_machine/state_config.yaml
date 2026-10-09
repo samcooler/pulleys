@@ -5,14 +5,17 @@
 #                switch the background music or video. The name starts with its
 #                kind, and the rest is the file name in overlord/media/:
 #                  audio_loop_*  background music; repeats until changed
-#                  clip_*        a short video that plays once on screen
-#                  sound_*       a short sound effect played on top of everything
+#                  audio_once_*  a short sound effect played on top of everything
 #                  video_loop_*  background video; repeats until changed
+#                  video_once_*  a short video that plays once on screen
 #   event        Something that happens in the world, which a state can react to:
 #                  component_activated         One of the major components is activated.
 #                  component_deactivated       One of the major components is deactivated.
 #                  all_components_activated    Every major component is now activated.
 #                  all_components_deactivated  Every major component is now deactivated.
+#                  final_component_activated   The final component is activated.
+#                  final_component_deactivated The final component is deactivated.
+#                  all_final_components_activated  Every final component is now activated.
 #   state        What the game is doing right now. It is always in exactly one.
 #   on_enter_cue Cues to fire the moment the game arrives in a state.
 #   on           What to do when an event happens in a state. An event a state
@@ -23,64 +26,102 @@
 #   placeholder  Media that does not exist yet.
 
 game: pulley-party
-start: boot
+start: passive
 
 cues:
   audio_loop:
     - audio_loop_idle
     - audio_loop_dull
     - audio_loop_off
-  clip:
-    - clip_test1
-    - clip_test2
-    - clip_encouragement            # placeholder
-  sound:
-    - sound_beep
-    - sound_chime
-    - sound_steam
-    - sound_component_powerup       # placeholder
-    - sound_component_powerdown     # placeholder
+  video_once:
+    - video_once_test1
+    - video_once_test2
+    - video_once_encouragement      # placeholder
+  audio_once:
+    - audio_once_beep
+    - audio_once_chime
+    - audio_once_steam
+    - audio_once_component_powerup  # placeholder
+    - audio_once_component_powerdown  # placeholder
   video_loop:
     - video_loop_idle
 
+# Flow: passive -> game1 -> victory1 -> reveal -> game2 -> victory2 -> kickout -> passive
+# All delays are placeholders until real timings are chosen.
 states:
 
-  boot:
-    on_enter_cue:
-      - video_loop_idle
-      - audio_loop_off
-    after:
-      delay: 3s
-      goto: phase1_idle
-
-  phase1_idle:
+  passive:
     on_enter_cue:
       - audio_loop_idle
       - video_loop_idle
     on:
       component_activated:
         cue:
-          - sound_component_powerup
-        goto: phase1_at_least_one_component_active
+          - audio_once_component_powerup
+        goto: game1
 
-  phase1_at_least_one_component_active:
+  game1:
     on:
       component_activated:
         cue:
-          - sound_component_powerup
-          - clip_encouragement
+          - audio_once_component_powerup
+          - video_once_encouragement
       component_deactivated:
         cue:
-          - sound_component_powerdown
+          - audio_once_component_powerdown
       all_components_activated:
-        goto: party
-      all_components_deactivated:
-        goto: phase1_idle
-
-  party:
-    on_enter_cue:
-      - clip_test2
-      - audio_loop_dull
+        goto: victory1
     after:
-      delay: 2m
-      goto: phase1_idle
+      delay: 2m                     # placeholder
+      goto: passive
+
+  victory1:
+    on_enter_cue:
+      - video_once_test2
+      - audio_loop_dull
+    on:
+      component_deactivated:
+        goto: game1
+    after:
+      delay: 2m                    # placeholder
+      goto: reveal
+
+  reveal:
+    on_enter_cue:
+      - video_once_test1
+    on:
+      final_component_activated:
+        goto: game2
+    after:
+      delay: 2m                     # placeholder
+      goto: kickout
+
+  game2:
+    on:
+      final_component_activated:
+        cue:
+          - audio_once_component_powerup
+          - video_once_encouragement
+      final_component_deactivated:
+        cue:
+          - audio_once_component_powerdown
+      all_final_components_activated:
+        goto: victory2
+    after:
+      delay: 2m                     # placeholder
+      goto: kickout
+
+  victory2:
+    on_enter_cue:
+      - video_once_test2
+      - audio_once_chime
+    after:
+      delay: 2m                    # placeholder
+      goto: kickout
+
+  kickout:
+    on_enter_cue:
+      - audio_loop_off
+    after:
+      delay: 2m                    # placeholder
+      goto: passive
