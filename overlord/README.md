@@ -158,13 +158,25 @@ current state does not react to it).
 
 ## Deploying on a Raspberry Pi
 
-Targets Raspberry Pi OS Lite (Bookworm). On the Pi, clone the repo and run:
+Targets Raspberry Pi OS Lite (Bookworm). On a fresh Pi, as the normal login
+user (not root), run:
+
+```sh
+curl -fsSL https://files.julianhartline.com/public/pulleys/bootstrap.sh | bash
+```
+
+`bootstrap.sh` installs git if needed, clones the repo into `~/pulleys` (or
+fast-forwards it if already there), then runs `deploy/install.sh` with sudo.
+It is safe to re-run: every run pulls the latest code and re-applies the
+deploy. Override the repo, branch or checkout dir with `PULLEYS_REPO`,
+`PULLEYS_BRANCH` and `PULLEYS_DIR`. If the repo is already checked out you can
+skip bootstrap and run the installer directly:
 
 ```sh
 sudo overlord/deploy/install.sh
 ```
 
-This installs mpv/rclone/plymouth and sets up:
+`install.sh` installs mpv/rclone/plymouth and sets up:
 
 - **Splash:** a plymouth theme showing `deploy/splash.png` (replace it with your
   art, then re-run `install.sh`) with the console quieted. The splash stays up
