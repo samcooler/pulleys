@@ -68,9 +68,9 @@ systemctl enable overlord-update.service overlord.service
 
 echo
 if ! grep -q '^OVERLORD_MEDIA_REMOTE=.' /etc/overlord.env; then
-    echo "Media sync is off. To turn it on: as $USER_NAME run 'rclone config' to"
-    echo "create the remote, then set OVERLORD_MEDIA_REMOTE in /etc/overlord.env"
-    echo "(e.g. gdrive:pulleys-media)."
+    echo "Media sync is off. To turn it on, put the Google Drive service-account key"
+    echo "at /home/$USER_NAME/gdrive-sa.json and set OVERLORD_MEDIA_REMOTE in"
+    echo "/etc/overlord.env (see README, 'Media sync from Google Drive')."
 fi
 if [ "$REBOOT" = 1 ]; then
     echo "Boot config changed: sudo reboot to finish."

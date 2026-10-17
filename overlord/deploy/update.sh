@@ -20,9 +20,13 @@ main() {
         echo "update: syncing media from $OVERLORD_MEDIA_REMOTE"
         mkdir -p "$media"
         # sync mirrors the remote exactly (removed files are deleted locally).
-        # Partial downloads use a .partial suffix and are renamed when complete.
+        # Only files whose size/modtime changed are downloaded. Partial
+        # downloads use a .partial suffix and are renamed when complete.
+        # Google Docs (e.g. the Read Me) are skipped rather than exported;
+        # --fast-list cuts Drive API calls. Both are ignored by non-Drive remotes.
         rclone sync "$OVERLORD_MEDIA_REMOTE" "$media" \
-            --exclude '.DS_Store' --retries 3 --low-level-retries 5 \
+            --exclude '.DS_Store' --drive-skip-gdocs --fast-list \
+            --retries 3 --low-level-retries 5 \
             --contimeout 15s --timeout 60s --stats-one-line -v \
             || echo "update: media sync failed, keeping current media"
     else

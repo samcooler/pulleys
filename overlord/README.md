@@ -194,6 +194,58 @@ sudo overlord/deploy/install.sh
 Config lives in `/etc/overlord.env` (media remote, serial port, mpv audio
 device). Logs: `journalctl -u overlord-update -u overlord -b`.
 
+### Media sync from Google Drive
+
+The media lives in the shared Drive folder
+[overlord_media](https://drive.google.com/drive/folders/1ztfY8nkVEQuVMculoi4RvDAwYBr-PmnH)
+(folder id `1ztfY8nkVEQuVMculoi4RvDAwYBr-PmnH`). On every boot `update.sh`
+runs `rclone sync` from it into `/var/lib/overlord/media`. That works like
+rsync: rclone compares size and modification time per file and only downloads
+what changed, deletes files that were removed on Drive, and downloads to a
+temporary name so a dropped connection never leaves a half-written video. With
+no network the panel starts on the media it already has.
+
+rclone needs Google credentials even for a public folder. Use a **service
+account** rather than a browser login: its key is a static file that never
+expires, and because the folder is shared as "anyone with the link" the account
+does not need to be invited to it. The project's service account is
+`synclever-sync@synclever.iam.gserviceaccount.com` (GCP project `synclever`).
+
+To set up a Pi:
+
+1. Get the key: in [Google Cloud Console](https://console.cloud.google.com/)
+   open project `synclever` > IAM & Admin > Service Accounts >
+   `synclever-sync` > Keys > Add key > JSON. (To create one from scratch
+   instead: make a project, enable the **Google Drive API**, create a service
+   account, then add a JSON key the same way.)
+2. Copy the key to the Pi as the overlord user, readable only by them:
+
+   ```sh
+   scp synclever-*.json overlord@<pi>:/home/overlord/gdrive-sa.json
+   ssh overlord@<pi> chmod 600 /home/overlord/gdrive-sa.json
+   ```
+
+3. Point `/etc/overlord.env` at it. This is an rclone connection string, so no
+   `rclone config` step is needed:
+
+   ```sh
+   OVERLORD_MEDIA_REMOTE=":drive,service_account_file=/home/overlord/gdrive-sa.json,root_folder_id=1ztfY8nkVEQuVMculoi4RvDAwYBr-PmnH,scope=drive.readonly:"
+   ```
+
+4. Run a sync now and check it, then restart the app:
+
+   ```sh
+   sudo systemctl start overlord-update && journalctl -u overlord-update -b --no-pager
+   ls /var/lib/overlord/media/*
+   sudo systemctl restart overlord
+   ```
+
+The Drive folder must contain the same four folders the app expects
+(`video_loops/`, `audio_loops/`, `video_once/`, `audio_once/`, see
+`media/README.md`). Google Docs in the folder (such as the Read Me) are
+skipped. To sync from a different folder, change `root_folder_id`; if that
+folder is not public, share it with the service account's email as Viewer.
+
 ## Trigger events
 
 With overlord running in `--test` mode, from another terminal:
