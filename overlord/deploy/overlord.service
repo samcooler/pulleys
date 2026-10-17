@@ -11,7 +11,8 @@ EnvironmentFile=/etc/overlord.env
 # Hand the screen from plymouth to mpv without flashing the console.
 ExecStartPre=-/usr/bin/plymouth quit --retain-splash
 # mpv draws straight to the display via DRM/KMS; no X or Wayland on Lite.
-ExecStart=/usr/bin/python3 @DIR@/overlord.py --mpv-arg=--vo=gpu --mpv-arg=--gpu-context=drm $OVERLORD_ARGS
+# --ao=alsa: Pi OS Lite has no PipeWire, so skip mpv probing it ("pw.conf: can't load config client.conf").
+ExecStart=/usr/bin/python3 @DIR@/overlord.py --mpv-arg=--vo=gpu --mpv-arg=--gpu-context=drm --mpv-arg=--ao=alsa $OVERLORD_ARGS
 Restart=always
 RestartSec=2
 
