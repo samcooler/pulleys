@@ -188,7 +188,9 @@ hardware-decodes on Intel/AMD) and sets up:
   art, then re-run `install.sh`) with the console quieted. The splash stays up
   until mpv takes over the screen. The kernel options go in `cmdline.txt` on a
   Pi or `GRUB_CMDLINE_LINUX_DEFAULT` on a PC (with `GRUB_TIMEOUT=0`).
-- **Kiosk:** `overlord.service` starts at boot and restarts on crash. mpv draws
+- **Kiosk:** `overlord.service` starts at boot and restarts on crash. The
+  default boot target is set to `multi-user`, so a desktop that happens to be
+  installed (GNOME, gdm) never starts and cannot take the screen. mpv draws
   straight to the display over DRM/KMS, so no desktop is needed. There is no
   login prompt: tty1 logs the install user in automatically (hidden behind the
   video; switch to it with Ctrl+Alt+F1 on a keyboard). ssh still works.

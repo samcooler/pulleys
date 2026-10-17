@@ -89,6 +89,13 @@ else
     fi
 fi
 
+# If a desktop got installed, keep it from starting: boot to the text target so
+# no display manager (gdm etc.) takes the screen. (undo: systemctl set-default graphical.target)
+if [ "$(systemctl get-default)" != multi-user.target ]; then
+    systemctl set-default multi-user.target
+    REBOOT=1
+fi
+
 # no login prompt under the video (ssh still works; undo: systemctl unmask getty@tty1)
 if [ "$(systemctl is-enabled getty@tty1.service 2>/dev/null)" != masked ]; then
     systemctl mask getty@tty1.service
