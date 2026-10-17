@@ -156,10 +156,15 @@ current state does not react to it).
 - **Bars never show 6-8**: only states that react to final components show
   them; you need to reach `game2`.
 
-## Deploying on a Raspberry Pi
+## Deploying on a Raspberry Pi or mini PC
 
-Targets Raspberry Pi OS Lite (Bookworm). On a fresh Pi, as the normal login
-user (not root), run:
+Targets Raspberry Pi OS Lite (Bookworm) or a plain Debian 12/13 install with
+no desktop. For a mini PC, install from the Debian netinst image: on the
+"Software selection" screen untick "Debian desktop environment" and "GNOME",
+keeping only "SSH server" and "standard system utilities"; create the user as
+`overlord`; skip disk encryption (nobody types a passphrase at boot). In the
+BIOS enable power-on after AC loss and disable suspend. On the fresh machine,
+as the normal login user (not root), run:
 
 ```sh
 curl -fsSL https://files.julianhartline.com/public/pulleys/bootstrap.sh | bash
@@ -176,11 +181,13 @@ skip bootstrap and run the installer directly:
 sudo overlord/deploy/install.sh
 ```
 
-`install.sh` installs mpv/rclone/plymouth and sets up:
+`install.sh` installs mpv/rclone/plymouth (plus VAAPI drivers on a PC, so mpv
+hardware-decodes on Intel/AMD) and sets up:
 
 - **Splash:** a plymouth theme showing `deploy/splash.png` (replace it with your
   art, then re-run `install.sh`) with the console quieted. The splash stays up
-  until mpv takes over the screen.
+  until mpv takes over the screen. The kernel options go in `cmdline.txt` on a
+  Pi or `GRUB_CMDLINE_LINUX_DEFAULT` on a PC (with `GRUB_TIMEOUT=0`).
 - **Kiosk:** `overlord.service` starts at boot and restarts on crash. mpv draws
   straight to the display over DRM/KMS, so no desktop is needed. There is no
   login prompt: tty1 logs the install user in automatically (hidden behind the

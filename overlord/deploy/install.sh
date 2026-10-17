@@ -1,6 +1,7 @@
 #!/bin/bash
-# Pi setup: splash screen, kiosk service, boot-time git pull + media sync.
-# Run on Raspberry Pi OS Lite (Bookworm or later) from the repo checkout:
+# Kiosk setup: splash screen, kiosk service, boot-time git pull + media sync.
+# Runs on Raspberry Pi OS Lite (Bookworm+) or a plain Debian 12/13 install
+# with no desktop (e.g. a mini PC). Run from the repo checkout:
 #   sudo overlord/deploy/install.sh
 # (or let deploy/bootstrap.sh clone/pull and call it). Safe to re-run: steps
 # that are already done are skipped, and the app is restarted on the new code.
@@ -12,8 +13,14 @@ DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HERE="$DIR/deploy"
 BOOT=/boot/firmware
 
+# Raspberry Pi OS keeps the firmware boot config here; a PC boots through GRUB.
+if [ -f "$BOOT/config.txt" ]; then PLATFORM=pi; else PLATFORM=pc; fi
+
+PKGS="mpv python3-serial python3-yaml rclone git plymouth plymouth-themes"
+# Hardware video decode on Intel/AMD (mpv --hwdec=auto-safe picks VAAPI up).
+[ "$PLATFORM" = pc ] && PKGS="$PKGS va-driver-all"
 apt-get update
-apt-get install -y mpv python3-serial python3-yaml rclone git plymouth plymouth-themes
+apt-get install -y $PKGS
 
 # --- splash: plymouth theme from deploy/splash.png ---
 # Rebuilding the initramfs takes a while, so only do it when the theme changed.
@@ -29,25 +36,57 @@ if [ "$THEME_CHANGED" = 1 ] || [ "$(plymouth-set-default-theme)" != overlord ]; 
     REBOOT=1
 fi
 
-# plymouth only shows if boot uses an initramfs, and the firmware rainbow must be off.
-# Bookworm+ ships auto_initramfs=1, which already picks the right initramfs for the
-# board; only add it on images without it. Don't add both initramfs_2712 and
-# initramfs8 lines: the last one wins, so a Pi 5 would load the wrong one.
-if ! grep -qE '^(auto_initramfs=1|initramfs )' $BOOT/config.txt; then
-    echo 'auto_initramfs=1' >> $BOOT/config.txt
-    REBOOT=1
-fi
-grep -q '^disable_splash=1' $BOOT/config.txt || { echo 'disable_splash=1' >> $BOOT/config.txt; REBOOT=1; }
+# Kernel options for a quiet boot on the display: splash instead of console
+# messages, no console cursor, no screen blanking.
+KOPTS="quiet splash plymouth.ignore-serial-consoles logo.nologo vt.global_cursor_default=0 consoleblank=0"
 
-# quiet boot on the display, no console cursor, no screen blanking.
-CMD=$(cat $BOOT/cmdline.txt)
-CMD=${CMD//console=tty1/console=tty3}
-for opt in quiet splash plymouth.ignore-serial-consoles logo.nologo vt.global_cursor_default=0 consoleblank=0; do
-    [[ " $CMD " == *" $opt "* ]] || CMD="$CMD $opt"
-done
-if [ "$CMD" != "$(cat $BOOT/cmdline.txt)" ]; then
-    echo "$CMD" > $BOOT/cmdline.txt
-    REBOOT=1
+if [ "$PLATFORM" = pi ]; then
+    # plymouth only shows if boot uses an initramfs, and the firmware rainbow must be off.
+    # Bookworm+ ships auto_initramfs=1, which already picks the right initramfs for the
+    # board; only add it on images without it. Don't add both initramfs_2712 and
+    # initramfs8 lines: the last one wins, so a Pi 5 would load the wrong one.
+    if ! grep -qE '^(auto_initramfs=1|initramfs )' $BOOT/config.txt; then
+        echo 'auto_initramfs=1' >> $BOOT/config.txt
+        REBOOT=1
+    fi
+    grep -q '^disable_splash=1' $BOOT/config.txt || { echo 'disable_splash=1' >> $BOOT/config.txt; REBOOT=1; }
+
+    CMD=$(cat $BOOT/cmdline.txt)
+    CMD=${CMD//console=tty1/console=tty3}
+    for opt in $KOPTS; do
+        [[ " $CMD " == *" $opt "* ]] || CMD="$CMD $opt"
+    done
+    if [ "$CMD" != "$(cat $BOOT/cmdline.txt)" ]; then
+        echo "$CMD" > $BOOT/cmdline.txt
+        REBOOT=1
+    fi
+else
+    # GRUB: same options in GRUB_CMDLINE_LINUX_DEFAULT, and no menu wait.
+    GRUB=/etc/default/grub
+    [ -f "$GRUB" ] || { echo "no $BOOT/config.txt and no $GRUB: unsupported bootloader"; exit 1; }
+    CUR=$(sed -n 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"$/\1/p' "$GRUB")
+    CMD="$CUR"
+    for opt in $KOPTS; do
+        [[ " $CMD " == *" $opt "* ]] || CMD="${CMD:+$CMD }$opt"
+    done
+    GRUB_CHANGED=0
+    if [ "$CMD" != "$CUR" ]; then
+        if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB"; then
+            sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$CMD\"|" "$GRUB"
+        else
+            echo "GRUB_CMDLINE_LINUX_DEFAULT=\"$CMD\"" >> "$GRUB"
+        fi
+        GRUB_CHANGED=1
+    fi
+    if ! grep -q '^GRUB_TIMEOUT=0$' "$GRUB"; then
+        sed -i '/^GRUB_TIMEOUT=/d' "$GRUB"
+        echo 'GRUB_TIMEOUT=0' >> "$GRUB"
+        GRUB_CHANGED=1
+    fi
+    if [ "$GRUB_CHANGED" = 1 ]; then
+        update-grub
+        REBOOT=1
+    fi
 fi
 
 # no login prompt under the video (ssh still works; undo: systemctl unmask getty@tty1)
