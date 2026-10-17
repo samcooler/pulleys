@@ -211,34 +211,36 @@ expires, and because the folder is shared as "anyone with the link" the account
 does not need to be invited to it. The project's service account is
 `synclever-sync@synclever.iam.gserviceaccount.com` (GCP project `synclever`).
 
-To set up a Pi:
+`bootstrap.sh` sets this up as part of the install. On a Pi that has no key
+yet it prints these instructions and waits for you to paste the key:
 
-1. Get the key: in [Google Cloud Console](https://console.cloud.google.com/)
-   open project `synclever` > IAM & Admin > Service Accounts >
-   `synclever-sync` > Keys > Add key > JSON. (To create one from scratch
-   instead: make a project, enable the **Google Drive API**, create a service
-   account, then add a JSON key the same way.)
-2. Copy the key to the Pi as the overlord user, readable only by them:
+1. Open the [service accounts page](https://console.cloud.google.com/iam-admin/serviceaccounts?project=synclever)
+   of project `synclever` and click `synclever-sync`.
+2. Keys > Add key > Create new key > JSON. A `.json` file downloads.
+3. Open it in a text editor, copy the whole thing, and paste it into the
+   terminal. The paste ends with a line containing only `}`.
 
-   ```sh
-   scp synclever-*.json overlord@<pi>:/home/overlord/gdrive-sa.json
-   ssh overlord@<pi> chmod 600 /home/overlord/gdrive-sa.json
-   ```
+bootstrap checks that it is a valid service-account key, saves it to
+`~/gdrive-sa.json` (mode 600), and `install.sh` then fills in
+`OVERLORD_MEDIA_REMOTE` in `/etc/overlord.env` with an rclone connection string
+pointing at the key and the folder id, so no `rclone config` step is needed.
+The first sync runs right away when the app service starts. Press Enter on the
+empty prompt to skip; media sync stays off until you re-run bootstrap.
 
-3. Point `/etc/overlord.env` at it. This is an rclone connection string, so no
-   `rclone config` step is needed:
+Non-interactive alternatives: copy the key to `/home/overlord/gdrive-sa.json`
+yourself (`chmod 600`) and re-run `install.sh`, or run bootstrap with
+`PULLEYS_SA_KEY=/path/to/key.json` to install a key already on the Pi.
 
-   ```sh
-   OVERLORD_MEDIA_REMOTE=":drive,service_account_file=/home/overlord/gdrive-sa.json,root_folder_id=1ztfY8nkVEQuVMculoi4RvDAwYBr-PmnH,scope=drive.readonly:"
-   ```
+To check a sync by hand:
 
-4. Run a sync now and check it, then restart the app:
+```sh
+sudo systemctl start overlord-update && journalctl -u overlord-update -b --no-pager
+ls /var/lib/overlord/media/*
+```
 
-   ```sh
-   sudo systemctl start overlord-update && journalctl -u overlord-update -b --no-pager
-   ls /var/lib/overlord/media/*
-   sudo systemctl restart overlord
-   ```
+To make a service account from scratch instead: create a GCP project, enable
+the **Google Drive API**, create a service account, add a JSON key as above,
+and give it the media folder (public, or shared with its email as Viewer).
 
 The Drive folder must contain the same four folders the app expects
 (`video_loops/`, `audio_loops/`, `video_once/`, `audio_once/`, see

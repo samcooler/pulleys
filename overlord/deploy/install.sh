@@ -58,6 +58,19 @@ fi
 
 # --- app services ---
 [ -f /etc/overlord.env ] || cp "$HERE/overlord.env.example" /etc/overlord.env
+# Media sync: once the Drive service-account key is in place (bootstrap.sh
+# walks through getting it), point an unset OVERLORD_MEDIA_REMOTE at it.
+HOME_DIR="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+SA_KEY="$HOME_DIR/gdrive-sa.json"
+if [ -f "$SA_KEY" ] && ! grep -q '^OVERLORD_MEDIA_REMOTE=.' /etc/overlord.env; then
+    REMOTE=":drive,service_account_file=$SA_KEY,root_folder_id=1ztfY8nkVEQuVMculoi4RvDAwYBr-PmnH,scope=drive.readonly:"
+    if grep -q '^OVERLORD_MEDIA_REMOTE=' /etc/overlord.env; then
+        sed -i "s|^OVERLORD_MEDIA_REMOTE=.*|OVERLORD_MEDIA_REMOTE=\"$REMOTE\"|" /etc/overlord.env
+    else
+        echo "OVERLORD_MEDIA_REMOTE=\"$REMOTE\"" >> /etc/overlord.env
+    fi
+    echo "Media sync enabled from Google Drive using $SA_KEY."
+fi
 mkdir -p /var/lib/overlord/media
 chown -R "$USER_NAME" /var/lib/overlord
 for unit in overlord overlord-update; do
@@ -68,9 +81,9 @@ systemctl enable overlord-update.service overlord.service
 
 echo
 if ! grep -q '^OVERLORD_MEDIA_REMOTE=.' /etc/overlord.env; then
-    echo "Media sync is off. To turn it on, put the Google Drive service-account key"
-    echo "at /home/$USER_NAME/gdrive-sa.json and set OVERLORD_MEDIA_REMOTE in"
-    echo "/etc/overlord.env (see README, 'Media sync from Google Drive')."
+    echo "Media sync is off. To turn it on, re-run deploy/bootstrap.sh (it walks you"
+    echo "through the Google Drive service-account key), or put the key at"
+    echo "$SA_KEY and re-run install.sh (see README, 'Media sync from Google Drive')."
 fi
 if [ "$REBOOT" = 1 ]; then
     echo "Boot config changed: sudo reboot to finish."
