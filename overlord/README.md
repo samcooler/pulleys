@@ -1,9 +1,5 @@
 # Overlord
 
-hostname: overlord
-username: overlord
-password: strings
-
 Fullscreen video and audio panel driven by events from an ESP32. It plays a
 looping background video and a looping background audio track. Trigger events
 play a video clip once (then return to the video loop) or overlay a sound effect
@@ -18,14 +14,42 @@ node downloads by requesting chunks over its USB link to the Overlord. GitHub
 or bridge unavailability does not stop media playback; update checks are retried
 on the next Overlord reboot.
 
+## The machine
+
+Overlord runs on a mini PC (it started on a Raspberry Pi, which was too slow;
+the Pi path still works, see Deploying below).
+
+| | |
+| --- | --- |
+| OS | Debian 13, no desktop running (GNOME is installed but never starts) |
+| hostname | `overlord` |
+| user | `overlord` / `strings`, in `sudoers` (runs the app and the deploy) |
+| root | enabled, password set at install (`su -` if sudo is ever broken) |
+| code | `/home/overlord/pulleys` (git checkout, pulled on every boot) |
+| media | `/var/lib/overlord/media` (synced from Google Drive on every boot) |
+| config | `/etc/overlord.env` |
+| Drive key | `/home/overlord/gdrive-sa.json` |
+| logs | `journalctl -u overlord-update -u overlord -b` |
+
+ssh in as `overlord`. There is no login prompt on the screen: the video owns it.
+
+## How events flow
+
 ```
-ESP-NOW commands -> bridge node -> serial (115200, one event per line) -> overlord.py -> 3 kinds of mpv
-                                                                                         video player (fullscreen)
-                                                                                         audio loop player (headless)
-                                                                                         one process per sound effect
+ESP-NOW commands
+      |
+      v
+bridge node (ESP32)
+      |  serial, 115200 baud, one event per line
+      v
+overlord.py
+      |
+      +--> video player        fullscreen mpv: background loop, one-shot clips
+      +--> audio loop player   headless mpv: background music / ambience
+      +--> sound effects       one short-lived mpv per sound, so they overlap
 ```
 
-## Install
+## Install (dev machine, macOS)
 
 macOS:
 
@@ -172,7 +196,7 @@ current state does not react to it).
 - **Bars never show 6-8**: only states that react to final components show
   them; you need to reach `game2`.
 
-## Deploying on a Raspberry Pi or mini PC
+## Deploying on a mini PC or Raspberry Pi
 
 The Overlord needs outbound Internet access to GitHub Releases. Its bridge
 plugs into a USB port; `serial_reader.py` finds it as `/dev/ttyACM*` and prefers
@@ -198,50 +222,113 @@ image-host firmware. Flash it once over USB with
 `pio run -e bridge -t upload --upload-port <port>`; the new bridge can then
 migrate existing nodes and update itself over UART after the other nodes.
 
-Targets Raspberry Pi OS Lite (Bookworm) or a plain Debian 12/13 install with
-no desktop. For a mini PC, install from the Debian netinst image: on the
-"Software selection" screen untick "Debian desktop environment" and "GNOME",
-keeping only "SSH server" and "standard system utilities"; create the user as
-`overlord`; skip disk encryption (nobody types a passphrase at boot). In the
-BIOS enable power-on after AC loss and disable suspend. On the fresh machine,
-as the normal login user (not root), run:
+Targets a plain Debian 12/13 install with no desktop (mini PC) or Raspberry Pi
+OS Lite (Bookworm). One script does the whole install and is safe to re-run.
+
+### 1. Install the OS
+
+Mini PC, from the Debian netinst USB image (to boot from the stick: tap the
+boot-menu key at power-on, usually F7/F12/Esc, or from a running Linux
+`sudo systemctl reboot --firmware-setup`):
+
+- Hostname `overlord`.
+- Set a root password, and create the user `overlord`.
+- No disk encryption: nobody types a passphrase at boot.
+- "Software selection" screen: untick **Debian desktop environment** and
+  **GNOME**, tick **SSH server** and **standard system utilities**. (If a
+  desktop slips in it is harmless: `install.sh` boots to the text target so it
+  never starts. If SSH is missed: `su -`, then
+  `apt update && apt install -y openssh-server`.)
+- When a root password is set the installer does not put the user in sudo.
+  As root: `usermod -aG sudo overlord`, then log out and back in.
+- BIOS: enable power-on after AC loss, disable suspend/sleep, boot from the
+  internal disk only.
+
+Raspberry Pi: flash Raspberry Pi OS Lite (64-bit), set the hostname, user and
+ssh in the imager's settings.
+
+### 2. Run bootstrap
+
+ssh in as `overlord` (not root) and run:
 
 ```sh
 curl -fsSL https://files.julianhartline.com/public/pulleys/bootstrap.sh | bash
 ```
 
-`bootstrap.sh` installs git if needed, clones the repo into `~/pulleys` (or
-fast-forwards it if already there), then runs `deploy/install.sh` with sudo.
-It is safe to re-run: every run pulls the latest code and re-applies the
-deploy. Override the repo, branch or checkout dir with `PULLEYS_REPO`,
-`PULLEYS_BRANCH` and `PULLEYS_DIR`. If the repo is already checked out you can
-skip bootstrap and run the installer directly:
+(`files.julianhartline.com` hosts a copy of `deploy/bootstrap.sh`; re-upload it
+when that file changes.) bootstrap:
+
+1. installs git if needed, clones the repo into `~/pulleys` (or fast-forwards
+   it if already there; it refuses if there are local edits);
+2. asks for the Google Drive service-account key if `~/gdrive-sa.json` does
+   not exist yet (see "Media sync from Google Drive" below for where to get
+   it; paste the JSON, press Enter on an empty line to skip);
+3. runs `deploy/install.sh` with sudo.
+
+It ends with either "Boot config changed: sudo reboot to finish" (first run) or
+"Restarted overlord on <commit>".
+
+Overrides: `PULLEYS_REPO`, `PULLEYS_BRANCH`, `PULLEYS_DIR`, and
+`PULLEYS_SA_KEY=/path/key.json` to install a key already on the machine
+without the prompt. With the repo already checked out you can skip bootstrap
+and run `sudo overlord/deploy/install.sh` directly.
+
+### 3. Reboot and check
 
 ```sh
-sudo overlord/deploy/install.sh
+sudo reboot
+# then, after it comes up:
+journalctl -u overlord-update -u overlord -b --no-pager
+ls -R /var/lib/overlord/media
 ```
 
-`install.sh` installs mpv/rclone/plymouth (plus VAAPI drivers on a PC, so mpv
-hardware-decodes on Intel/AMD) and sets up:
+Expect the splash, then the idle video. The first boot takes longer because
+the media sync downloads everything; later boots only fetch changed files.
+`overlord-update` logs the git pull and the sync; `overlord` logs
+`starting audio loop: idle.mp3` and the video loop (or
+`no media/video_loops/idle.* found; showing black` if the Drive folder has no
+`idle.*`).
+
+### What install.sh sets up
+
+`install.sh` installs mpv, rclone, plymouth and, on a PC, `va-driver-all`
+(VAAPI, so mpv hardware-decodes on Intel/AMD), then configures:
 
 - **Splash:** a plymouth theme showing `deploy/splash.png` (replace it with your
   art, then re-run `install.sh`) with the console quieted. The splash stays up
-  until mpv takes over the screen. The kernel options go in `cmdline.txt` on a
-  Pi or `GRUB_CMDLINE_LINUX_DEFAULT` on a PC (with `GRUB_TIMEOUT=0`).
+  until mpv takes over the screen. The kernel options (`quiet splash
+  consoleblank=0 ...`) go in `GRUB_CMDLINE_LINUX_DEFAULT` on a PC (with
+  `GRUB_TIMEOUT=0`, then `update-grub`) or in `cmdline.txt` on a Pi.
 - **Kiosk:** `overlord.service` starts at boot and restarts on crash. The
-  default boot target is set to `multi-user`, so a desktop that happens to be
-  installed (GNOME, gdm) never starts and cannot take the screen. mpv draws
-  straight to the display over DRM/KMS, so no desktop is needed. There is no
-  login prompt: tty1 logs the install user in automatically (hidden behind the
-  video; switch to it with Ctrl+Alt+F1 on a keyboard). ssh still works.
+  default boot target is `multi-user`, so an installed desktop (GNOME, gdm)
+  never starts and cannot take the screen. mpv draws straight to the display
+  over DRM/KMS; audio goes out through ALSA. `getty@tty1` is masked, so there
+  is no login prompt under the video; use ssh.
 - **Boot update:** `overlord-update.service` runs before the app on every boot:
   `git pull --ff-only`, then `rclone sync` of `OVERLORD_MEDIA_REMOTE` into
   `/var/lib/overlord/media` (the app reads it via `OVERLORD_MEDIA`). Both are
   best-effort: with no network the panel starts on the code and media it has.
-  The sync mirrors the remote, so files deleted there are deleted on the Pi.
+  The sync mirrors the remote, so files deleted there are deleted locally.
+- **Config:** `/etc/overlord.env`, created from `deploy/overlord.env.example`
+  on first install and never overwritten. `OVERLORD_MEDIA_REMOTE` is filled in
+  automatically once the Drive key exists. `OVERLORD_ARGS` takes extra
+  `overlord.py` flags, e.g. `--serial-port` or an mpv `--audio-device` (find
+  the HDMI device with `aplay -l`). After editing:
+  `sudo systemctl restart overlord`.
 
-Config lives in `/etc/overlord.env` (media remote, serial port, mpv audio
-device). Logs: `journalctl -u overlord-update -u overlord -b`.
+### Day to day
+
+| Want to | Run on the box |
+| --- | --- |
+| pull new code and media, relaunch | `sudo systemctl restart overlord` (runs the update unit first) |
+| pull code and media without restarting the video | `sudo systemctl start overlord-update` |
+| apply changes to the deploy itself (units, splash, install.sh) | the bootstrap one-liner again |
+| watch logs | `journalctl -u overlord-update -u overlord -f` |
+| send a test event | `cd ~/pulleys/overlord && ./send.sh video_once_test1` (only in `--test` mode) |
+| get a shell on the screen | ssh, or Ctrl+Alt+F2 with a keyboard for a login prompt on tty2 |
+
+New media needs no deploy: drop it in the Drive folder with the right name and
+restart overlord (or reboot).
 
 ### Debug menu
 
@@ -285,8 +372,8 @@ expires, and because the folder is shared as "anyone with the link" the account
 does not need to be invited to it. The project's service account is
 `synclever-sync@synclever.iam.gserviceaccount.com` (GCP project `synclever`).
 
-`bootstrap.sh` sets this up as part of the install. On a Pi that has no key
-yet it prints these instructions and waits for you to paste the key:
+`bootstrap.sh` sets this up as part of the install. On a machine that has no
+key yet it prints these instructions and waits for you to paste the key:
 
 1. Open the [service accounts page](https://console.cloud.google.com/iam-admin/serviceaccounts?project=synclever)
    of project `synclever` and click `synclever-sync`.
@@ -303,7 +390,7 @@ empty prompt to skip; media sync stays off until you re-run bootstrap.
 
 Non-interactive alternatives: copy the key to `/home/overlord/gdrive-sa.json`
 yourself (`chmod 600`) and re-run `install.sh`, or run bootstrap with
-`PULLEYS_SA_KEY=/path/to/key.json` to install a key already on the Pi.
+`PULLEYS_SA_KEY=/path/to/key.json` to install a key already on the machine.
 
 To check a sync by hand:
 
