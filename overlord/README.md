@@ -1,5 +1,9 @@
 # Overlord
 
+hostname: overlord
+username: overlord
+password: strings
+
 Fullscreen video and audio panel driven by events from an ESP32. It plays a
 looping background video and a looping background audio track. Trigger events
 play a video clip once (then return to the video loop) or overlay a sound effect
@@ -166,8 +170,9 @@ This installs mpv/rclone/plymouth and sets up:
   art, then re-run `install.sh`) with the console quieted. The splash stays up
   until mpv takes over the screen.
 - **Kiosk:** `overlord.service` starts at boot and restarts on crash. mpv draws
-  straight to the display over DRM/KMS, so no desktop is needed. The login
-  prompt on tty1 is masked; ssh still works.
+  straight to the display over DRM/KMS, so no desktop is needed. There is no
+  login prompt: tty1 logs the install user in automatically (hidden behind the
+  video; switch to it with Ctrl+Alt+F1 on a keyboard). ssh still works.
 - **Boot update:** `overlord-update.service` runs before the app on every boot:
   `git pull --ff-only`, then `rclone sync` of `OVERLORD_MEDIA_REMOTE` into
   `/var/lib/overlord/media` (the app reads it via `OVERLORD_MEDIA`). Both are
