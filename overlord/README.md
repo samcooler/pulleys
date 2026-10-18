@@ -215,6 +215,9 @@ the IP address (wired as a fallback), and whether the internet is reachable
   password with the keyboard (Tab shows or hides it), and connects through
   NetworkManager, which remembers the network across reboots. "Hidden
   network..." takes the name by hand.
+- **Volume:** Up/Down (or Left/Right) in steps of 5%, applied live to the
+  loops, clips and later sound effects; Enter plays a test chime. It is
+  remembered across restarts in `~/.config/overlord/settings.json`.
 - **Network info:** interfaces, state and IP addresses.
 - **Restart overlord:** quits so systemd starts it again.
 

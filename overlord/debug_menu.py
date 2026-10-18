@@ -4,7 +4,7 @@ Drawn as an ASS overlay on the video mpv, driven by whatever feeds on_key()
 (keys.EvdevKeys on the panel, mpv key bindings in a dev window). Screens:
 
   menu -> Wi-Fi: scan -> pick a network -> type the password -> connect
-       -> Network info, Restart overlord, Close
+       -> Volume (live, remembered), Network info, Restart overlord, Close
 """
 
 import textwrap
@@ -20,6 +20,7 @@ MARGIN = 96
 ROW_H = 68
 VISIBLE_ROWS = 10
 MAX_TEXT = 63  # longest WPA passphrase
+VOLUME_STEP = 5
 STATUS_EVERY = 5.0  # seconds between status refreshes while the menu is open
 
 GOLD = "FFCC00"
@@ -34,11 +35,14 @@ def escape_ass(text):
 
 
 class DebugMenu:
-    def __init__(self, video, restart):
+    def __init__(self, video, restart, volume, test_sound):
         """video: the video Mpv, which hosts the overlay. restart: callable that
-        ends the process so the service manager starts it again."""
+        ends the process so the service manager starts it again. volume: (get, set)
+        for the percent volume. test_sound: plays a sample so the change is audible."""
         self.video = video
         self.restart = restart
+        self.get_volume, self.set_volume = volume
+        self.test_sound = test_sound
         self._lock = threading.RLock()
         self.open = False
         self.status = None  # None until the first check finishes
@@ -77,6 +81,8 @@ class DebugMenu:
                 self._list_key(key, self._menu_items(), self._menu_pick)
             elif self.screen == "networks":
                 self._list_key(key, self._network_rows(), self._network_pick)
+            elif self.screen == "volume":
+                self._volume_key(key)
             elif self.screen in ("ssid", "password"):
                 self._text_key(key)
             elif self.screen == "message" and key == "ENTER":
@@ -101,6 +107,13 @@ class DebugMenu:
         elif key == "ENTER":
             pick(self.sel)
 
+    def _volume_key(self, key):
+        step = {"UP": VOLUME_STEP, "RIGHT": VOLUME_STEP, "DOWN": -VOLUME_STEP, "LEFT": -VOLUME_STEP}
+        if key in step:
+            self.set_volume(self.get_volume() + step[key])
+        elif key == "ENTER":
+            self.test_sound()
+
     def _text_key(self, key):
         if key == "ENTER":
             if self.screen == "ssid":
@@ -120,14 +133,17 @@ class DebugMenu:
     # --- menu --------------------------------------------------------------
 
     def _menu_items(self):
-        return ["Reconfigure Wi-Fi", "Network info", "Restart overlord", "Close menu"]
+        return ["Reconfigure Wi-Fi", f"Volume: {self.get_volume()}%", "Network info",
+                "Restart overlord", "Close menu"]
 
     def _menu_pick(self, i):
         if i == 0:
             self._scan()
         elif i == 1:
-            self._work("Network info", wifi.status)
+            self.screen = "volume"
         elif i == 2:
+            self._work("Network info", wifi.status)
+        elif i == 3:
             self.screen, self.title = "working", "Restarting overlord..."
             self.restart()
         else:
@@ -216,7 +232,7 @@ class DebugMenu:
         if "error" in s:
             wifi_line = ("Wi-Fi: unavailable (" + s["error"] + ")", RED)
         elif s["wifi"]:
-            wifi_line = (f"Wi-Fi: connected to {s['wifi']}", GREEN)
+            wifi_line = (f"Wi-Fi network: {s['wifi']}", GREEN)
         else:
             wifi_line = ("Wi-Fi: not connected", RED)
         return [wifi_line,
@@ -252,6 +268,13 @@ class DebugMenu:
             hint = "Type   Enter connect   Esc back" + ("   Tab show/hide" if self.screen == "password" else "")
             if self.screen == "ssid":
                 hint = "Type   Enter next   Esc back"
+        elif self.screen == "volume":
+            title, hint = "Volume", "Up/Down or Left/Right adjust   Enter plays a test sound   Esc back"
+            level, bar_w = self.get_volume(), 1000
+            out.append(ass_rect(MARGIN, 240, bar_w, 56, "FFFFFF", alpha="D8"))
+            if level:
+                out.append(ass_rect(MARGIN, 240, bar_w * level // 100, 56, GOLD))
+            out.append(ass_text(MARGIN + bar_w + 40, 268, f"{level}%", 48, align=4))
         elif self.screen == "message":
             title = self.title
             body = [(l, "FFFFFF") for l in self.lines]

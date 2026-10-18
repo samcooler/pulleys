@@ -159,14 +159,15 @@ class SoundPlayer:
     """Fire-and-forget one-shot sounds. Each sound gets its own mpv process so
     they overlap freely with each other and with the audio loop."""
 
-    def __init__(self, extra_args=()):
+    def __init__(self, extra_args=(), volume=100):
         self._extra = list(extra_args)
+        self.volume = volume  # applies to sounds started from now on
         self._procs = []
         self._lock = threading.Lock()
 
     def play(self, path):
         proc = subprocess.Popen(
-            ["mpv", *AUDIO_ARGS, "--idle=no", *self._extra, str(path)],
+            ["mpv", *AUDIO_ARGS, "--idle=no", f"--volume={self.volume}", *self._extra, str(path)],
             stdin=subprocess.DEVNULL,
         )
         with self._lock:

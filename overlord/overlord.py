@@ -23,6 +23,7 @@ import threading
 from pathlib import Path
 
 import keys
+import settings
 from debug_menu import DebugMenu
 from mpv_ipc import Mpv, MpvError, SoundPlayer
 from serial_reader import SerialReader
@@ -56,7 +57,8 @@ def main():
     if args.simulate and args.game is None:
         ap.error("--simulate needs --game")
 
-    extra = list(args.mpv_arg)
+    volume = [settings.load().get("volume", 100)]  # percent; mpv's 100 is unity gain
+    extra = [f"--volume={volume[0]}", *args.mpv_arg]  # --mpv-arg=--volume=N still wins at start
     video_extra = list(extra)
     if args.windowed:
         video_extra += ["--no-fullscreen", "--border", "--geometry=960x540"]
@@ -106,7 +108,23 @@ def main():
 
     # Escape opens the debug menu. In a window mpv sees the keys; on the panel
     # (DRM, no window) they are read from the keyboard devices instead.
-    menu = DebugMenu(video, restart=lambda: video.command("quit"))
+    sounds = SoundPlayer(extra, volume=volume[0])
+
+    def set_volume(percent):
+        """Live on the running players and for every sound started later; remembered."""
+        percent = max(0, min(100, percent))
+        volume[0] = sounds.volume = percent
+        for player in (audio, video):
+            player.set("volume", percent)
+        settings.save(volume=percent)
+
+    def test_sound():
+        path = find_media("audio_once", "chime") or find_media("audio_once", "beep")
+        if path:
+            sounds.play(path)
+
+    menu = DebugMenu(video, restart=lambda: video.command("quit"),
+                     volume=(lambda: volume[0], set_volume), test_sound=test_sound)
     keyboard = None
     if sys.platform.startswith("linux") and not args.windowed:
         keyboard = keys.EvdevKeys(menu.on_key)
@@ -114,7 +132,6 @@ def main():
     else:
         for mpv_key, arg in keys.mpv_bindings():
             video.command("keybind", mpv_key, f"script-message dbg-key {arg}")
-    sounds = SoundPlayer(extra)
 
     def shutdown(*_):
         if keyboard:

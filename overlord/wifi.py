@@ -93,6 +93,20 @@ def _devices():
     return rows
 
 
+def _active_ssid(dev):
+    """The SSID actually joined on dev. The connection's profile name (what
+    `nmcli dev` shows) can be anything, e.g. "friend" for the network "Friend 5G"."""
+    try:
+        out = _nmcli("-t", "-f", "IN-USE,SSID", "dev", "wifi", "list", "ifname", dev, "--rescan", "no")
+    except WifiError:
+        return None
+    for line in out.splitlines():
+        f = split_terse(line)
+        if len(f) >= 2 and f[0] == "*" and f[1]:
+            return f[1]
+    return None
+
+
 def link():
     """{wifi: SSID or None, ip: first IPv4 address or None} for the menu header.
     Wi-Fi is preferred for the address; a wired link is the fallback."""
@@ -102,7 +116,7 @@ def link():
         if state != "connected":
             continue
         if kind == "wifi":
-            wifi_ssid = conn
+            wifi_ssid = _active_ssid(dev) or conn
         if ip is None:
             for l in _nmcli("-t", "-f", "IP4.ADDRESS", "dev", "show", dev).splitlines():
                 if l.split(":", 1)[-1].strip():
