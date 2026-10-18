@@ -42,6 +42,7 @@ enum : uint8_t {
     MESH_MSG_OTA_READY    = 0x41,   // node: "joined, here is my address"
     MESH_MSG_HELLO        = 0x50,   // "everyone say what you are"
     MESH_MSG_CENSUS       = 0x51,   // the answer to that
+    MESH_MSG_CUE          = 0x60,   // the arbiter's game fired a cue
 };
 
 // Clock sync: every node beacons its own mesh clock, and each listener pulls a
@@ -168,6 +169,28 @@ struct __attribute__((packed)) MeshCensus {
     uint32_t uptimeSecs;
 };  // 70 bytes
 
+// ── Cue ──────────────────────────────────────────────────────────────────────
+// The arbiter's game state machine fires cues (a sound, a clip) for the Pi to
+// play. A cue is two bytes, [folder, file]: positions in the game's cue table
+// (game_state_machine/GAME_FORMAT.md), so no name ever crosses the air. The
+// hash names the table those positions were counted against; a receiver whose
+// own table hashes differently must not trust them (lib/pulleys_cues).
+//
+// Flooded and deduped exactly like an EVENT -- same (originId, seq) key, same
+// TTL and burst -- because a lost cue is a missed sound.
+struct __attribute__((packed)) MeshCue {
+    uint8_t  magic0;      // 'P'
+    uint8_t  magic1;      // 'M'
+    uint8_t  msgType;     // MESH_MSG_CUE
+    uint8_t  originType;  // MESH_ORIGIN_*
+    uint16_t originId;
+    uint16_t seq;         // shares the origin's counter with its events
+    uint8_t  ttl;         // remaining flood hops
+    uint8_t  folder;      // group's position in the cue table
+    uint8_t  file;        // cue's position within that group
+    uint16_t cfgHash;     // pulleys::cues_hash of the table
+};  // 13 bytes
+
 // Every node beacons, so this is also the presence signal for roles that emit
 // no events of their own: without it a Screen is invisible to a monitor.
 typedef void (*MeshEventCb)(const MeshEvent& ev, bool relayed);
@@ -176,6 +199,7 @@ typedef void (*MeshOtaAnnounceCb)(const MeshOtaAnnounce& a);
 typedef void (*MeshOtaReadyCb)(const MeshOtaReady& r);
 typedef void (*MeshHelloCb)(const MeshHello& h);
 typedef void (*MeshCensusCb)(const MeshCensus& c);
+typedef void (*MeshCueCb)(const MeshCue& c, bool relayed);
 
 // ── Internal state ──────────────────────────────────────────────────────────
 namespace _mesh {
@@ -197,6 +221,14 @@ struct OutSlot {
 // would register the callbacks while another polled its own empty rings.
 // A function-local static inside an inline function is one shared instance
 // across the whole program, guaranteed even under C++11.
+struct CueSlot {
+    MeshCue  cue;
+    uint32_t dueMs;
+    uint16_t gapMs;
+    uint8_t  left;
+    bool     used;
+};
+
 struct State {
     uint8_t     originType = 0;
     uint16_t    originId   = 0;
@@ -207,6 +239,7 @@ struct State {
     MeshOtaReadyCb    otaReadyCb    = nullptr;
     MeshHelloCb       helloCb       = nullptr;
     MeshCensusCb      censusCb      = nullptr;
+    MeshCueCb         cueCb         = nullptr;
     bool        relayOn    = true;
 
     // Deduplication ring — linear scan, fine at this node count / event rate.
@@ -214,6 +247,12 @@ struct State {
     uint16_t seenHead   = 0;
 
     OutSlot out[16]     = {};
+    CueSlot cueOut[8]   = {};
+
+    // Cue RX ring, same single-producer/single-consumer shape as the events'.
+    MeshCue          cueRx[4] = {};
+    volatile uint8_t cueHead  = 0;
+    volatile uint8_t cueTail  = 0;
 
     // RX ring — the WiFi task is the single producer (a real FreeRTOS task, not
     // an ISR), mesh_poll() the single consumer, so volatile indices around a
@@ -286,6 +325,19 @@ inline void enqueue(const MeshEvent& ev, uint8_t count, uint16_t gap, uint16_t f
     // queue full — drop silently (bursts make this non-fatal)
 }
 
+inline void enqueueCue(const MeshCue& c, uint8_t count, uint16_t gap, uint16_t firstDelay) {
+    State& s = S();
+    for (uint8_t i = 0; i < 8; i++) {
+        if (s.cueOut[i].used) continue;
+        s.cueOut[i].cue   = c;
+        s.cueOut[i].left  = count;
+        s.cueOut[i].gapMs = gap;
+        s.cueOut[i].dueMs = millis() + firstDelay;
+        s.cueOut[i].used  = true;
+        return;
+    }
+}
+
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
 static void onRecv(const esp_now_recv_info_t* /*info*/, const uint8_t* data, int len) {
 #else
@@ -339,6 +391,16 @@ static void onRecv(const uint8_t* /*mac*/, const uint8_t* data, int len) {
         return;
     }
 
+    if (data[2] == MESH_MSG_CUE) {
+        if (len < (int)sizeof(MeshCue)) { st.statBadMagic++; return; }
+        uint8_t ch = (st.cueHead + 1) & 3;
+        if (ch != st.cueTail) {
+            memcpy(&st.cueRx[st.cueHead], data, sizeof(MeshCue));
+            st.cueHead = ch;
+        }
+        return;
+    }
+
     if (len < (int)sizeof(MeshEvent)) { st.statBadMagic++; return; }
     const MeshEvent* p = (const MeshEvent*)data;
     if (p->msgType != MESH_MSG_EVENT) { st.statBadMagic++; return; }
@@ -364,6 +426,21 @@ inline void handle(const MeshEvent& ev) {
     }
 }
 
+inline void handleCue(const MeshCue& c) {
+    uint32_t key = keyOf(c.originId, c.seq);
+    if (wasSeen(key)) return;
+    markSeen(key);
+
+    bool relayed = c.ttl < MESH_TTL_START;
+    if (S().cueCb) S().cueCb(c, relayed);
+
+    if (S().relayOn && c.ttl > 0) {
+        MeshCue r = c;
+        r.ttl--;
+        enqueueCue(r, 1, 0, (uint16_t)random(3, 28));
+    }
+}
+
 }  // namespace _mesh
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -371,6 +448,11 @@ inline bool mesh_init(uint8_t originType, uint16_t originId, uint8_t wifiChannel
     _mesh::State& st = _mesh::S();
     st.originType = originType;
     st.originId   = originId;
+    // Dedupe is keyed on (originId, seq). A node that reboots and counts from 1
+    // again reuses keys its neighbours still remember, and its first packets
+    // are dropped as duplicates until the ring turns over -- for the arbiter,
+    // that is its opening cues. Start somewhere unrelated to the last boot.
+    st.seqCounter = (uint16_t)esp_random();
     memset(st.seen, 0, sizeof(st.seen));
     memset((void*)st.out, 0, sizeof(st.out));
 
@@ -466,6 +548,27 @@ inline void mesh_send_ota_ready(const char* env, const uint8_t ip[4], uint8_t st
 // Census. Every role subscribes to HELLO; whoever asked subscribes to CENSUS.
 inline void mesh_on_hello(MeshHelloCb cb)   { _mesh::S().helloCb  = cb; }
 inline void mesh_on_census(MeshCensusCb cb) { _mesh::S().censusCb = cb; }
+
+// Cues. Only the bridge needs to hear them; every role still relays them.
+inline void mesh_on_cue(MeshCueCb cb) { _mesh::S().cueCb = cb; }
+
+inline void mesh_send_cue(uint8_t folder, uint8_t file, uint16_t cfgHash) {
+    MeshCue c = {};
+    c.magic0     = 'P';
+    c.magic1     = 'M';
+    c.msgType    = MESH_MSG_CUE;
+    _mesh::State& st = _mesh::S();
+    c.originType = st.originType;
+    c.originId   = st.originId;
+    c.seq        = ++st.seqCounter;
+    c.ttl        = MESH_TTL_START;
+    c.folder     = folder;
+    c.file       = file;
+    c.cfgHash    = cfgHash;
+
+    _mesh::markSeen(_mesh::keyOf(c.originId, c.seq));   // don't relay our own echo
+    _mesh::enqueueCue(c, MESH_BURST, MESH_BURST_GAP, 0);
+}
 
 inline uint16_t mesh_send_hello(uint16_t spreadMs) {
     MeshHello h = {};
@@ -589,6 +692,12 @@ inline void mesh_poll() {
         if (st.censusCb) st.censusCb(c);
     }
 
+    while (st.cueTail != st.cueHead) {
+        MeshCue c = st.cueRx[st.cueTail];
+        st.cueTail = (st.cueTail + 1) & 3;
+        _mesh::handleCue(c);
+    }
+
     // 1. drain received packets (dedupe + user callback + relay enqueue)
     while (st.rxTail != st.rxHead) {
         MeshEvent ev = st.rx[st.rxTail];
@@ -601,6 +710,15 @@ inline void mesh_poll() {
         _mesh::OutSlot& s = st.out[i];
         if (!s.used || now < s.dueMs) continue;
         esp_err_t e = esp_now_send(_mesh::BCAST, (const uint8_t*)&s.ev, sizeof(MeshEvent));
+        st.statSent++;
+        if (e != ESP_OK) st.statSendErr++;
+        if (--s.left == 0) s.used = false;
+        else s.dueMs = now + s.gapMs;
+    }
+    for (uint8_t i = 0; i < 8; i++) {
+        _mesh::CueSlot& s = st.cueOut[i];
+        if (!s.used || now < s.dueMs) continue;
+        esp_err_t e = esp_now_send(_mesh::BCAST, (const uint8_t*)&s.cue, sizeof(MeshCue));
         st.statSent++;
         if (e != ESP_OK) st.statSendErr++;
         if (--s.left == 0) s.used = false;

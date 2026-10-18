@@ -7,6 +7,7 @@ Events (one per line):
   video_loop_<name>  switch the background video loop to media/video_loops/<name>.*
   audio_loop_<name>  switch the background audio loop to media/audio_loops/<name>.*
   audio_loop_off     stop the background audio loop
+  cue <name>         the arbiter's game fired a cue; play <name> as above (what the bridge sends)
 
 Escape on the panel's keyboard opens a debug menu (Wi-Fi setup, network info, restart).
 
@@ -199,6 +200,14 @@ def main():
     def on_serial_event(event_name):
         event_name = event_name.strip()
         if not event_name:
+            return
+        # The bridge's lines: "cue <name>" is the arbiter's game firing a cue,
+        # "EV ..." a raw sensor event the arbiter has already turned into game
+        # events, so there is nothing for us to do with it.
+        if event_name.startswith("cue "):
+            fire_cue(event_name[4:].strip())
+            return
+        if event_name.startswith("EV "):
             return
         if game and game.handles(event_name):
             game.event(event_name)

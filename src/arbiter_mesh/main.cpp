@@ -20,6 +20,9 @@
 #include <pulleys_ota.h>
 #include <pulleys_census.h>
 #include "monitor.h"
+#include "gameconfig.h"
+#include "gamestate.h"
+#include "components.h"
 #include "ui.h"
 
 // ── Display pin mapping — from board schematic ────────────────────────────────
@@ -201,6 +204,11 @@ static void handleSerial() {
                                   rw, rh, LCD_WIDTH, LCD_HEIGHT);
                 else
                     Serial.println("  [TOUCH] could not read controller resolution");
+            } else if (buf[0] == 'g' && n > 2 && buf[1] == ' ') {
+                // "g component_activated" -> inject a game event, as the sensors would
+                GameEvent e;
+                if (gameevent_from_name(buf + 2, e)) gamestate_event(e);
+                else Serial.println("  [GAME] unknown event name");
             } else if (buf[0] == 'D') {
                 eventlog_dump();
             } else if (buf[0] == 'L') {
@@ -404,9 +412,16 @@ void setup() {
 #endif
     monitor_init();
     eventlog_init(&s_rtc);
-    monitor_on_event(eventlog_record);
+    // The monitor has one hook slot; the SD log and the game both want every event.
+    monitor_on_event([](const pulleys::MeshEvent& ev, bool relayed) {
+        eventlog_record(ev, relayed);
+        components_on_mesh_event(ev);
+    });
     ui_init();
     clockui_init(&s_rtc);
+    // Last, so the game's opening cues go out onto a mesh that is up.
+    components_init();
+    gameconfig_init();
     Serial.printf("Arbiter (mesh monitor) ready — %s\n", pulleys::identity_name());
 }
 
@@ -418,6 +433,9 @@ void loop() {
 
     pulleys::mesh_poll();
     pulleys::census_poll();
+    gameconfig_poll();
+    gamestate_tick();
+    components_tick();
     handleSerial();
 
     // OTA owns the board while it runs. The panel holds its last frame rather
@@ -437,6 +455,7 @@ void loop() {
     }
 
     clockui_tick();
+    if (!clockui_is_open()) ui_tick();
     lv_timer_handler();
 
     if (now - last_ui >= 750 && !clockui_is_open()) {

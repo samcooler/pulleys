@@ -28,6 +28,17 @@
 game: pulley-party
 start: passive
 
+# CUE INDEX
+#   Cues travel over the mesh as two bytes, [folder, file], so the packet never
+#   carries a name. Both are positions in this block, counting from 0:
+#     folder  the group's place among the groups below.
+#               audio_loop = 0, video_once = 1, audio_once = 2, video_loop = 3
+#     file    the cue's place within its group, in the order written.
+#               audio_once_chime is folder 2, file 1 -> bytes [2, 1]
+#   Order is therefore part of the protocol. Add new groups at the end and new
+#   cues at the end of their group. Reordering or deleting an entry changes
+#   the index of everything after it, and every board and the Pi must be
+#   running the same config to agree. Each count must stay under 256.
 cues:
   audio_loop:
     - audio_loop_idle

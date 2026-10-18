@@ -62,6 +62,12 @@ events coming in over serial or the test socket (`component_activated`,
 else is still played as a cue directly. State changes are printed as
 `game: passive -> game1`.
 
+The arbiter can also run the game itself (`src/arbiter_mesh/gamestate.cpp`). It
+sends each cue it fires through the bridge as a line `cue <name>`, for example
+`cue audio_once_chime`, and overlord plays it. Run overlord **without** `--game`
+in that setup, or both state machines fire cues. The bridge's `EV ...` sensor
+lines are ignored.
+
 ```sh
 python3 overlord.py --test --windowed --game                  # state_config.yaml
 python3 overlord.py --test --windowed --game path/to/other.yaml
@@ -317,6 +323,7 @@ recognised prefix with no matching file prints
 On real hardware the same event names are sent as newline-terminated text over
 serial. To fake it without the bridge node, write a line to the port, e.g.
 `echo video_once_test1 > /dev/cu.usbmodemXXXX`.
+The bridge's own form works too: `echo 'cue video_once_test1' > ...`.
 
 ### Events
 

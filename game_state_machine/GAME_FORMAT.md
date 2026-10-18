@@ -11,7 +11,7 @@ strings overlord already accepts (`video_once_test1`, `audio_once_chime`,
 | -------- | ---------------------------------------------------- |
 | `game`   | Name, for logs                                       |
 | `start`  | State to enter at launch                             |
-| `cues`   | Every cue the game may use, grouped by type, sorted  |
+| `cues`   | Every cue the game may use, grouped by type; order matters  |
 | `states` | The state machine                                    |
 
 ```yaml
@@ -26,6 +26,12 @@ cues:
   video_once:
     - video_once_test1
 ```
+
+A cue goes over the mesh as two bytes, `[folder, file]`: the group's position
+among the groups, then the cue's position within its group, both counted from 0
+(`audio_once_chime` above is `[2, 1]` in the example config). So order is part of
+the protocol: add groups and cues at the end, never reorder or delete, and keep
+every count under 256.
 
 The file name in `overlord/media/` is the cue suffix. A future script may validate this
 list against `overlord/media/` and build it into code.

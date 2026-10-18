@@ -182,8 +182,24 @@ inject a fake event, and it comes out on the Pi link. The console also answers
 `?` (whoami) and `CENSUS`, and prints `forwarded=` / `dropped=` every 3 s. The
 bridge queues up to 32 events and counts any it has to drop if the UART backs up.
 
+The arbiter's game fires cues, and the bridge writes each to the Pi link as a
+line of its own:
+
+```
+cue <name>\n
+```
+
+e.g. `cue audio_once_chime`. On the air a cue is a two-byte `[folder, file]` index
+plus a hash of the cue table (see `game_state_machine/GAME_FORMAT.md`); the
+bridge looks the name up in the table baked into its firmware from
+`state_config.yaml`. If the hash is not that table's, the cue is refused on the
+console and not sent, because a wrong sound is worse than a missing one.
+Reflash the bridge after changing the cue list. Test one without the arbiter by
+typing `c<folder> <file>` (for example `c2 1`) on the console. The console shows
+only `cue <name>` lines by default; `v` toggles the per-event lines and counters.
+
 The Pi-side player lives in `overlord/` (`overlord.py`, `mpv_ipc.py`). It does not
-read this link yet.
+read this link yet (neither `EV` nor `cue` lines).
 
 ## OTA Updates (Future)
 
@@ -211,3 +227,24 @@ Alternative: ESP-IDF native OTA with HTTP server for fleet updates.
 - **Battery indicator** — when a traveler enters sleep, it flashes 0–4 dim red LEDs showing battery level (0 = >80%, 4 = <20%). This always shows regardless of DEBUG_FLASH.
 - **Dream state** — sleeping travelers periodically wake for a 2-second LED "dream" pattern, then return to sleep. BLE stays off during dreams. Dream interval is ~30s with random jitter.
 - **Station 4-slot display** — the station's 8×32 matrix runs 4 independent 8×8 culture slots, each showing the culture of a recent visitor with a multi-phase fade transition.
+
+## Arbiter game (state machine)
+
+`arbiter_mesh` runs the game in `game_state_machine/state_config.yaml` and shows
+it on the strip along the bottom of the panel: the current state, time in state
+and the next timer, a bar that flashes on each trigger, and a short log.
+
+- **Default game:** baked in at build time by `tools/embed_game.py` (a PlatformIO
+  pre-script on `arbiter_mesh` and `bridge`) as a generated `game_default.h`. A bad
+  YAML fails the build.
+- **Replacing it:** join the `pulleys-arbiter` Wi-Fi, then
+  `python3 tools/game_to_json.py --post 192.168.4.1:8080`. See
+  `src/arbiter_mesh/gameconfig.h` for `/config`, `/event`, `/state`. The game
+  restarts at its `start` state. A posted game is kept across reboots until
+  `DELETE /config`; the game's *state* never is.
+- **Events:** `components.cpp` turns sensor events into game events (placeholder
+  rules, mirroring `overlord/simulate.py`) and hands them to `gamestate_event()`.
+  Inject one by hand with `g component_activated` on the console, or `POST /event`.
+- **Cues:** go out as mesh packets for the bridge (above). A game POSTed with a
+  different cue list makes the bridge refuse its cues until the bridge is
+  reflashed with matching YAML.
