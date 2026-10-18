@@ -2,7 +2,8 @@
 #include "gamestate.h"
 #include <Arduino.h>
 
-static const uint32_t WEAR_MS = 5000;   // how long a pull keeps a component lit
+static const uint32_t WEAR_MS = 15000;  // how long a pull keeps a component lit
+static const uint32_t HEARTBEAT_MS = 1000;   // how often the charge is republished
 
 static const uint8_t MAJOR_COUNT = 5, FINAL_COUNT = 3;
 
@@ -35,6 +36,21 @@ static bool anyLit(bool isFinal, uint32_t now) {
     return false;
 }
 
+// Tell the displays how charged every component is. A change goes out as a burst;
+// the once-a-second repeat covers a display that missed one, and carries the
+// drain so it can keep counting down on its own in between.
+static void publish(bool urgent) {
+    static_assert(MAJOR_COUNT + FINAL_COUNT == pulleys::MESH_COMPONENT_COUNT,
+                  "the mesh packet carries one charge per component");
+    uint32_t now = millis();
+    uint8_t charge[pulleys::MESH_COMPONENT_COUNT];
+    for (uint8_t i = 0; i < pulleys::MESH_COMPONENT_COUNT; i++) {
+        int32_t left = s_comp[i].litUntil ? (int32_t)(s_comp[i].litUntil - now) : 0;
+        charge[i] = left <= 0 ? 0 : (uint8_t)(left >= (int32_t)WEAR_MS ? 255 : left * 255UL / WEAR_MS);
+    }
+    pulleys::mesh_send_components(charge, (uint16_t)WEAR_MS, urgent);
+}
+
 void components_init() {
     for (uint8_t i = 0; i < MAJOR_COUNT + FINAL_COUNT; i++) {
         s_comp[i].isFinal  = i >= MAJOR_COUNT;
@@ -53,6 +69,7 @@ void components_on_mesh_event(const pulleys::MeshEvent& ev) {
     bool wasLit = lit(c, now);
     bool noneLit = !anyLit(c.isFinal, now);   // before this pull lights anything
     c.litUntil = now + WEAR_MS;
+    publish(true);        // lit, or topped back up: the display's bar goes to full
     if (wasLit) return;   // a refill is not a new activation
 
     if (c.isFinal) {
@@ -68,16 +85,26 @@ void components_on_mesh_event(const pulleys::MeshEvent& ev) {
 }
 
 void components_tick() {
+    static uint32_t lastPublish = 0;
     uint32_t now = millis();
+    bool changed = false;
     for (Component& c : s_comp) {
         // litUntil is cleared once the wear-out has been reported
         if (!c.litUntil || lit(c, now)) continue;
         c.litUntil = 0;
+        changed = true;
         if (c.isFinal) {
             gamestate_event(GE_FINAL_COMPONENT_DEACTIVATED);
         } else {
             gamestate_event(GE_COMPONENT_DEACTIVATED);
             if (!anyLit(false, now)) gamestate_event(GE_ALL_COMPONENTS_DEACTIVATED);
         }
+    }
+    if (changed) {
+        publish(true);
+        lastPublish = now;
+    } else if (now - lastPublish >= HEARTBEAT_MS) {
+        publish(false);
+        lastPublish = now;
     }
 }

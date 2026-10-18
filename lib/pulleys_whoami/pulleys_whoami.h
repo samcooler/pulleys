@@ -60,6 +60,7 @@ inline const char* whoami_role_name(uint8_t type) {
         case PULLEYS_TYPE_SENSOR:   return "SENSOR";
         case PULLEYS_TYPE_SCREEN:   return "SCREEN";
         case PULLEYS_TYPE_BRIDGE:   return "BRIDGE";
+        case PULLEYS_TYPE_COMPONENT_STATE_DISPLAY:    return "COMPONENT_STATE_DISPLAY";
         default:                    return "UNKNOWN";
     }
 }

@@ -8,6 +8,7 @@
 | **Station (C3)** | Seeed XIAO ESP32-C3 | 8×32 WS2812B matrix, 256 LEDs (GPIO 10) | — |
 | **Station (WROOM)** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | hardware FPU, CH340 USB-serial |
 | **Bridge** | ESP32-C3 (4MB, native USB) | none | UART1 to a Raspberry Pi (GPIO 21 TX, 20 RX) |
+| **Component state display** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | the screen's board; one bar per game component |
 
 ## Build Environments
 
@@ -17,6 +18,7 @@
 | `station` | XIAO ESP32-C3 | default |
 | `station_wroom` | D1 Mini ESP32-WROOM-32 | hardware FPU, SSAA=3 |
 | `bridge` | ESP32-C3 (`seeed_xiao_esp32c3`) | mesh → Pi serial bridge, default env, always a C3 |
+| `component_state_display` | D1 Mini ESP32-WROOM-32 | component charge bars on an 8×32 matrix, default env |
 
 ```sh
 pio run                      # build traveler + station (defaults)
@@ -244,3 +246,34 @@ and the next timer, a bar that flashes on each trigger, and a short log.
   Inject one by hand with `g component_activated` on the console, or `POST /event`.
 - **Cues:** go out as mesh packets for the bridge (above). A game POSTed with a
   different cue list needs no bridge change: cues travel by name.
+
+## Component state display
+
+A mesh node on the screen's hardware (D1 Mini ESP32, 8×32 matrix on GPIO 16) that
+shows how charged each game component is. Eight vertical bars side by side along
+the long axis, each 3 pixels wide with a 1-pixel gap (31 of the 32 columns):
+major components 1-5 on the left (red, orange, yellow, green, blue), then final
+components 1-3 (purple). A component that is lit shows a full bar, which drains
+away until the component goes dark and the bar is empty. Source:
+`src/component_state_display/main.cpp`; the bar maths is `lib/pulleys_component_display`.
+
+```sh
+pio run -e component_state_display -t upload --upload-port /dev/cu.usbserial-XXXX
+./flash_all.sh component_state_display -p <port>
+```
+
+- **Where the state comes from:** the arbiter. `components.cpp` there owns the
+  rules (which channel is which component, and that a pull keeps a component lit
+  for 15 s), and publishes every component's charge as a `MeshComponents` packet:
+  right away on any change, and once a second otherwise. The display only draws
+  it, draining each bar by itself between packets, so a missed packet costs
+  nothing and the display never repeats the rules.
+- **No arbiter:** if nothing has been heard for 4 s, a pixel in the spare column at the right end blinks red.
+- **Orientation:** if the bars come out mirrored (component 1 on the right) or
+  fill downward, add `-D COMPONENT_DISPLAY_REVERSE_X=1` and/or
+  `-D COMPONENT_DISPLAY_REVERSE_Y=1` to the env's `build_flags`. Brightness is
+  `COMPONENT_DISPLAY_BRIGHTNESS` (default 60 of 255) and the current cap
+  `LED_MAX_MA` (450 mA, USB-safe; raise it on a real 5 V supply).
+- **Bench:** `c<bar> <percent>` on the console draws a bar as if the arbiter had
+  sent it (`c0 100` fills component 1 and lets it drain). On the arbiter, `p<channel>`
+  injects a pull (`p10` lights major component 1), which is how to see it without a sensor.

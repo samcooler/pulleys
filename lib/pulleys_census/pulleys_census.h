@@ -67,6 +67,7 @@ inline const char* roleName(uint8_t originType) {
         case MESH_ORIGIN_SCREEN:  return "SCREEN";
         case MESH_ORIGIN_ARBITER: return "ARBITER";
         case MESH_ORIGIN_BRIDGE:  return "BRIDGE";
+        case MESH_ORIGIN_COMPONENT_STATE_DISPLAY:   return "COMPONENT_STATE_DISPLAY";
         default:                  return "UNKNOWN";
     }
 }

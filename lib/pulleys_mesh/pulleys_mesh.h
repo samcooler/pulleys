@@ -33,6 +33,7 @@ enum : uint8_t {
     MESH_ORIGIN_SCREEN  = 0x05,
     MESH_ORIGIN_ARBITER = 0x06,   // monitor; joins the mesh but shows no art
     MESH_ORIGIN_BRIDGE  = 0x07,   // forwards mesh events to a Pi over serial
+    MESH_ORIGIN_COMPONENT_STATE_DISPLAY   = 0x08,   // shows the components' charge on an LED matrix
 };
 
 enum : uint8_t {
@@ -44,6 +45,7 @@ enum : uint8_t {
     MESH_MSG_HELLO        = 0x50,   // "everyone say what you are"
     MESH_MSG_CENSUS       = 0x51,   // the answer to that
     MESH_MSG_CUE          = 0x60,   // the arbiter's game fired a cue
+    MESH_MSG_COMPONENTS   = 0x70,   // the arbiter's view of every component's charge
 };
 
 // Clock sync: every node beacons its own mesh clock, and each listener pulls a
@@ -197,6 +199,32 @@ struct __attribute__((packed)) MeshCue {
 static constexpr size_t MESH_CUE_HEADER = offsetof(MeshCue, name);
 inline size_t mesh_cue_wire_size(const MeshCue& c) { return MESH_CUE_HEADER + c.nameLen; }
 
+// ── Components ───────────────────────────────────────────────────────────────
+// How charged each game component is, as the arbiter's mapper sees it, for a
+// component state display to draw. The arbiter owns the rules for when a component is lit and for
+// how long; this only publishes the result, so the display never repeats them.
+//
+// Index order is fixed: majors 1-5, then finals 1-3. charge is 255 the moment a
+// component is lit and drains to 0 in wearMs, so a receiver can keep draining
+// on its own between packets. The arbiter repeats the packet about once a
+// second, which also corrects a receiver that missed one.
+//
+// Flooded and deduped like a cue, so a display out of the arbiter's direct range
+// still gets it.
+static constexpr uint8_t MESH_COMPONENT_COUNT = 8;
+
+struct __attribute__((packed)) MeshComponents {
+    uint8_t  magic0;      // 'P'
+    uint8_t  magic1;      // 'M'
+    uint8_t  msgType;     // MESH_MSG_COMPONENTS
+    uint8_t  originType;  // MESH_ORIGIN_*
+    uint16_t originId;
+    uint16_t seq;         // shares the origin's counter with its events
+    uint8_t  ttl;         // remaining flood hops
+    uint16_t wearMs;      // how long a full charge takes to drain
+    uint8_t  charge[MESH_COMPONENT_COUNT];   // 0 = dark .. 255 = just lit
+};  // 19 bytes
+
 // Every node beacons, so this is also the presence signal for roles that emit
 // no events of their own: without it a Screen is invisible to a monitor.
 typedef void (*MeshEventCb)(const MeshEvent& ev, bool relayed);
@@ -206,6 +234,7 @@ typedef void (*MeshOtaReadyCb)(const MeshOtaReady& r);
 typedef void (*MeshHelloCb)(const MeshHello& h);
 typedef void (*MeshCensusCb)(const MeshCensus& c);
 typedef void (*MeshCueCb)(const MeshCue& c, bool relayed);
+typedef void (*MeshComponentsCb)(const MeshComponents& c, bool relayed);
 
 // ── Internal state ──────────────────────────────────────────────────────────
 namespace _mesh {
@@ -235,6 +264,14 @@ struct CueSlot {
     bool     used;
 };
 
+struct ComponentsSlot {
+    MeshComponents pkt;
+    uint32_t       dueMs;
+    uint16_t       gapMs;
+    uint8_t        left;
+    bool           used;
+};
+
 struct State {
     uint8_t     originType = 0;
     uint16_t    originId   = 0;
@@ -246,6 +283,7 @@ struct State {
     MeshHelloCb       helloCb       = nullptr;
     MeshCensusCb      censusCb      = nullptr;
     MeshCueCb         cueCb         = nullptr;
+    MeshComponentsCb  componentsCb  = nullptr;
     bool        relayOn    = true;
 
     // Deduplication ring — linear scan, fine at this node count / event rate.
@@ -254,11 +292,17 @@ struct State {
 
     OutSlot out[16]     = {};
     CueSlot cueOut[8]   = {};
+    ComponentsSlot compOut[4] = {};
 
     // Cue RX ring, same single-producer/single-consumer shape as the events'.
     MeshCue          cueRx[4] = {};
     volatile uint8_t cueHead  = 0;
     volatile uint8_t cueTail  = 0;
+
+    // Components RX ring, same shape again.
+    MeshComponents   compRx[4] = {};
+    volatile uint8_t compHead  = 0;
+    volatile uint8_t compTail  = 0;
 
     // RX ring — the WiFi task is the single producer (a real FreeRTOS task, not
     // an ISR), mesh_poll() the single consumer, so volatile indices around a
@@ -344,6 +388,19 @@ inline void enqueueCue(const MeshCue& c, uint8_t count, uint16_t gap, uint16_t f
     }
 }
 
+inline void enqueueComponents(const MeshComponents& c, uint8_t count, uint16_t gap, uint16_t firstDelay) {
+    State& s = S();
+    for (uint8_t i = 0; i < 4; i++) {
+        if (s.compOut[i].used) continue;
+        s.compOut[i].pkt   = c;
+        s.compOut[i].left  = count;
+        s.compOut[i].gapMs = gap;
+        s.compOut[i].dueMs = millis() + firstDelay;
+        s.compOut[i].used  = true;
+        return;
+    }
+}
+
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
 static void onRecv(const esp_now_recv_info_t* /*info*/, const uint8_t* data, int len) {
 #else
@@ -393,6 +450,16 @@ static void onRecv(const uint8_t* /*mac*/, const uint8_t* data, int len) {
         if (ch != st.censusTail) {
             memcpy(&st.censusRx[st.censusHead], data, sizeof(MeshCensus));
             st.censusHead = ch;
+        }
+        return;
+    }
+
+    if (data[2] == MESH_MSG_COMPONENTS) {
+        if (len < (int)sizeof(MeshComponents)) { st.statBadMagic++; return; }
+        uint8_t ch = (st.compHead + 1) & 3;
+        if (ch != st.compTail) {
+            memcpy(&st.compRx[st.compHead], data, sizeof(MeshComponents));
+            st.compHead = ch;
         }
         return;
     }
@@ -449,6 +516,21 @@ inline void handleCue(const MeshCue& c) {
         MeshCue r = c;
         r.ttl--;
         enqueueCue(r, 1, 0, (uint16_t)random(3, 28));
+    }
+}
+
+inline void handleComponents(const MeshComponents& c) {
+    uint32_t key = keyOf(c.originId, c.seq);
+    if (wasSeen(key)) return;
+    markSeen(key);
+
+    bool relayed = c.ttl < MESH_TTL_START;
+    if (S().componentsCb) S().componentsCb(c, relayed);
+
+    if (S().relayOn && c.ttl > 0) {
+        MeshComponents r = c;
+        r.ttl--;
+        enqueueComponents(r, 1, 0, (uint16_t)random(3, 28));
     }
 }
 
@@ -563,6 +645,29 @@ inline void mesh_on_census(MeshCensusCb cb) { _mesh::S().censusCb = cb; }
 // Cues. Only the bridge needs to hear them; every role still relays them. The
 // name in the callback's MeshCue is NUL-terminated and not otherwise checked.
 inline void mesh_on_cue(MeshCueCb cb) { _mesh::S().cueCb = cb; }
+
+// Components. The component state display subscribes; the arbiter sends. Every role relays them.
+// `urgent` is a change (a component just lit or went dark), sent as a short
+// burst; otherwise it is the periodic repeat, sent once.
+inline void mesh_on_components(MeshComponentsCb cb) { _mesh::S().componentsCb = cb; }
+
+inline void mesh_send_components(const uint8_t charge[MESH_COMPONENT_COUNT],
+                                 uint16_t wearMs, bool urgent) {
+    MeshComponents c = {};
+    c.magic0     = 'P';
+    c.magic1     = 'M';
+    c.msgType    = MESH_MSG_COMPONENTS;
+    _mesh::State& st = _mesh::S();
+    c.originType = st.originType;
+    c.originId   = st.originId;
+    c.seq        = ++st.seqCounter;
+    c.ttl        = MESH_TTL_START;
+    c.wearMs     = wearMs;
+    memcpy(c.charge, charge, MESH_COMPONENT_COUNT);
+
+    _mesh::markSeen(_mesh::keyOf(c.originId, c.seq));   // don't relay our own echo
+    _mesh::enqueueComponents(c, urgent ? 3 : 1, 80, 0);
+}
 
 // False if the name is empty or too long to send.
 inline bool mesh_send_cue(const char* name) {
@@ -713,6 +818,12 @@ inline void mesh_poll() {
         _mesh::handleCue(c);
     }
 
+    while (st.compTail != st.compHead) {
+        MeshComponents c = st.compRx[st.compTail];
+        st.compTail = (st.compTail + 1) & 3;
+        _mesh::handleComponents(c);
+    }
+
     // 1. drain received packets (dedupe + user callback + relay enqueue)
     while (st.rxTail != st.rxHead) {
         MeshEvent ev = st.rx[st.rxTail];
@@ -725,6 +836,15 @@ inline void mesh_poll() {
         _mesh::OutSlot& s = st.out[i];
         if (!s.used || now < s.dueMs) continue;
         esp_err_t e = esp_now_send(_mesh::BCAST, (const uint8_t*)&s.ev, sizeof(MeshEvent));
+        st.statSent++;
+        if (e != ESP_OK) st.statSendErr++;
+        if (--s.left == 0) s.used = false;
+        else s.dueMs = now + s.gapMs;
+    }
+    for (uint8_t i = 0; i < 4; i++) {
+        _mesh::ComponentsSlot& s = st.compOut[i];
+        if (!s.used || now < s.dueMs) continue;
+        esp_err_t e = esp_now_send(_mesh::BCAST, (const uint8_t*)&s.pkt, sizeof(MeshComponents));
         st.statSent++;
         if (e != ESP_OK) st.statSendErr++;
         if (--s.left == 0) s.used = false;

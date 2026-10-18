@@ -27,6 +27,7 @@
 #define PULLEYS_TYPE_SENSOR    0x04   // rope-mounted motion sensor (mesh piece)
 #define PULLEYS_TYPE_SCREEN    0x05   // activity display (mesh piece)
 #define PULLEYS_TYPE_BRIDGE    0x06   // mesh-to-serial bridge to a Raspberry Pi
+#define PULLEYS_TYPE_COMPONENT_STATE_DISPLAY     0x07   // component charge bars on an 8x32 matrix
 
 typedef struct {
     uint8_t r, g, b;

@@ -60,6 +60,8 @@ inline void identity_init(uint8_t deviceType) {
         reg = _stationRegistry;  regSize = _stationRegistrySize;  prefix = 'X';
     } else if (deviceType == PULLEYS_TYPE_BRIDGE) {
         reg = nullptr;           regSize = 0;                     prefix = 'B';
+    } else if (deviceType == PULLEYS_TYPE_COMPONENT_STATE_DISPLAY) {
+        reg = nullptr;           regSize = 0;                     prefix = 'G';
     } else {
         reg = _stationRegistry;  regSize = _stationRegistrySize;  prefix = 'S';
     }

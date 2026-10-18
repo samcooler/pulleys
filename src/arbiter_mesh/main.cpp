@@ -204,6 +204,13 @@ static void handleSerial() {
                                   rw, rh, LCD_WIDTH, LCD_HEIGHT);
                 else
                     Serial.println("  [TOUCH] could not read controller resolution");
+            } else if (buf[0] == 'p' && n > 1) {
+                // "p10" -> a pull on rope channel 10, as if the sensor had sent it
+                pulleys::MeshEvent ev = {};
+                ev.channel   = (uint8_t)atoi(buf + 1);
+                ev.magnitude = 90;
+                ev.originId  = pulleys::identity_id();
+                components_on_mesh_event(ev);
             } else if (buf[0] == 'g' && n > 2 && buf[1] == ' ') {
                 // "g component_activated" -> inject a game event, as the sensors would
                 GameEvent e;

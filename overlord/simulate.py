@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 
-WEAR = 5.0  # seconds a component stays lit
+WEAR = 15.0  # seconds a component stays lit
 FPS = 10
 
 # (key, colour as RRGGBB)
