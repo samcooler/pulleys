@@ -34,12 +34,19 @@ MEDIA = Path(os.environ.get("OVERLORD_MEDIA") or Path(__file__).resolve().parent
 DEFAULT_LOOP = "idle"  # played at startup from video_loops/ and audio_loops/ if present
 
 
-def find_media(folder, name):
-    """media/<folder>/<name>.* (any extension), or None. Rejects path tricks."""
+def find_media(folder, name, prefix=""):
+    """The file for a cue in media/<folder>/, or None. Rejects path tricks.
+
+    The file may carry the whole cue name (audio_once_chime.mp3, the form that
+    matches what the game config says) or just the part after the prefix
+    (chime.mp3). The full name wins if both exist. Any extension."""
     if not name or "/" in name or "\\" in name or name.startswith("."):
         return None
-    matches = sorted(p for p in (MEDIA / folder).glob(f"{name}.*") if p.is_file())
-    return matches[0] if matches else None
+    for stem in ([prefix + name] if prefix else []) + [name]:
+        matches = sorted(p for p in (MEDIA / folder).glob(f"{stem}.*") if p.is_file())
+        if matches:
+            return matches[0]
+    return None
 
 
 def main():
@@ -67,8 +74,8 @@ def main():
     # Touched from the serial thread and the mpv event thread.
     lock = threading.RLock()
     state = {
-        "video_loop": find_media("video_loops", DEFAULT_LOOP),
-        "audio_loop": find_media("audio_loops", DEFAULT_LOOP),
+        "video_loop": find_media("video_loops", DEFAULT_LOOP, "video_loop_"),
+        "audio_loop": find_media("audio_loops", DEFAULT_LOOP, "audio_loop_"),
         "playing_clip": False,
     }
 
@@ -131,7 +138,8 @@ def main():
         settings.save(volume=percent)
 
     def test_sound():
-        path = find_media("audio_once", "chime") or find_media("audio_once", "beep")
+        path = (find_media("audio_once", "chime", "audio_once_")
+                    or find_media("audio_once", "beep", "audio_once_"))
         if path:
             sounds.play(path)
 
@@ -193,7 +201,7 @@ def main():
             return True
         for prefix, folder, action in prefixed:
             if event_name.startswith(prefix):
-                path = find_media(folder, event_name[len(prefix):])
+                path = find_media(folder, event_name[len(prefix):], prefix)
                 if path is None:
                     print(f"no media for {event_name} in media/{folder}/", flush=True)
                     return False

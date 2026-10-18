@@ -33,7 +33,8 @@ among the groups, then the cue's position within its group, both counted from 0
 the protocol: add groups and cues at the end, never reorder or delete, and keep
 every count under 256.
 
-The file name in `overlord/media/` is the cue suffix. A future script may validate this
+The file in `overlord/media/<folder>/` is named after the cue (`audio_once_chime.mp3`;
+the name without its prefix, `chime.mp3`, also works). A future script may validate this
 list against `overlord/media/` and build it into code.
 
 Style: write lists and maps in multiline block form, not `{...}` / `[...]`.

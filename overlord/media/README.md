@@ -1,8 +1,9 @@
 # Media
 
-The folder a file is in and its name decide when it plays. The file name
-(without extension) is the event name: `audio_once/door.mp3` plays on `audio_once_door`.
-Keep names lowercase with no spaces.
+The folder a file is in and its name decide when it plays. Name the file after
+the whole cue: `audio_once/audio_once_door.mp3` plays on `audio_once_door`. The
+short form without the prefix, `audio_once/door.mp3`, works too; if both exist
+the full name wins. Keep names lowercase with no spaces.
 
 ## `video_loops/`
 

@@ -328,8 +328,10 @@ The bridge's own form works too: `echo 'cue video_once_test1' > ...`.
 ### Events
 
 Events are matched by prefix and then by file name, so adding media needs no
-code change: drop `media/audio_once/door.mp3` in and `audio_once_door` works. The
-extension is ignored (first match by name wins), and names can't contain `/`.
+code change: drop `media/audio_once/audio_once_door.mp3` in and `audio_once_door`
+works. The short name `door.mp3` is accepted too, and the full name wins if both
+exist. The extension is ignored (first match by name wins), and names can't
+contain `/`.
 
 | Event                | Action                                                                          |
 | -------------------- | ------------------------------------------------------------------------------- |

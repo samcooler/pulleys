@@ -3,7 +3,8 @@
 # GLOSSARY
 #   cue          Something the panel does: play a sound, play a video clip, or
 #                switch the background music or video. The name starts with its
-#                kind, and the rest is the file name in overlord/media/:
+#                kind, and the whole name is the file name in overlord/media/
+#                (the part after the kind also works):
 #                  audio_loop_*  background music; repeats until changed
 #                  audio_once_*  a short sound effect played on top of everything
 #                  video_loop_*  background video; repeats until changed
