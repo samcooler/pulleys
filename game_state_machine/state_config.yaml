@@ -37,7 +37,7 @@ start: passive
 # fresh each time), so 5 and 1 plays every 4 to 6 seconds.
 ambient_sounds:
   - sound: audio_once_steam
-    interval: 5
+    interval: 20
     variance: 1
 
 # CUES
