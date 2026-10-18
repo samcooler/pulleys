@@ -24,10 +24,20 @@
 #   cue (in on)  Cues to fire for that event.
 #   goto         The state to move to.
 #   after        Move to another state once this much time has passed.
+#   ambient      A sound overlord repeats on a schedule, independent of the game.
 #   placeholder  Media that does not exist yet.
 
 game: pulley-party
 start: passive
+
+# Sounds overlord plays on its own, forever, whatever state the game is in.
+# Only overlord reads this; the arbiter never sees it. Each entry plays its
+# sound every `interval` seconds, give or take up to `variance` seconds (picked
+# fresh each time), so 5 and 1 plays every 4 to 6 seconds.
+ambient_sounds:
+  - sound: audio_once_steam
+    interval: 5
+    variance: 1
 
 # CUE INDEX
 #   Cues travel over the mesh as two bytes, [folder, file], so the packet never

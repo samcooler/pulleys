@@ -11,6 +11,7 @@ strings overlord already accepts (`video_once_test1`, `audio_once_chime`,
 | -------- | ---------------------------------------------------- |
 | `game`   | Name, for logs                                       |
 | `start`  | State to enter at launch                             |
+| `ambient_sounds` | Sounds overlord repeats on a schedule (optional)    |
 | `cues`   | Every cue the game may use, grouped by type; order matters  |
 | `states` | The state machine                                    |
 
@@ -38,6 +39,26 @@ the name without its prefix, `chime.mp3`, also works). A future script may valid
 list against `overlord/media/` and build it into code.
 
 Style: write lists and maps in multiline block form, not `{...}` / `[...]`.
+
+## Ambient sounds
+
+Sounds that play on their own, whatever state the game is in: steam hissing
+every few seconds, say. Only overlord reads this; `tools/game_to_json.py` leaves
+it out of the arbiter's JSON.
+
+```yaml
+ambient_sounds:
+  - sound: audio_once_steam
+    interval: 5                  # seconds between plays
+    variance: 1                  # plus or minus seconds, picked fresh each time
+```
+
+Each entry has its own timer and plays every `interval` seconds, give or take up
+to `variance`, so the example plays every 4 to 6 seconds. The first play comes
+one interval after overlord starts. `sound` must be an `audio_once_*` cue listed
+under `cues`; `interval` must be above 0 and `variance` at least 0 and below
+`interval`. Overlord reads the file at startup, so a change needs a restart.
+Plays are not logged (the journal would fill up); one that fails is logged once.
 
 ## States
 

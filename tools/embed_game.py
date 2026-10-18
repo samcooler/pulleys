@@ -43,7 +43,7 @@ if errors:
         sys.stderr.write(f"  {e}\n")
     env.Exit(1)  # noqa: F821
 
-body = json.dumps(cfg, separators=(",", ":"))
+body = json.dumps(game_to_json.for_arbiter(cfg), separators=(",", ":"))
 assert ")GAMEJSON\"" not in body
 
 names, starts = [], []

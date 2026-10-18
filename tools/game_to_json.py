@@ -68,6 +68,14 @@ def cue_hash(cfg):
     return ((h >> 16) ^ h) & 0xFFFF
 
 
+# Sections only overlord reads; the arbiter's JSON leaves them out.
+OVERLORD_ONLY = ("ambient_sounds",)
+
+
+def for_arbiter(cfg):
+    return {k: v for k, v in cfg.items() if k not in OVERLORD_ONLY}
+
+
 def validate(cfg):
     """Return a list of problems; empty means the config is sound."""
     errors = []
@@ -98,6 +106,25 @@ def validate(cfg):
     def check_goto(where, target):
         if target not in states:
             errors.append(f"{where}: goto '{target}' is not a state")
+
+    # ambient_sounds: overlord's own schedule (GAME_FORMAT.md)
+    for i, entry in enumerate(cfg.get("ambient_sounds") or []):
+        where = f"ambient_sounds[{i}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{where}: must be a map with sound, interval and variance")
+            continue
+        sound = entry.get("sound")
+        if sound not in (cfg["cues"] or {}).get("audio_once", []):
+            errors.append(f"{where}: sound '{sound}' is not listed under cues.audio_once")
+        interval, variance = entry.get("interval"), entry.get("variance", 0)
+        numbers = all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                      for v in (interval, variance))
+        if not numbers or interval <= 0 or variance < 0:
+            errors.append(f"{where}: interval must be a positive number of seconds "
+                          "and variance a number of seconds, 0 or more")
+        elif variance >= interval:
+            errors.append(f"{where}: variance must be less than interval, "
+                          "or a play could be due before the last one")
 
     if cfg["start"] not in states:
         errors.append(f"start '{cfg['start']}' is not a state")
@@ -154,7 +181,7 @@ def main():
             sys.stderr.write(f"  {e}\n")
         sys.exit(1)
 
-    body = json.dumps(cfg, indent=2 if args.pretty else None,
+    body = json.dumps(for_arbiter(cfg), indent=2 if args.pretty else None,
                       separators=None if args.pretty else (",", ":"))
     out = args.output or os.path.splitext(args.config)[0] + ".json"
     with open(out, "w") as f:

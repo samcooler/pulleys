@@ -353,6 +353,15 @@ Behaviour details:
   `idle.wav`). To start on the ambient track, rename it to `idle.mp3` and remove
   `idle.wav`.
 
+## Ambient sounds
+
+`ambient_sounds` in the game YAML (format in `../game_state_machine/GAME_FORMAT.md`)
+lists sounds overlord plays on its own schedule, whatever the game is doing:
+each entry has a `sound`, an `interval` and a `variance`, all in seconds. Overlord
+is the only one that reads it, and it does so with or without `--game`, from
+`state_config.yaml` (or the file `--game` names). It is read once at startup.
+Overlord logs the schedule when it starts and does not log each play.
+
 ## Control API
 
 A small REST API runs inside overlord, for controlling it from an SSH session

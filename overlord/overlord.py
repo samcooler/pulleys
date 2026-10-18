@@ -27,6 +27,7 @@ import keys
 import settings
 from debug_menu import DebugMenu
 from mpv_ipc import Mpv, MpvError, SoundPlayer
+from ambient import Ambient, load as load_ambient
 from control import ControlServer
 from serial_reader import SerialReader
 
@@ -287,6 +288,27 @@ def main():
     )
     serial.start()
 
+    # Sounds on a schedule, from the game YAML. Independent of --game and of
+    # whatever the arbiter is doing: overlord is the only one that reads them.
+    def play_ambient(name):
+        if not name.startswith("audio_once_"):
+            return False
+        path = find_media("audio_once", name[len("audio_once_"):], "audio_once_")
+        if path is None:
+            return False
+        sounds.play(path)
+        return True
+
+    try:
+        from game import DEFAULT_GAME
+    except ImportError:  # pyyaml missing: game.py cannot be imported
+        DEFAULT_GAME = None
+    ambient = None
+    ambient_config = args.game or DEFAULT_GAME
+    if ambient_config:
+        ambient = Ambient(load_ambient(ambient_config), play_ambient)
+        ambient.start()
+
     api = None
     if args.control_port:
         try:
@@ -314,6 +336,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if ambient:
+            ambient.stop()
         if api:
             api.stop()
         serial.stop()
