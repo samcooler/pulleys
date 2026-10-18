@@ -16,7 +16,7 @@ BOOT=/boot/firmware
 # Raspberry Pi OS keeps the firmware boot config here; a PC boots through GRUB.
 if [ -f "$BOOT/config.txt" ]; then PLATFORM=pi; else PLATFORM=pc; fi
 
-PKGS="mpv python3-serial python3-yaml rclone git plymouth plymouth-themes"
+PKGS="mpv python3-serial python3-yaml rclone git plymouth plymouth-themes network-manager"
 # Hardware video decode on Intel/AMD (mpv --hwdec=auto-safe picks VAAPI up).
 [ "$PLATFORM" = pc ] && PKGS="$PKGS va-driver-all"
 apt-get update

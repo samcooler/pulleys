@@ -203,6 +203,28 @@ hardware-decodes on Intel/AMD) and sets up:
 Config lives in `/etc/overlord.env` (media remote, serial port, mpv audio
 device). Logs: `journalctl -u overlord-update -u overlord -b`.
 
+### Debug menu
+
+Press **Escape** on a keyboard plugged into the panel to open a menu over the
+video (Up/Down, Enter, Esc to go back). The top of the menu shows live
+status, refreshed every few seconds: whether Wi-Fi is connected (and to what),
+the IP address (wired as a fallback), and whether the internet is reachable
+(an HTTP request to `connectivitycheck.gstatic.com/generate_204`). It offers:
+
+- **Reconfigure Wi-Fi:** scans, lists networks (strongest first), asks for the
+  password with the keyboard (Tab shows or hides it), and connects through
+  NetworkManager, which remembers the network across reboots. "Hidden
+  network..." takes the name by hand.
+- **Network info:** interfaces, state and IP addresses.
+- **Restart overlord:** quits so systemd starts it again.
+
+On the panel the keys are read straight from `/dev/input` (the service user is
+in the `input` group); with `--windowed` mpv receives them instead, so the menu
+can be tried on a laptop (Wi-Fi items need `nmcli`, so they only work on the
+Pi). While the menu is open the simulator keys are ignored. Wi-Fi changes need
+the service user in the `netdev` group, which `install.sh` arranges; re-run it
+on a panel installed earlier.
+
 ### Media sync from Google Drive
 
 The media lives in the shared Drive folder

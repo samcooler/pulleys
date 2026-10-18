@@ -5,7 +5,8 @@ Wants=overlord-update.service
 
 [Service]
 User=@USER@
-SupplementaryGroups=video render audio input dialout
+# input: keyboard for the debug menu; netdev: lets NetworkManager accept its Wi-Fi changes.
+SupplementaryGroups=video render audio input dialout netdev
 WorkingDirectory=@DIR@
 EnvironmentFile=/etc/overlord.env
 # Hand the screen from plymouth to mpv without flashing the console.

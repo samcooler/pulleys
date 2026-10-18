@@ -8,6 +8,8 @@ Events (one per line):
   audio_loop_<name>  switch the background audio loop to media/audio_loops/<name>.*
   audio_loop_off     stop the background audio loop
 
+Escape on the panel's keyboard opens a debug menu (Wi-Fi setup, network info, restart).
+
 With --game, game events (component_activated, ...) drive the state machine in
 game_state_machine/, which fires the cues above. --simulate adds keyboard
 stand-ins for the components and an overlay showing their charge.
@@ -16,9 +18,12 @@ stand-ins for the components and an overlay showing their charge.
 import argparse
 import os
 import signal
+import sys
 import threading
 from pathlib import Path
 
+import keys
+from debug_menu import DebugMenu
 from mpv_ipc import Mpv, MpvError, SoundPlayer
 from serial_reader import SerialReader
 
@@ -76,8 +81,13 @@ def main():
         sim = Simulator(game, game.event)
         video_extra += sim.mpv_args()
 
+    menu = None  # set once the video player exists
+
     def on_event(ev):
-        if sim:
+        args = ev.get("args") or []
+        if ev.get("event") == "client-message" and args[:1] == ["dbg-key"] and len(args) == 2:
+            menu.on_key(keys.from_mpv(args[1]))
+        elif sim and not (menu and menu.open):  # typing in the menu must not light components
             sim.on_mpv_event(ev)
         if ev["event"] in ("file-loaded", "end-file"):
             print(f"mpv: {ev['event']}", ev.get("reason", ""), flush=True)
@@ -93,9 +103,22 @@ def main():
 
     video = Mpv(video_extra, on_event=on_event, kiosk=True, name="video")
     audio = Mpv(extra, kiosk=False, name="audio")
+
+    # Escape opens the debug menu. In a window mpv sees the keys; on the panel
+    # (DRM, no window) they are read from the keyboard devices instead.
+    menu = DebugMenu(video, restart=lambda: video.command("quit"))
+    keyboard = None
+    if sys.platform.startswith("linux") and not args.windowed:
+        keyboard = keys.EvdevKeys(menu.on_key)
+        keyboard.start()
+    else:
+        for mpv_key, arg in keys.mpv_bindings():
+            video.command("keybind", mpv_key, f"script-message dbg-key {arg}")
     sounds = SoundPlayer(extra)
 
     def shutdown(*_):
+        if keyboard:
+            keyboard.stop()
         if sim:
             sim.stop()
         if game:
