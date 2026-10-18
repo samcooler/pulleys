@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 #include <string.h>
 #include <Arduino.h>
 #include <WiFi.h>
@@ -171,13 +172,16 @@ struct __attribute__((packed)) MeshCensus {
 
 // ── Cue ──────────────────────────────────────────────────────────────────────
 // The arbiter's game state machine fires cues (a sound, a clip) for the Pi to
-// play. A cue is two bytes, [folder, file]: positions in the game's cue table
-// (game_state_machine/GAME_FORMAT.md), so no name ever crosses the air. The
-// hash names the table those positions were counted against; a receiver whose
-// own table hashes differently must not trust them (lib/pulleys_cues).
+// play. A cue travels as its name, ASCII: "audio_once_chime". The packet is as
+// long as the name needs, not a fixed size -- nameLen says how many bytes of
+// name follow the header, and a receiver that got fewer (a relay running older
+// firmware that copies a fixed length would cut it short) drops the packet
+// rather than act on half a name.
 //
 // Flooded and deduped exactly like an EVENT -- same (originId, seq) key, same
 // TTL and burst -- because a lost cue is a missed sound.
+static constexpr uint8_t MESH_CUE_NAME_MAX = 47;
+
 struct __attribute__((packed)) MeshCue {
     uint8_t  magic0;      // 'P'
     uint8_t  magic1;      // 'M'
@@ -186,10 +190,12 @@ struct __attribute__((packed)) MeshCue {
     uint16_t originId;
     uint16_t seq;         // shares the origin's counter with its events
     uint8_t  ttl;         // remaining flood hops
-    uint8_t  folder;      // group's position in the cue table
-    uint8_t  file;        // cue's position within that group
-    uint16_t cfgHash;     // pulleys::cues_hash of the table
-};  // 13 bytes
+    uint8_t  nameLen;     // bytes of name that follow, 1..MESH_CUE_NAME_MAX
+    char     name[MESH_CUE_NAME_MAX + 1];   // NUL-terminated here; not sent on the wire
+};  // 10 bytes of header, then nameLen bytes of name
+
+static constexpr size_t MESH_CUE_HEADER = offsetof(MeshCue, name);
+inline size_t mesh_cue_wire_size(const MeshCue& c) { return MESH_CUE_HEADER + c.nameLen; }
 
 // Every node beacons, so this is also the presence signal for roles that emit
 // no events of their own: without it a Screen is invisible to a monitor.
@@ -392,10 +398,15 @@ static void onRecv(const uint8_t* /*mac*/, const uint8_t* data, int len) {
     }
 
     if (data[2] == MESH_MSG_CUE) {
-        if (len < (int)sizeof(MeshCue)) { st.statBadMagic++; return; }
+        if (len < (int)MESH_CUE_HEADER + 1) { st.statBadMagic++; return; }
+        uint8_t nameLen = data[MESH_CUE_HEADER - 1];
+        if (nameLen == 0 || nameLen > MESH_CUE_NAME_MAX ||
+            len < (int)(MESH_CUE_HEADER + nameLen)) { st.statBadMagic++; return; }
         uint8_t ch = (st.cueHead + 1) & 3;
         if (ch != st.cueTail) {
-            memcpy(&st.cueRx[st.cueHead], data, sizeof(MeshCue));
+            MeshCue& slot = st.cueRx[st.cueHead];
+            memset(&slot, 0, sizeof(slot));
+            memcpy(&slot, data, MESH_CUE_HEADER + nameLen);   // name stays NUL-terminated
             st.cueHead = ch;
         }
         return;
@@ -549,10 +560,14 @@ inline void mesh_send_ota_ready(const char* env, const uint8_t ip[4], uint8_t st
 inline void mesh_on_hello(MeshHelloCb cb)   { _mesh::S().helloCb  = cb; }
 inline void mesh_on_census(MeshCensusCb cb) { _mesh::S().censusCb = cb; }
 
-// Cues. Only the bridge needs to hear them; every role still relays them.
+// Cues. Only the bridge needs to hear them; every role still relays them. The
+// name in the callback's MeshCue is NUL-terminated and not otherwise checked.
 inline void mesh_on_cue(MeshCueCb cb) { _mesh::S().cueCb = cb; }
 
-inline void mesh_send_cue(uint8_t folder, uint8_t file, uint16_t cfgHash) {
+// False if the name is empty or too long to send.
+inline bool mesh_send_cue(const char* name) {
+    size_t n = name ? strlen(name) : 0;
+    if (n == 0 || n > MESH_CUE_NAME_MAX) return false;
     MeshCue c = {};
     c.magic0     = 'P';
     c.magic1     = 'M';
@@ -562,12 +577,12 @@ inline void mesh_send_cue(uint8_t folder, uint8_t file, uint16_t cfgHash) {
     c.originId   = st.originId;
     c.seq        = ++st.seqCounter;
     c.ttl        = MESH_TTL_START;
-    c.folder     = folder;
-    c.file       = file;
-    c.cfgHash    = cfgHash;
+    c.nameLen    = (uint8_t)n;
+    memcpy(c.name, name, n);
 
     _mesh::markSeen(_mesh::keyOf(c.originId, c.seq));   // don't relay our own echo
     _mesh::enqueueCue(c, MESH_BURST, MESH_BURST_GAP, 0);
+    return true;
 }
 
 inline uint16_t mesh_send_hello(uint16_t spreadMs) {
@@ -718,7 +733,7 @@ inline void mesh_poll() {
     for (uint8_t i = 0; i < 8; i++) {
         _mesh::CueSlot& s = st.cueOut[i];
         if (!s.used || now < s.dueMs) continue;
-        esp_err_t e = esp_now_send(_mesh::BCAST, (const uint8_t*)&s.cue, sizeof(MeshCue));
+        esp_err_t e = esp_now_send(_mesh::BCAST, (const uint8_t*)&s.cue, mesh_cue_wire_size(s.cue));
         st.statSent++;
         if (e != ESP_OK) st.statSendErr++;
         if (--s.left == 0) s.used = false;

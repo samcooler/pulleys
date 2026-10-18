@@ -19,6 +19,7 @@ the POST. Needs the python package `pyyaml`.
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -49,24 +50,24 @@ def load_config(path):
         return fix_keys(yaml.safe_load(f))
 
 
-def cue_hash(cfg):
-    """16-bit fingerprint of the cue table, carried in every cue packet so a
-    receiver can tell its table from the sender's. FNV-1a over each group name
-    (then 0x01) and each cue name (then 0x00), in file order, folded to 16 bits.
-    lib/pulleys_cues implements the same thing for the boards."""
-    h = 2166136261
+# What a cue name may be: it is sent over ESP-NOW as ASCII and the bridge writes
+# it into a line on the Pi link, so only plain characters are allowed.
+# CUE_NAME_MAX matches MESH_CUE_NAME_MAX in lib/pulleys_mesh.
+CUE_NAME_MAX = 47
+CUE_NAME = re.compile(r"[a-z0-9_-]{1,%d}" % CUE_NAME_MAX)
 
-    def add(text, sep):
-        nonlocal h
-        for b in text.encode() + bytes([sep]):
-            h = ((h ^ b) * 16777619) & 0xFFFFFFFF
-
-    for group, cues in (cfg["cues"] or {}).items():
-        add(group, 1)
-        for cue in cues or []:
-            add(cue, 0)
-    return ((h >> 16) ^ h) & 0xFFFF
-
+# Every event something emits. A state listing any other name would never fire.
+# Keep in step with src/arbiter_mesh/gameevents.h and overlord/game.py.
+KNOWN_EVENTS = {
+    "first_component_activated",
+    "component_activated",
+    "component_deactivated",
+    "all_components_activated",
+    "all_components_deactivated",
+    "final_component_activated",
+    "final_component_deactivated",
+    "all_final_components_activated",
+}
 
 # Sections only overlord reads; the arbiter's JSON leaves them out.
 OVERLORD_ONLY = ("ambient_sounds",)
@@ -90,13 +91,12 @@ def validate(cfg):
     states = cfg["states"] or {}
     known_cues = {c for group in (cfg["cues"] or {}).values() for c in group}
 
-    # A cue is sent as [folder, file], one byte each (GAME_FORMAT.md).
-    groups = cfg["cues"] or {}
-    if len(groups) > 256:
-        errors.append(f"cues: {len(groups)} groups; the folder index is one byte (max 256)")
-    for group, cues in groups.items():
-        if len(cues or []) > 256:
-            errors.append(f"cues.{group}: {len(cues)} cues; the file index is one byte (max 256)")
+    # A cue crosses the air as its name in ASCII, in one packet (GAME_FORMAT.md).
+    for group, cues in (cfg["cues"] or {}).items():
+        for cue in cues or []:
+            if not isinstance(cue, str) or not CUE_NAME.fullmatch(cue):
+                errors.append(f"cues.{group}: '{cue}' must be 1-{CUE_NAME_MAX} characters of "
+                              "lowercase letters, digits, _ and -")
 
     def check_cues(where, cues):
         for cue in cues or []:
@@ -133,6 +133,11 @@ def validate(cfg):
         state = state or {}
         check_cues(f"{name}.on_enter_cue", state.get("on_enter_cue"))
         for event, action in (state.get("on") or {}).items():
+            if event not in KNOWN_EVENTS:
+                errors.append(f"{name}.on.{event}: not an event anything sends")
+            if action is not None and not isinstance(action, dict):
+                errors.append(f"{name}.on.{event}: must be a map with cue and/or goto")
+                continue
             action = action or {}
             check_cues(f"{name}.on.{event}", action.get("cue"))
             if "goto" in action:
@@ -186,7 +191,7 @@ def main():
     out = args.output or os.path.splitext(args.config)[0] + ".json"
     with open(out, "w") as f:
         f.write(body + "\n")
-    print(f"wrote {out} ({len(body)} bytes, cue hash {cue_hash(cfg):04X})")
+    print(f"wrote {out} ({len(body)} bytes)")
 
     if args.post:
         post(args.post, body)

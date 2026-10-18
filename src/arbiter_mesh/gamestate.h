@@ -11,8 +11,8 @@
 // moving to another state. It mirrors overlord/game.py, which does the same on
 // the Pi.
 //
-// A cue it fires leaves as a MeshCue (pulleys_mesh.h) for the bridge to hand
-// to the Pi. A config is adopted whole: loading one restarts the game at its
+// A cue it fires leaves as a MeshCue (pulleys_mesh.h), its name as ASCII, for
+// the bridge to hand to the Pi. A config is adopted whole: loading one restarts the game at its
 // `start` state with no timers carried over, and nothing is remembered across
 // a reboot -- the machine always begins at `start`.
 //
@@ -29,7 +29,6 @@ void gamestate_tick();                 // every loop: the `after` timer
 bool        gamestate_ready();         // a config is loaded
 const char* gamestate_game();          // its `game` field
 const char* gamestate_state();         // current state name
-uint16_t    gamestate_cue_hash();      // fingerprint of the cue table in force
 
 uint32_t    gamestate_state_age_ms();      // time in the current state
 int32_t     gamestate_timer_left_ms();     // until `after` fires; -1 if none

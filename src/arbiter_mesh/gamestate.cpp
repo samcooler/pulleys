@@ -1,7 +1,6 @@
 #include "gamestate.h"
 #include <ArduinoJson.h>
 #include <pulleys_mesh.h>
-#include <pulleys_cues.h>
 #include <utility>
 
 #define GAME_PREFIX "  [GAME]"
@@ -12,7 +11,6 @@ static JsonDocument s_doc;
 static bool         s_ready = false;
 static char         s_game[48]  = "";
 static char         s_state[32] = "";
-static uint16_t     s_hash = 0;
 static uint32_t     s_enteredAt = 0;
 
 static bool     s_timerOn = false;
@@ -50,34 +48,13 @@ static bool parseDelay(const char* text, uint32_t& ms) {
     return false;
 }
 
-// Where a cue sits in the table: folder = its group's position, file = its
-// position inside the group, both from 0 (the cue index in GAME_FORMAT.md).
-static bool findCue(JsonDocument& doc, const char* name, uint8_t& folder, uint8_t& file) {
-    uint16_t g = 0;
-    for (JsonPair group : doc["cues"].as<JsonObject>()) {
-        uint16_t f = 0;
-        for (JsonVariant cue : group.value().as<JsonArray>()) {
-            if (strcmp(cue.as<const char*>(), name) == 0) {
-                if (g > 255 || f > 255) return false;
-                folder = (uint8_t)g;
-                file   = (uint8_t)f;
-                return true;
-            }
-            f++;
-        }
-        g++;
-    }
-    return false;
-}
-
-static uint16_t hashOf(JsonDocument& doc) {
-    uint32_t h = pulleys::cues_hash_begin();
-    for (JsonPair group : doc["cues"].as<JsonObject>()) {
-        h = pulleys::cues_hash_add(h, group.key().c_str(), 1);
+// Is this cue named under `cues`? Cues are sent by name, so that list is only a
+// check that a state does not fire something the media was never made for.
+static bool isListed(JsonDocument& doc, const char* name) {
+    for (JsonPair group : doc["cues"].as<JsonObject>())
         for (JsonVariant cue : group.value().as<JsonArray>())
-            h = pulleys::cues_hash_add(h, cue.as<const char*>(), 0);
-    }
-    return pulleys::cues_hash_end(h);
+            if (strcmp(cue.as<const char*>(), name) == 0) return true;
+    return false;
 }
 
 // Is this a game the machine can run? Mirrors tools/game_to_json.py, because
@@ -89,12 +66,16 @@ static bool validate(JsonDocument& doc, String& why) {
     JsonObject cues   = doc["cues"].as<JsonObject>();
     if (states.isNull() || states.size() == 0) { why = "missing 'states'"; return false; }
     if (cues.isNull())                         { why = "missing 'cues'";   return false; }
-    if (cues.size() > 256) { why = "more than 256 cue groups"; return false; }
 
+    // A cue goes out on the air as its name, so the name has to fit a packet.
     for (JsonPair group : cues) {
-        if (group.value().as<JsonArray>().size() > 256) {
-            why = String("cues.") + group.key().c_str() + ": more than 256 cues";
-            return false;
+        for (JsonVariant cue : group.value().as<JsonArray>()) {
+            const char* n = cue.as<const char*>();
+            if (!n || !*n || strlen(n) > pulleys::MESH_CUE_NAME_MAX) {
+                why = String("cues.") + group.key().c_str() + ": a cue name is empty or longer than " +
+                      pulleys::MESH_CUE_NAME_MAX + " characters";
+                return false;
+            }
         }
     }
 
@@ -104,9 +85,8 @@ static bool validate(JsonDocument& doc, String& why) {
     }
 
     auto badCues = [&](const String& where, JsonVariant list) {
-        uint8_t fo, fi;
         for (JsonVariant c : list.as<JsonArray>()) {
-            if (!c.is<const char*>() || !findCue(doc, c.as<const char*>(), fo, fi)) {
+            if (!c.is<const char*>() || !isListed(doc, c.as<const char*>())) {
                 why = where + ": cue '" + (c.is<const char*>() ? c.as<const char*>() : "?") +
                       "' is not listed under cues";
                 return true;
@@ -128,6 +108,10 @@ static bool validate(JsonDocument& doc, String& why) {
         if (badCues(name + ".on_enter_cue", state["on_enter_cue"])) return false;
         for (JsonPair ev : state["on"].as<JsonObject>()) {
             String where = name + ".on." + ev.key().c_str();
+            if (!ev.value().isNull() && !ev.value().is<JsonObject>()) {
+                why = where + ": must be a map with cue and/or goto";
+                return false;
+            }
             if (badCues(where, ev.value()["cue"])) return false;
             if (!ev.value()["goto"].isNull() &&
                 badGoto(where, ev.value()["goto"].as<const char*>())) return false;
@@ -150,9 +134,7 @@ static bool validate(JsonDocument& doc, String& why) {
 static void fire(JsonVariant cues) {
     for (JsonVariant c : cues.as<JsonArray>()) {
         const char* name = c.as<const char*>();
-        uint8_t folder, file;
-        if (!findCue(s_doc, name, folder, file)) continue;   // validated on load
-        pulleys::mesh_send_cue(folder, file, s_hash);
+        if (!pulleys::mesh_send_cue(name)) continue;   // validated on load
         record('C', "%s", name);
     }
 }
@@ -188,11 +170,10 @@ bool gamestate_load(const String& json, String& why) {
 
     s_doc = std::move(next);
     s_ready = true;
-    s_hash = hashOf(s_doc);
     strlcpy(s_game, s_doc["game"].as<const char*>(), sizeof(s_game));
     s_state[0] = 0;
     s_timerOn = false;
-    Serial.printf(GAME_PREFIX " loaded '%s' (cue hash %04X)\n", s_game, s_hash);
+    Serial.printf(GAME_PREFIX " loaded '%s'\n", s_game);
     enter(s_doc["start"].as<const char*>());
     return true;
 }
@@ -225,7 +206,6 @@ void gamestate_tick() {
 bool        gamestate_ready()  { return s_ready; }
 const char* gamestate_game()   { return s_game; }
 const char* gamestate_state()  { return s_state; }
-uint16_t    gamestate_cue_hash() { return s_hash; }
 
 uint32_t gamestate_state_age_ms() { return millis() - s_enteredAt; }
 

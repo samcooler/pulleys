@@ -51,6 +51,7 @@ void components_on_mesh_event(const pulleys::MeshEvent& ev) {
     uint32_t now = millis();
     Component& c = s_comp[idx];
     bool wasLit = lit(c, now);
+    bool noneLit = !anyLit(c.isFinal, now);   // before this pull lights anything
     c.litUntil = now + WEAR_MS;
     if (wasLit) return;   // a refill is not a new activation
 
@@ -58,6 +59,9 @@ void components_on_mesh_event(const pulleys::MeshEvent& ev) {
         gamestate_event(GE_FINAL_COMPONENT_ACTIVATED);
         if (allLit(true, now)) gamestate_event(GE_ALL_FINAL_COMPONENTS_ACTIVATED);
     } else {
+        // "First" is about the room, not the state: the first major to light
+        // while every major was dark. It goes out just before the plain event.
+        if (noneLit) gamestate_event(GE_FIRST_COMPONENT_ACTIVATED);
         gamestate_event(GE_COMPONENT_ACTIVATED);
         if (allLit(false, now)) gamestate_event(GE_ALL_COMPONENTS_ACTIVATED);
     }

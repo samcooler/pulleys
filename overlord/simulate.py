@@ -119,6 +119,7 @@ class Simulator:
         with self._lock:
             now = time.monotonic()
             was_lit = comp.lit(now)
+            none_lit = not any(c.lit(now) for c in self.majors)  # before this key lights one
             comp.lit_until = now + WEAR
             if not was_lit:
                 print(f"simulate: component {key} lit", flush=True)
@@ -127,6 +128,8 @@ class Simulator:
                     if all(c.lit(now) for c in self.finals):
                         events.append("all_final_components_activated")
                 else:
+                    if none_lit:
+                        events.append("first_component_activated")
                     events.append("component_activated")
                     if all(c.lit(now) for c in self.majors):
                         events.append("all_components_activated")

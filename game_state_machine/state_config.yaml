@@ -10,6 +10,7 @@
 #                  video_loop_*  background video; repeats until changed
 #                  video_once_*  a short video that plays once on screen
 #   event        Something that happens in the world, which a state can react to:
+#                  first_component_activated   A major component is activated while none of them were.
 #                  component_activated         One of the major components is activated.
 #                  component_deactivated       One of the major components is deactivated.
 #                  all_components_activated    Every major component is now activated.
@@ -39,17 +40,11 @@ ambient_sounds:
     interval: 5
     variance: 1
 
-# CUE INDEX
-#   Cues travel over the mesh as two bytes, [folder, file], so the packet never
-#   carries a name. Both are positions in this block, counting from 0:
-#     folder  the group's place among the groups below.
-#               audio_loop = 0, video_once = 1, audio_once = 2, video_loop = 3
-#     file    the cue's place within its group, in the order written.
-#               audio_once_chime is folder 2, file 1 -> bytes [2, 1]
-#   Order is therefore part of the protocol. Add new groups at the end and new
-#   cues at the end of their group. Reordering or deleting an entry changes
-#   the index of everything after it, and every board and the Pi must be
-#   running the same config to agree. Each count must stay under 256.
+# CUES
+#   Cues travel over the mesh as their name in ASCII, e.g. audio_once_chime,
+#   so a name has to fit one packet: 1 to 47 characters, lowercase letters,
+#   digits, _ and -. This block lists every cue the game may use; a state that
+#   fires a cue not listed here is rejected. Order does not matter.
 cues:
   audio_loop:
     - audio_loop_idle
@@ -65,6 +60,7 @@ cues:
     - audio_once_steam
     - audio_once_component_powerup  # placeholder
     - audio_once_component_powerdown  # placeholder
+    - audio_once_encouragement
   video_loop:
     - video_loop_idle
 
@@ -84,10 +80,13 @@ states:
 
   game1:
     on:
+      first_component_activated:
+        cue:
+          - audio_once_encouragement
+          - video_once_encouragement
       component_activated:
         cue:
           - audio_once_component_powerup
-          - video_once_encouragement
       component_deactivated:
         cue:
           - audio_once_component_powerdown

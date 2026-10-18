@@ -17,7 +17,7 @@
 //   DELETE /config   forget the stored game and go back to the built-in one.
 //   POST   /event    inject a game event, as if the sensors had caused it:
 //                    body `component_activated` or `name=component_activated`.
-//   GET    /state    one line of JSON: game, state, time in state, cue hash.
+//   GET    /state    one line of JSON: game, state, time in state, timer left.
 //
 // The endpoints live on a SoftAP raised on MESH_WIFI_CHANNEL, so ESP-NOW keeps
 // working underneath it (the same trick lib/pulleys_ota plays). Join

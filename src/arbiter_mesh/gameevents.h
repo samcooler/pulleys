@@ -11,6 +11,7 @@
 // the game config (GAME_FORMAT.md).
 
 enum GameEvent : uint8_t {
+    GE_FIRST_COMPONENT_ACTIVATED,
     GE_COMPONENT_ACTIVATED,
     GE_COMPONENT_DEACTIVATED,
     GE_ALL_COMPONENTS_ACTIVATED,
@@ -23,6 +24,7 @@ enum GameEvent : uint8_t {
 
 inline const char* gameevent_name(GameEvent e) {
     static const char* const names[GE_COUNT] = {
+        "first_component_activated",
         "component_activated",
         "component_deactivated",
         "all_components_activated",

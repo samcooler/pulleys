@@ -16,6 +16,7 @@ DEFAULT_GAME = Path(__file__).resolve().parent.parent / "game_state_machine" / "
 
 # Every event the event sources may send. A state that does not list one ignores it.
 GAME_EVENTS = {
+    "first_component_activated",
     "component_activated",
     "component_deactivated",
     "all_components_activated",

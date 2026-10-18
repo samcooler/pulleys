@@ -79,9 +79,9 @@ static void handleEvent() {
 static void handleState() {
     char out[160];
     snprintf(out, sizeof(out),
-             "{\"game\":\"%s\",\"state\":\"%s\",\"ageMs\":%lu,\"timerLeftMs\":%ld,\"cueHash\":\"%04X\"}",
+             "{\"game\":\"%s\",\"state\":\"%s\",\"ageMs\":%lu,\"timerLeftMs\":%ld}",
              gamestate_game(), gamestate_state(), (unsigned long)gamestate_state_age_ms(),
-             (long)gamestate_timer_left_ms(), gamestate_cue_hash());
+             (long)gamestate_timer_left_ms());
     s_server->send(200, "application/json", out);
 }
 

@@ -12,7 +12,7 @@ strings overlord already accepts (`video_once_test1`, `audio_once_chime`,
 | `game`   | Name, for logs                                       |
 | `start`  | State to enter at launch                             |
 | `ambient_sounds` | Sounds overlord repeats on a schedule (optional)    |
-| `cues`   | Every cue the game may use, grouped by type; order matters  |
+| `cues`   | Every cue the game may use, grouped by type                |
 | `states` | The state machine                                    |
 
 ```yaml
@@ -28,11 +28,10 @@ cues:
     - video_once_test1
 ```
 
-A cue goes over the mesh as two bytes, `[folder, file]`: the group's position
-among the groups, then the cue's position within its group, both counted from 0
-(`audio_once_chime` above is `[2, 1]` in the example config). So order is part of
-the protocol: add groups and cues at the end, never reorder or delete, and keep
-every count under 256.
+A cue goes over the mesh as its name in ASCII (`audio_once_chime`), so a name has
+to fit one packet: 1 to 47 characters of lowercase letters, digits, `_` and `-`.
+The list is checked, not numbered: a state may only fire cues listed here, and
+the order does not matter.
 
 The file in `overlord/media/<folder>/` is named after the cue (`audio_once_chime.mp3`;
 the name without its prefix, `chime.mp3`, also works). A future script may validate this
@@ -77,7 +76,9 @@ states:
       goto: other_state
 ```
 
-- Events used so far: `component_activated` and `component_deactivated` (any
+- Events used so far: `first_component_activated` (a major component lit while
+  none of them were; it comes just before `component_activated` for the same
+  pull), `component_activated` and `component_deactivated` (any
   major component), `all_components_activated` and `all_components_deactivated`,
   `final_component_activated`, `final_component_deactivated` and
   `all_final_components_activated`. The event source decides when they fire.
