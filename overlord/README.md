@@ -353,6 +353,28 @@ Behaviour details:
   `idle.wav`). To start on the ambient track, rename it to `idle.mp3` and remove
   `idle.wav`.
 
+## Control API
+
+A small REST API runs inside overlord, for controlling it from an SSH session
+without the debug menu. It listens on `127.0.0.1:8080`, so it is reachable from
+the machine itself and nothing else.
+
+```sh
+curl localhost:8080/status                     # volume, loops, game state
+curl localhost:8080/volume                     # {"volume": 70}
+curl -X POST localhost:8080/volume/80          # set it
+curl -X POST localhost:8080/volume/+10         # nudge it (also /volume/-10)
+curl -X POST localhost:8080/cue/audio_once_chime   # play a cue now
+```
+
+Volume is 0-100, applied live and remembered across restarts like the menu's.
+Answers are JSON; an error comes back as `{"error": ...}` with a 4xx status. The
+API has no authentication, which is why it stays on localhost. To reach it from
+another machine anyway, pass `--control-bind 0.0.0.0` (in `OVERLORD_ARGS` in
+`/etc/overlord.env`) and keep it off networks you don't trust. `--control-port N`
+moves it and `--control-port 0` turns it off. If the port is taken overlord logs
+that and carries on without the API.
+
 ## Media
 
 ```
@@ -405,6 +427,7 @@ remote needs the same folder names.
 - `mpv_ipc.py` - `Mpv` drives one mpv over its JSON IPC socket (fullscreen kiosk, or headless audio with `kiosk=False`); `SoundPlayer` spawns one throwaway mpv per sound effect.
 - `serial_reader.py` - line-based event source: serial port (auto-reconnects) or, with `--test`, the Unix socket.
 - `send.sh` - sends trigger events to the test socket.
+- `control.py` - the REST control API server; the routes themselves are `control()` in `overlord.py`.
 - `game.py` - `--game`: loads a state machine YAML, runs its timers, fires cues through `dispatch`.
 - `simulate.py` - `--simulate`: keys 1-8 as stand-in components, plus the charge overlay (mpv `osd-overlay`). Imported only when enabled.
 

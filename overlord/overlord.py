@@ -27,6 +27,7 @@ import keys
 import settings
 from debug_menu import DebugMenu
 from mpv_ipc import Mpv, MpvError, SoundPlayer
+from control import ControlServer
 from serial_reader import SerialReader
 
 # On the Pi, media is synced into a directory outside the git checkout (see deploy/).
@@ -57,6 +58,11 @@ def main():
     ap.add_argument("--test", action="store_true",
                     help="test mode: listen on $OVERLORD_SOCK (default /tmp/overlord.sock)")
     ap.add_argument("--serial-port", help="explicit serial port path")
+    ap.add_argument("--control-port", type=int, default=8080,
+                    help="port for the REST control API (0 = off; default 8080)")
+    ap.add_argument("--control-bind", default="127.0.0.1",
+                    help="address the control API listens on; it has no authentication,\n"
+                         "so the default is this machine only (use 0.0.0.0 for the network)")
     ap.add_argument("--game", nargs="?", const="", metavar="YAML",
                     help="run a game state machine (default: game_state_machine/state_config.yaml)")
     ap.add_argument("--simulate", action="store_true",
@@ -210,13 +216,46 @@ def main():
         return False
 
     def fire_cue(cue):
+        """Play one cue; True if it played."""
         try:
             if dispatch(cue):
                 print(f"cue: {cue}", flush=True)
-            else:
-                print(f"cue not played: {cue}", flush=True)
+                return True
+            print(f"cue not played: {cue}", flush=True)
         except MpvError as e:
             print(f"cue {cue} failed: {e}", flush=True)
+        return False
+
+    def control(method, parts):
+        """The REST API (control.py). Returns (http status, body)."""
+        if parts == ["status"] and method == "GET":
+            return 200, {
+                "volume": volume[0],
+                "video_loop": state["video_loop"].name if state["video_loop"] else None,
+                "audio_loop": state["audio_loop"].name if state["audio_loop"] else None,
+                "playing_clip": state["playing_clip"],
+                "game_state": game.state if game else None,
+            }
+        if parts[:1] == ["volume"]:
+            if parts == ["volume"] and method == "GET":
+                return 200, {"volume": volume[0]}
+            if len(parts) == 2 and method in ("POST", "PUT"):
+                text = parts[1]
+                try:
+                    # "80" sets it; "+10" and "-10" move it from where it is.
+                    level = int(text) + (volume[0] if text[:1] in "+-" else 0)
+                except ValueError:
+                    return 400, {"error": f"volume must look like 80, +10 or -10, not {text!r}"}
+                set_volume(level)
+                print(f"volume: {volume[0]}%", flush=True)
+                return 200, {"volume": volume[0]}
+        if len(parts) == 2 and parts[0] == "cue" and method in ("POST", "PUT"):
+            if fire_cue(parts[1]):
+                return 200, {"cue": parts[1]}
+            return 404, {"error": f"cue not played: {parts[1]} (see the log)"}
+        return 404, {"error": "no such route",
+                     "routes": ["GET /status", "GET /volume", "POST /volume/<80|+10|-10>",
+                                "POST /cue/<name>"]}
 
     def on_serial_event(event_name):
         event_name = event_name.strip()
@@ -248,6 +287,16 @@ def main():
     )
     serial.start()
 
+    api = None
+    if args.control_port:
+        try:
+            api = ControlServer(control, args.control_bind, args.control_port)
+            api.start()
+            print(f"control: http://{api.address[0]}:{api.address[1]}/status", flush=True)
+        except OSError as e:  # the player matters more than its remote control
+            print(f"control: could not listen on {args.control_bind}:{args.control_port}: {e}",
+                  flush=True)
+
     try:
         if state["audio_loop"]:
             audio.play(state["audio_loop"], loop=True)
@@ -265,6 +314,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if api:
+            api.stop()
         serial.stop()
         shutdown()
 
