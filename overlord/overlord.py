@@ -85,6 +85,7 @@ def main():
         video_extra += sim.mpv_args()
 
     menu = None  # set once the video player exists
+    just_loaded = [False]  # a playback-restart straight after file-loaded is the start, not a loop
 
     def on_event(ev):
         args = ev.get("args") or []
@@ -94,6 +95,16 @@ def main():
             sim.on_mpv_event(ev)
         if ev["event"] in ("file-loaded", "end-file"):
             print(f"mpv: {ev['event']}", ev.get("reason", ""), flush=True)
+
+        # A looping file never ends or reloads, so the only sign of a new pass is
+        # playback-restart. It also follows every file-loaded; that one is not a loop.
+        if ev["event"] == "file-loaded":
+            just_loaded[0] = True
+        elif ev["event"] == "playback-restart":
+            if just_loaded[0]:
+                just_loaded[0] = False
+            else:
+                print("video: loop", flush=True)
 
         # Only a natural end counts: "stop" also fires when a clip replaces the loop.
         if ev["event"] == "end-file" and ev.get("reason") == "eof":
@@ -192,7 +203,9 @@ def main():
 
     def fire_cue(cue):
         try:
-            if not dispatch(cue):
+            if dispatch(cue):
+                print(f"cue: {cue}", flush=True)
+            else:
                 print(f"cue not played: {cue}", flush=True)
         except MpvError as e:
             print(f"cue {cue} failed: {e}", flush=True)

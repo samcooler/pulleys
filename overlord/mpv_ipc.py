@@ -22,6 +22,10 @@ KIOSK_ARGS = [
     "--cursor-autohide=always",
     "--hwdec=auto-safe",
     "--background-color=#000000",
+    # mpv's own terminal output is a progress line redrawn every frame plus a
+    # banner per file. Keep warnings and errors; overlord logs what matters.
+    "--term-status-msg=",
+    "--msg-level=all=warn",
 ]
 
 
