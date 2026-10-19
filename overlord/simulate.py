@@ -1,8 +1,8 @@
 """Simulator: stand-in for the real components, driven from the keyboard.
 
 Keys 1-5 light a major component, each in its own colour, and keys 6-8 light
-the final components, all purple. A lit component wears out after WEAR
-seconds; pressing its key again refills it. Lighting and wearing out send the same game events the
+the final components, all purple. A lit component wears out after
+100 / default_decay_rate seconds (the game config's rate, 15 s in the example); pressing its key again refills it. Lighting and wearing out send the same game events the
 real hardware will, and an overlay on the bottom half of the video shows each
 component's remaining charge as a bar.
 
@@ -14,14 +14,13 @@ import tempfile
 import threading
 import time
 
-WEAR = 15.0  # seconds a component stays lit
 FPS = 10
 
 # (key, colour as RRGGBB)
 MAJOR = [
     ("1", "FF3B30"),  # red
     ("2", "FF9500"),  # orange
-    ("3", "FFCC00"),  # yellow
+    ("3", "FF1493"),  # hot pink
     ("4", "34C759"),  # green
     ("5", "0A84FF"),  # blue
 ]
@@ -55,14 +54,15 @@ def ass_text(x, y, text, size, color="FFFFFF", align=7):
 
 
 class Component:
-    def __init__(self, key, color, final):
+    def __init__(self, key, color, final, wear):
+        self.wear = wear  # seconds a pull keeps it lit
         self.key = key
         self.color = color
         self.final = final
         self.lit_until = 0.0
 
     def charge(self, now):
-        return max(0.0, min(1.0, (self.lit_until - now) / WEAR))
+        return max(0.0, min(1.0, (self.lit_until - now) / self.wear))
 
     def lit(self, now):
         return self.lit_until > now
@@ -74,8 +74,9 @@ class Simulator:
         self.game = game
         self.send_event = send_event
         self.video = None
-        self.majors = [Component(k, c, False) for k, c in MAJOR]
-        self.finals = [Component(k, FINAL_COLOR, True) for k in FINAL_KEYS]
+        wear = 100.0 / game.decay_rate  # seconds a pull keeps a component lit
+        self.majors = [Component(k, c, False, wear) for k, c in MAJOR]
+        self.finals = [Component(k, FINAL_COLOR, True, wear) for k in FINAL_KEYS]
         self.by_key = {c.key: c for c in self.majors + self.finals}
         self._lock = threading.Lock()
         self._running = False
@@ -120,7 +121,7 @@ class Simulator:
             now = time.monotonic()
             was_lit = comp.lit(now)
             none_lit = not any(c.lit(now) for c in self.majors)  # before this key lights one
-            comp.lit_until = now + WEAR
+            comp.lit_until = now + comp.wear
             if not was_lit:
                 print(f"simulate: component {key} lit", flush=True)
                 if comp.final:

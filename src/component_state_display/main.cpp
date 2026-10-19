@@ -57,7 +57,7 @@ static_assert(LED_COUNT >= pulleys::COMPONENT_DISPLAY_WIDTH * pulleys::COMPONENT
 // The simulator's colours (overlord/simulate.py), so a bar and the keyboard
 // stand-in for its component agree.
 static const CRGB BAR_COLOR[pulleys::COMPONENT_DISPLAY_BARS] = {
-    0xFF3B30, 0xFF9500, 0xFFCC00, 0x34C759, 0x0A84FF,   // major components 1-5
+    0xFF3B30, 0xFF9500, 0xFF1493, 0x34C759, 0x0A84FF,   // major components 1-5
     0xAF52DE, 0xAF52DE, 0xAF52DE,                       // final components 1-3
 };
 
@@ -65,8 +65,8 @@ static CRGB leds[LED_COUNT];
 static pulleys::ComponentDisplayModel model;
 
 static void onComponents(const pulleys::MeshComponents& c, bool relayed) {
-    pulleys::component_display_update(model, c.charge, c.wearMs, millis());
-    Serial.printf("★ components%s:", relayed ? " (relayed)" : "");
+    pulleys::component_display_update(model, c.charge, c.decay, millis());
+    Serial.printf("★ components%s (%.3f%%/s):", relayed ? " (relayed)" : "", c.decay / 1000.0f);
     for (uint8_t i = 0; i < pulleys::COMPONENT_DISPLAY_BARS; i++) Serial.printf(" %3u", c.charge[i]);
     Serial.println();
 }
@@ -124,9 +124,9 @@ static void handleSerial() {
                 if (bar >= 0 && bar < pulleys::COMPONENT_DISPLAY_BARS) {
                     uint8_t charge[pulleys::COMPONENT_DISPLAY_BARS];
                     for (uint8_t i = 0; i < pulleys::COMPONENT_DISPLAY_BARS; i++)
-                        charge[i] = pulleys::component_display_target(model, i, millis()) * 255.0f;
-                    charge[bar] = (uint8_t)(constrain(pct, 0, 100) * 255 / 100);
-                    pulleys::component_display_update(model, charge, model.wearMs, millis());
+                        charge[i] = (uint8_t)(pulleys::component_display_target(model, i, millis()) * 100.0f + 0.5f);
+                    charge[bar] = (uint8_t)constrain(pct, 0, 100);
+                    pulleys::component_display_update(model, charge, model.decay, millis());
                 }
             }
         } else if (len < sizeof(buf) - 1) {

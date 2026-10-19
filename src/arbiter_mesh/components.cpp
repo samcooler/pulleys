@@ -2,21 +2,23 @@
 #include "gamestate.h"
 #include <Arduino.h>
 
-static const uint32_t WEAR_MS = 15000;  // how long a pull keeps a component lit
 static const uint32_t HEARTBEAT_MS = 1000;   // how often the charge is republished
 
-static const uint8_t MAJOR_COUNT = 5, FINAL_COUNT = 3;
+// A pull sets a component to 100% and it drains at the game's default_decay_rate
+// (percent per second), so it stays lit 100 / rate seconds.
+static uint32_t wearMsNow() {
+    return (uint32_t)(100000.0f / gamestate_decay_rate());
+}
 
-// The rope channel that drives each component: five majors, then three finals.
-// Major component 1 is on channel 10.
-static const uint8_t CHANNEL_OF[MAJOR_COUNT + FINAL_COUNT] = {
-    10, 2, 3, 4, 5,    // major components 1-5
-    6, 7, 8,           // final components 1-3
-};
+static const uint8_t MAJOR_COUNT = GAME_MAJOR_COMPONENTS, FINAL_COUNT = GAME_FINAL_COMPONENTS;
+
+// Which rope channel drives which component is the game config's `components`
+// section (gamestate_component_for_channel), not decided here.
 
 struct Component {
     bool     isFinal;
     uint32_t litUntil;   // 0 = dark
+    uint32_t wearMs;     // how long this pull will keep it lit: its own, so a rate change mid-drain does not jump it
 };
 static Component s_comp[MAJOR_COUNT + FINAL_COUNT];
 
@@ -46,29 +48,33 @@ static void publish(bool urgent) {
     uint8_t charge[pulleys::MESH_COMPONENT_COUNT];
     for (uint8_t i = 0; i < pulleys::MESH_COMPONENT_COUNT; i++) {
         int32_t left = s_comp[i].litUntil ? (int32_t)(s_comp[i].litUntil - now) : 0;
-        charge[i] = left <= 0 ? 0 : (uint8_t)(left >= (int32_t)WEAR_MS ? 255 : left * 255UL / WEAR_MS);
+        uint32_t wear = s_comp[i].wearMs ? s_comp[i].wearMs : 1;
+        // Percent, rounded up so a component that is still lit never reads 0.
+        uint32_t pct = left <= 0 ? 0 : ((uint32_t)left * 100UL + wear - 1) / wear;
+        charge[i] = pct > 100 ? 100 : (uint8_t)pct;
     }
-    pulleys::mesh_send_components(charge, (uint16_t)WEAR_MS, urgent);
+    uint32_t decay = (uint32_t)(gamestate_decay_rate() * 1000.0f + 0.5f);   // thousandths of a percent per second
+    pulleys::mesh_send_components(charge, decay > 65535 ? 65535 : (uint16_t)decay, urgent);
 }
 
 void components_init() {
     for (uint8_t i = 0; i < MAJOR_COUNT + FINAL_COUNT; i++) {
         s_comp[i].isFinal  = i >= MAJOR_COUNT;
         s_comp[i].litUntil = 0;
+        s_comp[i].wearMs   = 0;
     }
 }
 
 void components_on_mesh_event(const pulleys::MeshEvent& ev) {
-    int idx = -1;
-    for (uint8_t i = 0; i < MAJOR_COUNT + FINAL_COUNT; i++)
-        if (CHANNEL_OF[i] == ev.channel) { idx = i; break; }
+    int idx = gamestate_component_for_channel(ev.channel);
     if (idx < 0) return;
 
     uint32_t now = millis();
     Component& c = s_comp[idx];
     bool wasLit = lit(c, now);
     bool noneLit = !anyLit(c.isFinal, now);   // before this pull lights anything
-    c.litUntil = now + WEAR_MS;
+    c.wearMs   = wearMsNow();
+    c.litUntil = now + c.wearMs;
     publish(true);        // lit, or topped back up: the display's bar goes to full
     if (wasLit) return;   // a refill is not a new activation
 

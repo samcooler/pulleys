@@ -204,10 +204,11 @@ inline size_t mesh_cue_wire_size(const MeshCue& c) { return MESH_CUE_HEADER + c.
 // component state display to draw. The arbiter owns the rules for when a component is lit and for
 // how long; this only publishes the result, so the display never repeats them.
 //
-// Index order is fixed: majors 1-5, then finals 1-3. charge is 255 the moment a
-// component is lit and drains to 0 in wearMs, so a receiver can keep draining
-// on its own between packets. The arbiter repeats the packet about once a
-// second, which also corrects a receiver that missed one.
+// Index order is fixed: majors 1-5, then finals 1-3. charge is a percentage,
+// 100 the moment a component is lit and 0 once it is dark, and `decay` is how
+// fast it drains, so a receiver can keep draining on its own between packets.
+// The arbiter repeats the packet about once a second, which also corrects a
+// receiver that missed one.
 //
 // Flooded and deduped like a cue, so a display out of the arbiter's direct range
 // still gets it.
@@ -221,8 +222,8 @@ struct __attribute__((packed)) MeshComponents {
     uint16_t originId;
     uint16_t seq;         // shares the origin's counter with its events
     uint8_t  ttl;         // remaining flood hops
-    uint16_t wearMs;      // how long a full charge takes to drain
-    uint8_t  charge[MESH_COMPONENT_COUNT];   // 0 = dark .. 255 = just lit
+    uint16_t decay;       // drain rate, in thousandths of a percent per second
+    uint8_t  charge[MESH_COMPONENT_COUNT];   // percent: 0 = dark .. 100 = just lit
 };  // 19 bytes
 
 // Every node beacons, so this is also the presence signal for roles that emit
@@ -652,7 +653,7 @@ inline void mesh_on_cue(MeshCueCb cb) { _mesh::S().cueCb = cb; }
 inline void mesh_on_components(MeshComponentsCb cb) { _mesh::S().componentsCb = cb; }
 
 inline void mesh_send_components(const uint8_t charge[MESH_COMPONENT_COUNT],
-                                 uint16_t wearMs, bool urgent) {
+                                 uint16_t decay, bool urgent) {
     MeshComponents c = {};
     c.magic0     = 'P';
     c.magic1     = 'M';
@@ -662,7 +663,7 @@ inline void mesh_send_components(const uint8_t charge[MESH_COMPONENT_COUNT],
     c.originId   = st.originId;
     c.seq        = ++st.seqCounter;
     c.ttl        = MESH_TTL_START;
-    c.wearMs     = wearMs;
+    c.decay      = decay;
     memcpy(c.charge, charge, MESH_COMPONENT_COUNT);
 
     _mesh::markSeen(_mesh::keyOf(c.originId, c.seq));   // don't relay our own echo

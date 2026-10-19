@@ -7,11 +7,18 @@
 
 static const uint32_t DEFAULT_DELAY_MS = 2 * 60 * 1000;   // GAME_FORMAT.md: 2m
 
+// default_decay_rate, when the config does not give one: a full charge lasts 15 s.
+// MAX is what the packet's 16 bits can carry (thousandths of a percent per second).
+static const float DEFAULT_DECAY_RATE = 100.0f / 15.0f;
+static const float MAX_DECAY_RATE = 65.0f;
+
 static JsonDocument s_doc;
 static bool         s_ready = false;
 static char         s_game[48]  = "";
 static char         s_state[32] = "";
 static uint32_t     s_enteredAt = 0;
+static float        s_decayRate = DEFAULT_DECAY_RATE;
+static int8_t       s_componentOf[16];   // rope channel -> component, -1 = none
 
 static bool     s_timerOn = false;
 static uint32_t s_timerAt = 0;
@@ -76,6 +83,42 @@ static bool validate(JsonDocument& doc, String& why) {
                       pulleys::MESH_CUE_NAME_MAX + " characters";
                 return false;
             }
+        }
+    }
+
+    // components: five majors then three finals, each on its own channel 0-15
+    JsonObject comps = doc["components"].as<JsonObject>();
+    if (comps.isNull()) { why = "missing 'components'"; return false; }
+    {
+        static const char* const kinds[2] = { "major", "final" };
+        const uint8_t counts[2] = { GAME_MAJOR_COMPONENTS, GAME_FINAL_COMPONENTS };
+        uint16_t used = 0;
+        for (uint8_t k = 0; k < 2; k++) {
+            JsonArray list = comps[kinds[k]].as<JsonArray>();
+            if (list.isNull() || list.size() != counts[k]) {
+                why = String("components.") + kinds[k] + " must list exactly " + counts[k] + " channels";
+                return false;
+            }
+            for (JsonVariant v : list) {
+                if (!v.is<int>() || v.as<int>() < 0 || v.as<int>() > 15) {
+                    why = String("components.") + kinds[k] + ": every entry must be a channel, 0-15";
+                    return false;
+                }
+                if (used & (1u << v.as<int>())) {
+                    why = String("components.") + kinds[k] + ": channel " + v.as<int>() +
+                          " is listed twice";
+                    return false;
+                }
+                used |= 1u << v.as<int>();
+            }
+        }
+    }
+
+    if (!doc["default_decay_rate"].isNull()) {
+        float rate = doc["default_decay_rate"] | 0.0f;
+        if (!doc["default_decay_rate"].is<float>() || rate <= 0.0f || rate > MAX_DECAY_RATE) {
+            why = "default_decay_rate must be a number above 0 and at most 65 (percent per second)";
+            return false;
         }
     }
 
@@ -171,6 +214,13 @@ bool gamestate_load(const String& json, String& why) {
     s_doc = std::move(next);
     s_ready = true;
     strlcpy(s_game, s_doc["game"].as<const char*>(), sizeof(s_game));
+    s_decayRate = s_doc["default_decay_rate"] | DEFAULT_DECAY_RATE;
+    memset(s_componentOf, -1, sizeof(s_componentOf));
+    {
+        int8_t n = 0;
+        for (JsonVariant ch : s_doc["components"]["major"].as<JsonArray>()) s_componentOf[ch.as<int>()] = n++;
+        for (JsonVariant ch : s_doc["components"]["final"].as<JsonArray>()) s_componentOf[ch.as<int>()] = n++;
+    }
     s_state[0] = 0;
     s_timerOn = false;
     Serial.printf(GAME_PREFIX " loaded '%s'\n", s_game);
@@ -206,6 +256,10 @@ void gamestate_tick() {
 bool        gamestate_ready()  { return s_ready; }
 const char* gamestate_game()   { return s_game; }
 const char* gamestate_state()  { return s_state; }
+float       gamestate_decay_rate() { return s_decayRate; }
+int         gamestate_component_for_channel(uint8_t channel) {
+    return s_ready && channel < sizeof(s_componentOf) ? s_componentOf[channel] : -1;
+}
 
 uint32_t gamestate_state_age_ms() { return millis() - s_enteredAt; }
 

@@ -16,7 +16,7 @@
 // free of FastLED and the radio so the arithmetic can be tested on a desk.
 //
 //   pulleys::ComponentDisplayModel m;
-//   pulleys::component_display_update(m, pkt.charge, pkt.wearMs, millis());  // on a packet
+//   pulleys::component_display_update(m, pkt.charge, pkt.decay, millis());   // on a packet
 //   pulleys::component_display_step(m, millis(), dt);                        // every frame
 //   m.shown[bar]                                                // 0..1, what to draw
 //
@@ -42,25 +42,26 @@ static constexpr uint32_t COMPONENT_DISPLAY_STALE_MS = 4000;   // no packet for 
 static constexpr float COMPONENT_DISPLAY_FILL_PER_S = 4.0f;
 
 struct ComponentDisplayModel {
-    uint8_t  charge[COMPONENT_DISPLAY_BARS] = {};   // from the last packet: 255 = just lit
+    uint8_t  charge[COMPONENT_DISPLAY_BARS] = {};   // from the last packet, percent: 100 = just lit
     uint32_t stampMs  = 0;              // when that packet arrived
-    uint16_t wearMs   = 15000;          // how long a full charge takes to drain
+    uint16_t decay    = 6667;           // drain rate, thousandths of a percent per second
     bool     heard    = false;          // a packet has ever arrived
     float    shown[COMPONENT_DISPLAY_BARS] = {};    // what is drawn, 0..1
 };
 
 inline void component_display_update(ComponentDisplayModel& m, const uint8_t charge[COMPONENT_DISPLAY_BARS],
-                         uint16_t wearMs, uint32_t now) {
+                         uint16_t decay, uint32_t now) {
     for (uint8_t i = 0; i < COMPONENT_DISPLAY_BARS; i++) m.charge[i] = charge[i];
-    m.wearMs  = wearMs ? wearMs : 1;
+    m.decay   = decay;
     m.stampMs = now;
     m.heard   = true;
 }
 
 // How full a bar should be right now: the last published charge, drained by the
-// time since. Keeps counting down between packets, and is corrected by the next.
+// time since at the published rate. Keeps counting down between packets, and is corrected by the next.
 inline float component_display_target(const ComponentDisplayModel& m, uint8_t bar, uint32_t now) {
-    float level = m.charge[bar] / 255.0f - (float)(now - m.stampMs) / (float)m.wearMs;
+    float percent = m.charge[bar] - (float)(now - m.stampMs) * m.decay / 1.0e6f;
+    float level = percent / 100.0f;
     return level < 0.0f ? 0.0f : (level > 1.0f ? 1.0f : level);
 }
 

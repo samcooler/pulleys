@@ -77,11 +77,11 @@ static void handleEvent() {
 }
 
 static void handleState() {
-    char out[160];
+    char out[192];
     snprintf(out, sizeof(out),
-             "{\"game\":\"%s\",\"state\":\"%s\",\"ageMs\":%lu,\"timerLeftMs\":%ld}",
+             "{\"game\":\"%s\",\"state\":\"%s\",\"ageMs\":%lu,\"timerLeftMs\":%ld,\"decayRate\":%.4f}",
              gamestate_game(), gamestate_state(), (unsigned long)gamestate_state_age_ms(),
-             (long)gamestate_timer_left_ms());
+             (long)gamestate_timer_left_ms(), gamestate_decay_rate());
     s_server->send(200, "application/json", out);
 }
 

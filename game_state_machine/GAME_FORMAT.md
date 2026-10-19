@@ -11,6 +11,8 @@ strings overlord already accepts (`video_once_test1`, `audio_once_chime`,
 | -------- | ---------------------------------------------------- |
 | `game`   | Name, for logs                                       |
 | `start`  | State to enter at launch                             |
+| `components` | Which rope channel drives each component            |
+| `default_decay_rate` | How fast a lit component drains, % per second (optional) |
 | `ambient_sounds` | Sounds overlord repeats on a schedule (optional)    |
 | `cues`   | Every cue the game may use, grouped by type                |
 | `states` | The state machine                                    |
@@ -38,6 +40,46 @@ the name without its prefix, `chime.mp3`, also works). A future script may valid
 list against `overlord/media/` and build it into code.
 
 Style: write lists and maps in multiline block form, not `{...}` / `[...]`.
+
+## Components
+
+```yaml
+components:
+  major:                         # major components 1-5, in order
+    - 1
+    - 10
+    - 3
+    - 4
+    - 5
+  final:                         # final components 1-3
+    - 6
+    - 7
+    - 8
+```
+
+Which rope channel drives each component. The position in a list is the
+component's number, so the first `major` entry is major component 1, and that
+order is also the order of the bars on the component state display. There are
+always exactly five major and three final components, each on its own channel
+(0-15); a channel listed twice is an error, and a channel not listed drives
+nothing. The arbiter reads this, from its built-in game or a posted one; a new
+mapping applies to the next pull. Overlord does not use it: the keyboard
+simulator's keys stand in for the components themselves.
+
+## Component decay
+
+```yaml
+default_decay_rate: 6.6667       # percent of full charge lost per second
+```
+
+A component's charge is a number from 0 to 100. A pull sets it to 100, and it
+drains at this rate until it reaches 0, when the component counts as deactivated.
+So it stays lit `100 / rate` seconds: 6.6667 is 15 seconds, 10 is 10, 5 is 20. It
+applies to every component. The arbiter owns it: it decides when a component goes
+dark and publishes the rate to the component state displays together with each
+charge, so a display never has its own copy. It must be above 0 and at most 65.
+If left out, the default is the 15-second rate. `overlord`'s keyboard simulator
+reads the same value. A game posted to the arbiter takes effect from the next pull.
 
 ## Ambient sounds
 

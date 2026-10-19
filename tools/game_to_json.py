@@ -69,6 +69,14 @@ KNOWN_EVENTS = {
     "all_final_components_activated",
 }
 
+# How many components of each kind there are. The mesh packet and the component
+# state display have a bar for each. Keep in step with gameevents.h.
+COMPONENT_COUNTS = {"major": 5, "final": 3}
+
+# The mesh packet carries the decay rate in thousandths of a percent per second
+# in 16 bits. Keep in step with MeshComponents in lib/pulleys_mesh.
+MAX_DECAY_RATE = 65.0
+
 # Sections only overlord reads; the arbiter's JSON leaves them out.
 OVERLORD_ONLY = ("ambient_sounds",)
 
@@ -106,6 +114,35 @@ def validate(cfg):
     def check_goto(where, target):
         if target not in states:
             errors.append(f"{where}: goto '{target}' is not a state")
+
+    # components: which rope channel drives each (GAME_FORMAT.md)
+    comps = cfg.get("components")
+    if not isinstance(comps, dict):
+        errors.append("components: missing, or not a map with major and final lists")
+    else:
+        used = {}
+        for kind, count in COMPONENT_COUNTS.items():
+            channels = comps.get(kind)
+            if not isinstance(channels, list) or len(channels) != count:
+                errors.append(f"components.{kind}: must list exactly {count} channels")
+                continue
+            for i, ch in enumerate(channels):
+                where = f"components.{kind}[{i}]"
+                if isinstance(ch, bool) or not isinstance(ch, int) or not 0 <= ch <= 15:
+                    errors.append(f"{where}: '{ch}' is not a channel (a whole number, 0-15)")
+                elif ch in used:
+                    errors.append(f"{where}: channel {ch} already drives {used[ch]}")
+                else:
+                    used[ch] = f"{kind} component {i + 1}"
+        extra = set(comps) - set(COMPONENT_COUNTS)
+        if extra:
+            errors.append(f"components: unknown kind {sorted(map(str, extra))}; use major and final")
+
+    rate = cfg.get("default_decay_rate")
+    if rate is not None and (isinstance(rate, bool) or not isinstance(rate, (int, float))
+                             or not 0 < rate <= MAX_DECAY_RATE):
+        errors.append(f"default_decay_rate: must be a number above 0 and at most "
+                      f"{MAX_DECAY_RATE} (percent of full charge per second), not {rate!r}")
 
     # ambient_sounds: overlord's own schedule (GAME_FORMAT.md)
     for i, entry in enumerate(cfg.get("ambient_sounds") or []):

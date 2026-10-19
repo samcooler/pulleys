@@ -10,6 +10,12 @@
 // is the whole interface. The names are the keys a state lists under `on:` in
 // the game config (GAME_FORMAT.md).
 
+// How many components there are: major ones, then final ones. The component
+// state display has a bar for each (pulleys::MESH_COMPONENT_COUNT). Keep in step
+// with COMPONENT_COUNTS in tools/game_to_json.py.
+static const uint8_t GAME_MAJOR_COMPONENTS = 5;
+static const uint8_t GAME_FINAL_COMPONENTS = 3;
+
 enum GameEvent : uint8_t {
     GE_FIRST_COMPONENT_ACTIVATED,
     GE_COMPONENT_ACTIVATED,

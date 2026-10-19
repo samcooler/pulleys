@@ -97,10 +97,11 @@ window has focus. Drop `--windowed` to run it fullscreen, and add
 
 | Key   | Component        | Colour                           |
 | ----- | ---------------- | -------------------------------- |
-| `1-5` | major components | red, orange, yellow, green, blue |
+| `1-5` | major components | red, orange, hot pink, green, blue |
 | `6-8` | final components | purple                           |
 
-- A key lights its component, which wears out after 15 s (the same as the arbiter's rule).
+- A key lights its component, which wears out after 100 / `default_decay_rate` seconds (15 s in the example
+  game), the same as the arbiter's rule.
 - Pressing a lit key refills it to full.
 - `game2` shows bars 6-8 (it is the state that reacts to the final
   components). Every other state shows bars 1-5.
@@ -114,8 +115,8 @@ drains right to left as the component wears out.
 ### Play through the game
 
 1. **passive**: press any of `1-5` to start; the game moves to `game1`.
-2. **game1**: light all of `1-5` at once (each lasts 15 s, so press them
-   within that time). The game moves to `victory1`.
+2. **game1**: light all of `1-5` at once (each lasts 15 s with the example
+   game's decay rate, so press them within that time). The game moves to `victory1`.
 3. **victory1**, then **reveal**: these play on their own timers and move to
    `game2`.
 4. **game2**: light all of `6-8` at once to win; the game moves to `victory2`.

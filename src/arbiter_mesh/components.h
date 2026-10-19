@@ -10,9 +10,10 @@
 // channel; this file never sees a state.
 //
 // The rules are a placeholder, mirroring overlord/simulate.py so the two can
-// be compared: each component has a rope channel (the table in components.cpp;
-// major component 1 is channel 10). A pull lights its component, and it stays
-// lit until WEAR_MS (15 s) passes with no further pull. Replace the body of
+// be compared: each component has a rope channel (the config's `components`
+// section, in state_config.yaml). A pull lights its component, and it stays
+// lit while it drains from 100% at the game's default_decay_rate (see
+// state_config.yaml), and a further pull tops it back up. Replace the body of
 // this module when the real rules are settled; nothing outside it needs to
 // change.
 //

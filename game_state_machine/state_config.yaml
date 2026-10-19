@@ -25,11 +25,38 @@
 #   cue (in on)  Cues to fire for that event.
 #   goto         The state to move to.
 #   after        Move to another state once this much time has passed.
+#   component    One of the pieces of the installation that players activate: five
+#                major ones and three final ones, each driven by one rope channel.
+#   decay rate   Percent of full charge a lit component loses per second.
 #   ambient      A sound overlord repeats on a schedule, independent of the game.
 #   placeholder  Media that does not exist yet.
 
 game: pulley-party
 start: passive
+
+# Which rope channel drives each component. The position in a list is the
+# component's number, so the first `major` entry is major component 1. There are
+# always five major and three final components, each on its own channel (0-15).
+# A channel not listed here drives nothing. The arbiter reads this; it also fixes
+# the order of the bars on the component state display.
+components:
+  major:
+    - 1
+    - 10
+    - 3
+    - 4
+    - 5
+  final:
+    - 6
+    - 7
+    - 8
+
+# How fast a lit component drains, in percent of full per second. A pull sets a
+# component to 100 and it goes dark at 0, so it stays lit 100 / rate seconds:
+# 6.6667 is 15 seconds. The arbiter owns this, and publishes it to the component
+# state displays along with each component's charge. It applies to every
+# component (hence "default").
+default_decay_rate: 6.6667
 
 # Sounds overlord plays on its own, forever, whatever state the game is in.
 # Only overlord reads this; the arbiter never sees it. Each entry plays its

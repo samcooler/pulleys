@@ -252,7 +252,7 @@ and the next timer, a bar that flashes on each trigger, and a short log.
 A mesh node on the screen's hardware (D1 Mini ESP32, 8×32 matrix on GPIO 16) that
 shows how charged each game component is. Eight vertical bars side by side along
 the long axis, each 3 pixels wide with a 1-pixel gap (31 of the 32 columns):
-major components 1-5 on the left (red, orange, yellow, green, blue), then final
+major components 1-5 on the left (red, orange, hot pink, green, blue), then final
 components 1-3 (purple). A component that is lit shows a full bar, which drains
 away until the component goes dark and the bar is empty. Source:
 `src/component_state_display/main.cpp`; the bar maths is `lib/pulleys_component_display`.
@@ -263,11 +263,13 @@ pio run -e component_state_display -t upload --upload-port /dev/cu.usbserial-XXX
 ```
 
 - **Where the state comes from:** the arbiter. `components.cpp` there owns the
-  rules (which channel is which component, and that a pull keeps a component lit
-  for 15 s), and publishes every component's charge as a `MeshComponents` packet:
-  right away on any change, and once a second otherwise. The display only draws
-  it, draining each bar by itself between packets, so a missed packet costs
-  nothing and the display never repeats the rules.
+  rules (which channel is which component, and how fast a lit one drains: the
+  game's `components` and `default_decay_rate`, see `GAME_FORMAT.md`), and publishes every
+  component's charge as a percentage (0-100) together with that rate in a
+  `MeshComponents` packet: right away on any change, and once a second otherwise.
+  The display only draws it, draining each bar at the published rate between
+  packets, so a missed packet costs nothing and the display never holds a drain
+  time of its own.
 - **No arbiter:** if nothing has been heard for 4 s, a pixel in the spare column at the right end blinks red.
 - **Orientation:** if the bars come out mirrored (component 1 on the right) or
   fill downward, add `-D COMPONENT_DISPLAY_REVERSE_X=1` and/or
@@ -276,4 +278,5 @@ pio run -e component_state_display -t upload --upload-port /dev/cu.usbserial-XXX
   `LED_MAX_MA` (450 mA, USB-safe; raise it on a real 5 V supply).
 - **Bench:** `c<bar> <percent>` on the console draws a bar as if the arbiter had
   sent it (`c0 100` fills component 1 and lets it drain). On the arbiter, `p<channel>`
-  injects a pull (`p10` lights major component 1), which is how to see it without a sensor.
+  injects a pull (`p1` lights major component 1, `p10` major component 2), which is how to see
+  it without a sensor.
