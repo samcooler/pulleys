@@ -14,6 +14,7 @@ strings overlord already accepts (`video_once_test1`, `audio_once_chime`,
 | `components` | Which rope channel drives each component            |
 | `default_decay_rate` | How fast a lit component drains, % per second (optional) |
 | `ambient_sounds` | Sounds overlord repeats on a schedule (optional)    |
+| `audio_gain` | Loudness multiplier per audio cue (optional)        |
 | `cues`   | Every cue the game may use, grouped by type                |
 | `states` | The state machine                                    |
 
@@ -100,6 +101,20 @@ one interval after overlord starts. `sound` must be an `audio_once_*` cue listed
 under `cues`; `interval` must be above 0 and `variance` at least 0 and below
 `interval`. Overlord reads the file at startup, so a change needs a restart.
 Plays are not logged (the journal would fill up); one that fails is logged once.
+
+## Audio gain
+
+```yaml
+audio_gain:
+  audio_once_chime: 1.2          # 20% louder
+  audio_loop_idle: 0.8           # 80% as loud
+```
+
+Balances clips against each other. Each value multiplies that clip's own level,
+on top of the volume setting; a cue not listed plays at 1. Keys are
+`audio_once_*` and `audio_loop_*` cue names, values are 0 to 10. Above 1 can
+clip a clip that is already loud. Overlord reads the file at startup, so a
+change needs a restart; the arbiter ignores it.
 
 ## States
 

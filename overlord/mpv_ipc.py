@@ -134,8 +134,9 @@ class Mpv:
     def set(self, prop, value):
         return self.command("set_property", prop, value)
 
-    def play(self, path, loop=True):
+    def play(self, path, loop=True, gain=1.0):
         self.set("loop-file", "inf" if loop else "no")
+        self.set("af", f"lavfi=[volume={gain:g}]" if gain != 1 else "")
         self.command("loadfile", str(path), "replace")
 
     def stop(self):
@@ -170,13 +171,14 @@ class SoundPlayer:
         self._procs = []
         self._lock = threading.Lock()
 
-    def play(self, path):
+    def play(self, path, gain=1.0):
         # Not --no-terminal like the loop players: a sound that cannot be decoded,
         # or an audio device that will not open, is only ever reported on mpv's
         # own output, so it is read and logged by _watch. Warnings and errors only.
         proc = subprocess.Popen(
             ["mpv", "--no-video", "--idle=no", "--keep-open=no", "--msg-level=all=warn",
-             f"--volume={self.volume}", *self._extra, str(path)],
+             f"--volume={self.volume}", *(["--af=lavfi=[volume=%g]" % gain] if gain != 1 else []),
+             *self._extra, str(path)],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         threading.Thread(target=self._watch, args=(proc, path), daemon=True).start()

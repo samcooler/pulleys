@@ -28,6 +28,7 @@ import settings
 from debug_menu import DebugMenu
 from mpv_ipc import Mpv, MpvError, SoundPlayer
 from ambient import Ambient, load as load_ambient
+import gain as gain_config
 from control import ControlServer
 from serial_reader import SerialReader
 
@@ -173,6 +174,8 @@ def main():
 
     signal.signal(signal.SIGTERM, shutdown)
 
+    gains = {}  # cue name -> loudness multiplier; filled below once the game file is known
+
     def play_clip(path):
         with lock:
             state["playing_clip"] = True
@@ -184,10 +187,10 @@ def main():
             if not state["playing_clip"]:  # a running clip hands back to the new loop
                 video.play(path, loop=True)
 
-    def set_audio_loop(path):
+    def set_audio_loop(path, gain=1.0):
         with lock:
             state["audio_loop"] = path
-            audio.play(path, loop=True)
+            audio.play(path, loop=True, gain=gain)
 
     def stop_audio_loop():
         with lock:
@@ -213,7 +216,10 @@ def main():
                 if path is None:
                     print(f"no media for {event_name} in media/{folder}/", flush=True)
                     return False
-                action(path)
+                if prefix.startswith("audio_"):
+                    action(path, gains.get(event_name, 1.0))
+                else:
+                    action(path)
                 return path.name
         return None
 
@@ -298,13 +304,14 @@ def main():
         path = find_media("audio_once", name[len("audio_once_"):], "audio_once_")
         if path is None:
             return False
-        sounds.play(path)
+        sounds.play(path, gains.get(name, 1.0))
         return True
 
     try:
         from game import DEFAULT_GAME
     except ImportError:  # pyyaml missing: game.py cannot be imported
         DEFAULT_GAME = None
+    gains.update(gain_config.load(args.game or DEFAULT_GAME))
     ambient = None
     ambient_config = args.game or DEFAULT_GAME
     if ambient_config:
@@ -323,7 +330,8 @@ def main():
 
     try:
         if state["audio_loop"]:
-            audio.play(state["audio_loop"], loop=True)
+            audio.play(state["audio_loop"], loop=True,
+                       gain=gains.get(f"audio_loop_{DEFAULT_LOOP}", 1.0))
             print(f"starting audio loop: {state['audio_loop'].name}", flush=True)
         if state["video_loop"]:
             video.play(state["video_loop"], loop=True)

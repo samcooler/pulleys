@@ -29,6 +29,7 @@
 #                major ones and three final ones, each driven by one rope channel.
 #   decay rate   Percent of full charge a lit component loses per second.
 #   ambient      A sound overlord repeats on a schedule, independent of the game.
+#   gain         A multiplier on how loud one audio clip plays. 1 is unchanged.
 #   placeholder  Media that does not exist yet.
 
 game: pulley-party
@@ -67,6 +68,16 @@ ambient_sounds:
     interval: 20
     variance: 1
 
+# How loud each audio clip plays, as a multiplier on the file's own level (on
+# top of the volume setting): 1.2 is 20% louder, 0.8 is 80% as loud. Optional;
+# a cue not listed plays at 1. Only overlord reads this. Keys are cue names.
+audio_gain:
+  audio_loop_idle: 1.14
+  audio_once_steam: 0.46
+  audio_once_component_powerup: 0.77  # placeholder
+  audio_once_component_powerdown: 0.9  # placeholder
+  audio_once_encouragement: 1.11
+
 # CUES
 #   Cues travel over the mesh as their name in ASCII, e.g. audio_once_chime,
 #   so a name has to fit one packet: 1 to 47 characters, lowercase letters,
@@ -75,15 +86,12 @@ ambient_sounds:
 cues:
   audio_loop:
     - audio_loop_idle
-    - audio_loop_dull
     - audio_loop_off
   video_once:
     - video_once_test1
     - video_once_test2
     - video_once_encouragement      # placeholder
   audio_once:
-    - audio_once_beep
-    - audio_once_chime
     - audio_once_steam
     - audio_once_component_powerup  # placeholder
     - audio_once_component_powerdown  # placeholder
@@ -126,7 +134,6 @@ states:
   victory1:
     on_enter_cue:
       - video_once_test2
-      - audio_loop_dull
     after:
       delay: 10s
       goto: reveal
@@ -156,7 +163,6 @@ states:
   victory2:
     on_enter_cue:
       - video_once_test2
-      - audio_once_chime
     after:
       delay: 2m                    # placeholder
       goto: kickout
