@@ -76,7 +76,7 @@ audio_gain:
   audio_once_steam: 0.46
   audio_once_component_powerup: 0.77  # placeholder
   audio_once_component_powerdown: 0.9  # placeholder
-  audio_once_encouragement: 1.11
+  audio_once_encouragement: 1.3
 
 # CUES
 #   Cues travel over the mesh as their name in ASCII, e.g. audio_once_chime,
