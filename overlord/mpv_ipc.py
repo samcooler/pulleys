@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from pathlib import Path
 
 # Kiosk defaults: borderless fullscreen, no on-screen UI, never exit on its own.
 KIOSK_ARGS = [
@@ -170,13 +171,28 @@ class SoundPlayer:
         self._lock = threading.Lock()
 
     def play(self, path):
+        # Not --no-terminal like the loop players: a sound that cannot be decoded,
+        # or an audio device that will not open, is only ever reported on mpv's
+        # own output, so it is read and logged by _watch. Warnings and errors only.
         proc = subprocess.Popen(
-            ["mpv", *AUDIO_ARGS, "--idle=no", f"--volume={self.volume}", *self._extra, str(path)],
-            stdin=subprocess.DEVNULL,
+            ["mpv", "--no-video", "--idle=no", "--keep-open=no", "--msg-level=all=warn",
+             f"--volume={self.volume}", *self._extra, str(path)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
+        threading.Thread(target=self._watch, args=(proc, path), daemon=True).start()
         with self._lock:
             self._procs = [p for p in self._procs if p.poll() is None]  # reap finished
             self._procs.append(proc)
+
+    @staticmethod
+    def _watch(proc, path):
+        """Log a sound that did not play cleanly: a non-zero exit, or anything mpv
+        had to say. A sound that plays fine says nothing."""
+        out, _ = proc.communicate()
+        lines = [l.strip() for l in (out or "").splitlines() if l.strip()]
+        if proc.returncode or lines:
+            print(f"sound {Path(path).name}: exit {proc.returncode}"
+                  + "".join(f"\n  mpv: {l}" for l in lines[:6]), flush=True)
 
     def stop_all(self):
         with self._lock:

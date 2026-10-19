@@ -203,9 +203,10 @@ def main():
     ]
 
     def dispatch(event_name):
+        """Play the cue. Returns what it played (the media file's name), or None."""
         if event_name == "audio_loop_off":
             stop_audio_loop()
-            return True
+            return "stopped"
         for prefix, folder, action in prefixed:
             if event_name.startswith(prefix):
                 path = find_media(folder, event_name[len(prefix):], prefix)
@@ -213,14 +214,15 @@ def main():
                     print(f"no media for {event_name} in media/{folder}/", flush=True)
                     return False
                 action(path)
-                return True
-        return False
+                return path.name
+        return None
 
     def fire_cue(cue):
         """Play one cue; True if it played."""
         try:
-            if dispatch(cue):
-                print(f"cue: {cue}", flush=True)
+            played = dispatch(cue)
+            if played:
+                print(f"cue: {cue} ({played})", flush=True)
                 return True
             print(f"cue not played: {cue}", flush=True)
         except MpvError as e:
