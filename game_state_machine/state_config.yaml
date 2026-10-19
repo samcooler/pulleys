@@ -119,9 +119,13 @@ states:
       component_activated:
         cue:
           - audio_once_component_powerup
+          - audio_once_encouragement
+          - video_once_encouragement
         goto: game1
 
   game1:
+    on_enter_cue:
+      - video_loop_game1
     on:
       first_component_activated:
         cue:
