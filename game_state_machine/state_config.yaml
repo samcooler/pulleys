@@ -68,15 +68,23 @@ ambient_sounds:
     interval: 20
     variance: 1
 
+# How loud clips should be relative to each other. Read ONLY by
+# tools/balance_audio.py, which uses it to work out audio_gain below; no device
+# reads it. A key is a whole folder (audio_loop, audio_once) or one cue
+# (audio_loop_idle), and the cue wins over its folder. Unlisted is 1, so 0.6
+# puts a clip at 60% of the loudness the others are balanced to.
+audio_weights:
+  audio_loop: 0.6
+
 # How loud each audio clip plays, as a multiplier on the file's own level (on
 # top of the volume setting): 1.2 is 20% louder, 0.8 is 80% as loud. Optional;
 # a cue not listed plays at 1. Only overlord reads this. Keys are cue names.
 audio_gain:
-  audio_loop_idle: 1.14
-  audio_once_steam: 0.46
-  audio_once_component_powerup: 0.77  # placeholder
-  audio_once_component_powerdown: 0.9  # placeholder
-  audio_once_encouragement: 1.3
+  audio_loop_idle: 0.89
+  audio_once_steam: 0.6
+  audio_once_component_powerup: 1  # placeholder
+  audio_once_component_powerdown: 1.17  # placeholder
+  audio_once_encouragement: 1.45
 
 # CUES
 #   Cues travel over the mesh as their name in ASCII, e.g. audio_once_chime,

@@ -4,7 +4,8 @@
 Pulls the media folder from Google Drive (needs `pip install gdown`; the folder
 must be shared as "anyone with the link"), measures each audio clip's average
 loudness with ffmpeg (EBU R128 integrated loudness, in LUFS), and writes the
-gain that brings every clip to the same loudness. Prints each cue's old and new
+gain that brings every clip to the same loudness, scaled by the clip's weight
+from `audio_weights:` in the YAML (see below). Prints each cue's old and new
 value. The rest of the YAML, comments included, is left alone.
 
     python3 tools/balance_audio.py                 # download, measure, write
@@ -12,8 +13,14 @@ value. The rest of the YAML, comments included, is left alone.
     python3 tools/balance_audio.py --no-download   # reuse the last download
     python3 tools/balance_audio.py --target -20    # aim at -20 LUFS, not the median clip
 
-Cues only on this machine and not in the Drive folder (beep, chime) keep their
-gain. A clip that would clip after the boost is flagged but still written.
+audio_weights is read only by this script, never by a device. A key is a whole
+folder (audio_loop, audio_once) or one cue (audio_loop_idle); the cue wins over
+its folder, and anything unlisted is 1. A weight is a loudness relative to the
+rest, so 0.6 for audio_loop puts every loop at 60% of the others' volume.
+
+Only cues the YAML lists under `cues:` are balanced; other files in the Drive
+folder are skipped. A listed cue with no file in Drive keeps its gain.
+A clip that would clip after the boost is flagged but still written.
 """
 
 import argparse
@@ -31,10 +38,6 @@ DRIVE_FOLDER = "https://drive.google.com/drive/folders/1ztfY8nkVEQuVMculoi4RvDAw
 
 # Drive folder -> cue prefix. Same layout as overlord/media.
 FOLDERS = {"audio_loops": "audio_loop_", "audio_once": "audio_once_"}
-
-# Extra dB added to a whole category's target, for when background loops should
-# sit quieter than effects (e.g. "audio_loop_": -6). 0 means everything is equal.
-CATEGORY_OFFSET_DB = {"audio_loop_": 0.0, "audio_once_": 0.0}
 
 MAX_GAIN = 10.0  # overlord/gain.py rejects anything above this
 
@@ -105,9 +108,25 @@ def write_yaml(path, new):
     return old
 
 
-def read_old(path):
+def read_config(path):
+    """(old gains, weights, every cue the game lists) from the YAML."""
     import yaml
-    return {k: float(v) for k, v in (yaml.safe_load(path.read_text()).get("audio_gain") or {}).items()}
+    config = yaml.safe_load(path.read_text())
+    gains = {k: float(v) for k, v in (config.get("audio_gain") or {}).items()}
+    weights = {str(k): float(v) for k, v in (config.get("audio_weights") or {}).items()}
+    for k, w in weights.items():
+        if w <= 0:
+            sys.exit(f"audio_weights: {k} must be above 0, not {w:g}")
+    cues = {c for group in (config.get("cues") or {}).values() for c in group}
+    return gains, weights, cues
+
+
+def weight_of(cue, weights):
+    """The cue's own weight, else its folder's (audio_loop, audio_once), else 1."""
+    if cue in weights:
+        return weights[cue]
+    folder = next((p.rstrip("_") for p in FOLDERS.values() if cue.startswith(p)), None)
+    return weights.get(folder, 1.0)
 
 
 def main():
@@ -123,8 +142,12 @@ def main():
         print(f"downloading {DRIVE_FOLDER} -> {args.cache}", flush=True)
         download(args.cache)
 
+    old, weights, cues = read_config(args.yaml)
     measured = {}
     for cue, path in clips(args.cache).items():
+        if cue not in cues:
+            print(f"skipping {cue}: not listed under cues in the YAML")
+            continue
         m = measure(path)
         if m is None:
             print(f"skipping {cue}: no audible audio in {path.name}")
@@ -133,8 +156,8 @@ def main():
     if not measured:
         sys.exit(f"no audio clips found under {args.cache}")
 
-    offset = lambda cue: next(o for p, o in CATEGORY_OFFSET_DB.items() if cue.startswith(p))
-    # Compare clips on a level footing: take each category's offset out first.
+    offset = lambda cue: 20 * math.log10(weight_of(cue, weights))  # dB
+    # Compare clips on a level footing: take each weight out first.
     target = args.target if args.target is not None else statistics.median(
         lufs - offset(cue) for cue, (lufs, _) in measured.items())
 
@@ -143,18 +166,17 @@ def main():
         db = target + offset(cue) - lufs
         new[cue] = round(min(10 ** (db / 20), MAX_GAIN), 2)
 
-    old = read_old(args.yaml)
     print(f"\ntarget {target:.1f} LUFS ({'given' if args.target is not None else 'median clip'})\n")
-    print(f"{'cue':38} {'LUFS':>6} {'old':>6} {'new':>6}")
+    print(f"{'cue':38} {'LUFS':>6} {'weight':>6} {'old':>6} {'new':>6}")
     for cue in sorted(new):
         o = old.get(cue)
         flag = ""
         peak_after = measured[cue][1] + 20 * math.log10(new[cue]) if new[cue] else -99
         if peak_after > -1.0:
             flag = f"  peak would reach {peak_after:+.1f} dBFS (clipping risk)"
-        print(f"{cue:38} {measured[cue][0]:6.1f} {'-' if o is None else format(o, 'g'):>6} {new[cue]:6g}{flag}")
+        print(f"{cue:38} {measured[cue][0]:6.1f} {weight_of(cue, weights):6g} {'-' if o is None else format(o, 'g'):>6} {new[cue]:6g}{flag}")
     for cue in sorted(set(old) - set(new)):
-        print(f"{cue:38} {'':6} {old[cue]:6g} {'(kept, not in Drive)':>6}")
+        print(f"{cue:38} {'':6} {'':6} {old[cue]:6g} {'(kept, not in Drive)':>6}")
 
     if args.dry_run:
         print("\ndry run: nothing written")
