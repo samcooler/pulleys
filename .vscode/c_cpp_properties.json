@@ -536,7 +536,7 @@
                 "PULLEYS_DEVICE_TYPE=PULLEYS_TYPE_SENSOR",
                 "LED_PIN=14",
                 "LED_COLOR_ORDER=GRB",
-                "LED_COUNT=97",
+                "LED_COUNT=93",
                 "MESH_WIFI_CHANNEL=1",
                 "HAVE_CONFIG_H",
                 "MBEDTLS_CONFIG_FILE=\"mbedtls/esp_config.h\"",

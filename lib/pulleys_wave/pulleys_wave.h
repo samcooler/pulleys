@@ -54,7 +54,7 @@ struct WaveParams {
 
     // Bounds the wanderers move within.
     float cyclesLo    = 0.6f;  // periods across one run — under 1 is a swell
-    float cyclesHi    = 3.0f;  // over ~3 starts to alias on a 16-pixel run
+    float cyclesHi    = 3.0f;  // over ~3 starts to alias on a 14-pixel run
     float slideMax    = 0.5f;  // runs per second, signed: waves cross each other
     float swingLo     = 0.45f; // how much of hueSwing is in play, wandering
     float swingHi     = 1.0f;

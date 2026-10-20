@@ -24,7 +24,7 @@
 //             brightness driven by each channel's activity level
 //   ALLON   — four yellow symbols, every pixel lit, ignoring the mesh: the
 //             bench display, for looking at the panel itself
-//   WAVE    — three wandering sines bubbling in gold on a 16×2 panel (16, skip
+//   WAVE    — three wandering sines bubbling in gold on a 14×2 panel (14, skip
 //             1, 16) instead of the 8×32 matrix. A different LED surface, so a
 //             board is built for it rather than switched into it
 //
@@ -45,13 +45,13 @@
 #endif
 
 // The display and the LED surface have to agree. COUNTER, RANKING and ALLON
-// address the whole 8×32 matrix; WAVE addresses a 33-LED 16×2 panel. Mixing
+// address the whole 8×32 matrix; WAVE addresses a 29-LED 14×2 panel. Mixing
 // them would walk off the end of leds[], so an env that pins one display gets
 // checked against its own LED_COUNT here rather than at run time.
 #ifdef SCREEN_FORCE_DISPLAY
 static_assert(SCREEN_FORCE_DISPLAY != pulleys::SCREEN_WAVE ||
-              LED_COUNT >= pulleys::PANEL_16X2_LEDS,
-              "the wave display needs at least 33 LEDs (16, skip 1, 16)");
+              LED_COUNT >= pulleys::PANEL_14X2_LEDS,
+              "the wave display needs at least 29 LEDs (14, skip 1, 14)");
 static_assert(SCREEN_FORCE_DISPLAY == pulleys::SCREEN_WAVE ||
               LED_COUNT >= 256,
               "the matrix displays need the whole 8x32 (256 LEDs)");
@@ -438,12 +438,12 @@ static void renderAllOn(float dt, float t) {
 }
 
 // ── Display: wave ─────────────────────────────────────────────────────────────
-// A 16×2 panel — 16 pixels out, one dead pixel at the fold, 16 back — carrying
+// A 14×2 panel — 14 pixels out, one dead pixel at the fold, 14 back — carrying
 // three summed sines bubbling around one gold hue. Geometry lives in
 // pulleys_panel and the pattern in pulleys_wave, so this is only the wiring
 // between them: which surface, at which point on the strip, and what drives it.
 //
-// The Sensor gets an 8×8 and a 16×2 chained on one output next, which is why
+// The Sensor gets an 8×8 and a 14×2 chained on one output next, which is why
 // neither of those two libraries knows anything about a Screen.
 static pulleys::Panel      wavePanel;
 static pulleys::WaveParams waveCfg;
@@ -452,13 +452,13 @@ static pulleys::WaveState  waveState;
 // Which way the second run is wired. It is the one thing about a folded strip
 // you cannot tell by looking at the code, so it is a build setting here and 'w'
 // on serial flips it live — check it once on the bench, then set the default.
-#ifndef PANEL_16X2_SERPENTINE
-  #define PANEL_16X2_SERPENTINE 1
+#ifndef PANEL_14X2_SERPENTINE
+  #define PANEL_14X2_SERPENTINE 1
 #endif
 
 static void waveInit() {
-    wavePanel = pulleys::panel_16x2(leds, /*origin=*/0,
-                                    /*serpentine=*/PANEL_16X2_SERPENTINE);
+    wavePanel = pulleys::panel_14x2(leds, /*origin=*/0,
+                                    /*serpentine=*/PANEL_14X2_SERPENTINE);
     waveCfg   = pulleys::WaveParams{};
     waveCfg.maxBri = MAX_BRIGHTNESS;
     pulleys::wave_init(waveState, waveCfg);
@@ -476,7 +476,7 @@ static void renderWave(float dt) {
 //   e<ch>  simulate one detection on that channel
 //   r      reset all activity and the counter
 //   m      force the other display mode now (refused on a board built for one)
-//   w      flip the 16×2 panel's row direction, for matching the wiring
+//   w      flip the 14×2 panel's row direction, for matching the wiring
 //   h<c>,<s>  set the wave's centre hue and its swing (0-255), for finding the
 //             arc on the bench before writing it into WaveParams
 static void handleSerial() {
@@ -525,11 +525,11 @@ static void handleSerial() {
                               waveCfg.centerHue, waveCfg.hueSwing);
             } else if (buf[0] == 'w') {
                 wavePanel.serpentine = !wavePanel.serpentine;
-                Serial.printf("  16x2 rows: %s (set PANEL_16X2_SERPENTINE to keep it)\n",
+                Serial.printf("  14x2 rows: %s (set PANEL_14X2_SERPENTINE to keep it)\n",
                               wavePanel.serpentine ? "serpentine" : "straight");
             } else if (buf[0] == 'm' && forcedByBuild) {
                 // A board built for one display has an LED surface to match it;
-                // cycling to a matrix display on a 33-LED strip would render
+                // cycling to a matrix display on a 29-LED strip would render
                 // off the end of the array. Reflash to change it.
                 Serial.printf("  display=%s is built in — reflash to change it\n",
                               pulleys::screen_display_name(mode));

@@ -18,11 +18,11 @@
 //
 //   8×8    64 LEDs, the block a Screen shows one channel in, and the panel on
 //          a Sensor. cols=8 rows=8 gap=0 serpentine.
-//   16×2   33 LEDs: 16 out, one dead pixel at the fold, 16 back.
-//          cols=16 rows=2 gap=1 serpentine — see panel_16x2().
+//   14×2   29 LEDs: 14 out, one dead pixel at the fold, 14 back.
+//          cols=14 rows=2 gap=1 serpentine — see panel_14x2().
 //
-// `origin` is what makes them stack: a Sensor carrying an 8×8 with a 16×2
-// chained after it is panel_8x8(leds, 0) and panel_16x2(leds, 64) over one
+// `origin` is what makes them stack: a Sensor carrying an 8×8 with a 14×2
+// chained after it is panel_8x8(leds, 0) and panel_14x2(leds, 64) over one
 // array, with no renderer aware of the other's existence.
 //
 // `swap` is there because two surfaces on one chain can want different channel
@@ -84,16 +84,16 @@ inline Panel panel_8x8(CRGB* strip, uint16_t origin = 0,
     return p;
 }
 
-// 16 out, skip 1, 16 back. The skipped pixel is the one at the fold: it exists
+// 14 out, skip 1, 14 back. The skipped pixel is the one at the fold: it exists
 // on the strip and is never written, so it stays dark and the two runs line up
 // column for column. That is why `gap` is part of the geometry rather than
 // something a caller subtracts -- get it wrong and row 1 is off by one for its
 // whole length, which reads as a wiring fault.
-inline Panel panel_16x2(CRGB* strip, uint16_t origin = 0,
+inline Panel panel_14x2(CRGB* strip, uint16_t origin = 0,
                         bool serpentine = true, ChannelSwap swap = SWAP_NONE) {
     Panel p;
     p.strip = strip; p.origin = origin;
-    p.cols = 16; p.rows = 2; p.gap = 1; p.serpentine = serpentine;
+    p.cols = 14; p.rows = 2; p.gap = 1; p.serpentine = serpentine;
     p.swap = swap;
     return p;
 }
@@ -122,6 +122,6 @@ inline void panel_fix_order(const Panel& p) {
 }
 
 static constexpr uint16_t PANEL_8X8_LEDS  = 64;
-static constexpr uint16_t PANEL_16X2_LEDS = 33;
+static constexpr uint16_t PANEL_14X2_LEDS = 29;
 
 }  // namespace pulleys
