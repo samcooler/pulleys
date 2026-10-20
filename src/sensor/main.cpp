@@ -27,8 +27,8 @@
 //   8x8 panel   the channel's pattern — pixel for pixel what that channel's
 //               block shows on a Screen, which is how a rope and its slot in
 //               the array are visibly the same thing
-//   16x2 bar    a pot of colour bubbling around the same channel hue (16, skip
-//               1, 16 — see lib/pulleys_panel)
+//   14x2 bar    a pot of colour bubbling around the same channel hue (14, skip
+//               1, 14 — see lib/pulleys_panel)
 //
 // Both are the channel's colour: the panel's pattern is built from it, and the
 // bar's hue arc is centred on it. One rope reads as one colour from either
@@ -38,11 +38,11 @@
   #define LED_PIN   14
 #endif
 #ifndef LED_COUNT
-  #define LED_COUNT 97
+  #define LED_COUNT 93
 #endif
 
 // Wire order of the chain on the output. WS2812B is normally GRB, which is what
-// the 16x2 bar wants, so the controller is told that and the bar needs nothing
+// the 14x2 bar wants, so the controller is told that and the bar needs nothing
 // further. Get it wrong and hues are permuted rather than absent -- channel 11's
 // purple comes out green when R and G are swapped, which reads as "wrong
 // channel" rather than as "wrong wiring". 'p' on serial shows solid primaries
@@ -69,8 +69,8 @@
 // a third surface chained on later needs no arithmetic done by hand.
 static constexpr uint16_t GRID_ORIGIN = 0;
 static constexpr uint16_t BAR_ORIGIN  = GRID_ORIGIN + pulleys::PANEL_8X8_LEDS;
-static_assert(LED_COUNT >= BAR_ORIGIN + pulleys::PANEL_16X2_LEDS,
-              "LED_COUNT must cover the 8x8 panel and the 16x2 bar after it");
+static_assert(LED_COUNT >= BAR_ORIGIN + pulleys::PANEL_14X2_LEDS,
+              "LED_COUNT must cover the 8x8 panel and the 14x2 bar after it");
 
 // For printing a -D token (LED_COLOR_ORDER) rather than its expansion.
 #define _STRINGIFY(x) #x
@@ -115,18 +115,24 @@ static_assert(LED_COUNT >= BAR_ORIGIN + pulleys::PANEL_16X2_LEDS,
 
 // The bar sleeps as an ember in its middle four columns, not as the whole bar
 // dimmed. Dimming the whole thing to the breath measured correct -- 0 to 14 of
-// 255, in step with the candle -- and read as nothing: 32 pixels at 5% is a
+// 255, in step with the candle -- and read as nothing: 28 pixels at 5% is a
 // faint wash, where the candle's nine pixels against 55 dark ones reads as a
 // thing breathing. Same light, concentrated instead of spread.
-#define IDLE_BAR_X0   6
-#define IDLE_BAR_X1   9
+#define IDLE_BAR_X0   5
+#define IDLE_BAR_X1   8
 
 // Flicker: how deep each pixel's own wander goes, and how fast it wanders.
 // FLICKER_FLOOR is the dimmest a pixel gets as a fraction of the breath, so a
 // candle never fully gutters out mid-swell.
 #define FLICKER_FLOOR  0.05f
 #define FLICKER_SPEED  9        // inoise8 steps per ms/16 — higher is twitchier
-#define ACTIVE_BRIGHTNESS  54     // pattern while awake; 30% down from 77, see note below
+#define ACTIVE_BRIGHTNESS  54     // the bar while awake; 30% down from 77, see note below
+
+// The 8x8 runs at half the bar's level. The two surfaces take the same number
+// at face value and do not land in the same place: 64 close-packed pixels
+// facing you read far brighter than 28 spread along a strip, so matching their
+// numbers mismatches what you see.
+#define GRID_BRIGHTNESS    27
 
 // Envelope around a detection: snap up, hold, drift back down. Re-triggering
 // only pushes the hold out — the envelope keeps rising from wherever it is and
@@ -289,7 +295,7 @@ static void applyChannelVisual() {
     gridPanel = pulleys::panel_8x8(leds, GRID_ORIGIN, /*serpentine=*/false,
                                    GRID_CHANNEL_SWAP);
 
-    barPanel = pulleys::panel_16x2(leds, BAR_ORIGIN);
+    barPanel = pulleys::panel_14x2(leds, BAR_ORIGIN);
     // The channel hue is the centre of the arc the pot bubbles within, which is
     // the same hue the panel's pattern is built from (pulleys_channel). Full
     // brightness here: the envelope below does all the scaling, exactly as it
@@ -326,7 +332,7 @@ static void renderBar(float dt, uint32_t now) {
     // The pot is lit by the detection envelope alone, so at rest the bar goes
     // dark exactly as the panel's pattern does.
     barBri = (uint8_t)(ledEnv * ACTIVE_BRIGHTNESS);
-    for (uint16_t i = 0; i < pulleys::PANEL_16X2_LEDS; i++)
+    for (uint16_t i = 0; i < pulleys::PANEL_14X2_LEDS; i++)
         leds[BAR_ORIGIN + i].nscale8(barBri);
 
     // ...and the ember takes over underneath it, on the same breath and the
@@ -594,7 +600,7 @@ void loop() {
             // Awake: the channel's own pattern, the same one this channel's
             // block shows on a Screen.
             pulleys::pattern_slot_update(patSlot, dt, pulleys::mesh_now_secs());
-            uint8_t bri = (uint8_t)(ledEnv * ACTIVE_BRIGHTNESS);
+            uint8_t bri = (uint8_t)(ledEnv * GRID_BRIGHTNESS);
             for (uint16_t i = 0; i < pulleys::PANEL_8X8_LEDS; i++)
                 leds[GRID_ORIGIN + i].nscale8(bri);
         } else {

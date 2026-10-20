@@ -60,6 +60,7 @@ static const ChannelAssignment CHANNEL_ASSIGNMENT[] = {
     //   id     ch  mode
     // ASSIGNMENTS BEGIN
     { 0xEC52,  1, LIN },   // N-EC52
+    { 0xE857,  1, LIN },   // N-E857
     { 0x0664,  2, LIN },   // N-0664
     { 0x611D,  3, LIN },   // N-611D
     { 0x8A32,  4, LIN },   // N-8A32
