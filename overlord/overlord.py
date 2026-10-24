@@ -225,6 +225,9 @@ def main():
 
     def fire_cue(cue):
         """Play one cue; True if it played."""
+        # Game-control cues are for the game system, not overlord media.
+        if cue.startswith("game_"):
+            return False
         try:
             played = dispatch(cue)
             if played:

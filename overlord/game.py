@@ -72,11 +72,16 @@ class Game:
                     raise ValueError(f"state {name} goes to unknown state {t}")
 
     def handles(self, event_name):
+        # `enter` is a lifecycle trigger, not an event delivered by a sensor.
+        if event_name == "enter":
+            return False
         return event_name in GAME_EVENTS or any(
             event_name in reactions(s) for s in self.states.values())
 
     def reacts_to(self, event_name):
         """True if the current state lists this event."""
+        if event_name == "enter":
+            return False
         with self._lock:
             return event_name in reactions(self.states.get(self.state, {}))
 
@@ -106,7 +111,8 @@ class Game:
         print(f"game: {self.state or '-'} -> {name}", flush=True)
         self.state = name
         state = self.states[name]
-        self._fire(state.get("on_enter_cue"))
+        enter = reactions(state).get("enter") or {}
+        self._fire(enter.get("cue"))
         after = state.get("after")
         if after:
             seconds = parse_duration(after["delay"])
