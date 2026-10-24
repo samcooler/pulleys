@@ -19,9 +19,9 @@
 #                  final_component_deactivated The final component is deactivated.
 #                  all_final_components_activated  Every final component is now activated.
 #   state        What the game is doing right now. It is always in exactly one.
-#   on_enter_cue Cues to fire the moment the game arrives in a state.
-#   on           What to do when an event happens in a state. An event a state
-#                does not list is ignored.
+#   on           What to do when a state is entered or an event happens in it.
+#                An event a state does not list is ignored.
+#   enter        Cues to fire the moment the game arrives in a state.
 #   cue (in on)  Cues to fire for that event.
 #   goto         The state to move to.
 #   after        Move to another state once this much time has passed.
@@ -92,6 +92,11 @@ audio_gain:
 #   digits, _ and -. This block lists every cue the game may use; a state that
 #   fires a cue not listed here is rejected. Order does not matter.
 cues:
+  game:
+    - game_randomize_simon_2_goals
+    - game_randomize_simon_3_goals
+    - game_randomize_simon_4_goals
+    - game_randomize_simon_5_goals
   audio_loop:
     - audio_loop_idle
     - audio_loop_off
@@ -104,29 +109,93 @@ cues:
     - audio_once_component_powerup  # placeholder
     - audio_once_component_powerdown  # placeholder
     - audio_once_encouragement
+    - audio_once_progress_confirmation
+    - audio_once_corporate_approval
+    - audio_once_productivity_score_rises
+    - audio_once_victory_fanfare
+    - audio_once_revelation_stinger
+    - audio_once_spirit_distress
+    - audio_once_spirit_forced_labor
+    - audio_once_janis_suspicion
+    - audio_once_janis_anger
+    - audio_once_spirit_encouragement
+    - audio_once_janis_threatening
+    - audio_once_cage_unlocking
+    - audio_once_victory_liberation
+    - audio_once_overlord_defeat
+    - audio_once_machine_shutdown
+    - audio_once_idle_return_cue
   video_loop:
     - video_loop_idle
+    - video_loop_game1
 
-# Flow: passive -> game1 -> victory1 -> reveal -> game2 -> victory2 -> kickout -> passive
+# Flow: passive -> easy_round -> medium_round -> hard_round -> victory1 -> reveal -> phase2 -> victory2 -> kickout -> passive
 # Delays marked placeholder are not final timings yet.
 states:
 
   passive:
-    on_enter_cue:
-      - audio_loop_idle
-      - video_loop_idle
     on:
+      enter:
+        cue:
+          - audio_loop_idle
+          - video_loop_idle
       component_activated:
         cue:
           - audio_once_component_powerup
           - audio_once_encouragement
           - video_once_encouragement
-        goto: game1
+        goto: easy_round
 
-  game1:
-    on_enter_cue:
-      - video_loop_game1
+  easy_round:
     on:
+      enter:
+        cue:
+          - game_randomize_simon_2_goals
+          - video_loop_game1
+      first_component_activated:
+        cue:
+          - audio_once_encouragement
+          - video_once_encouragement
+      component_activated:
+        cue:
+          - audio_once_component_powerup
+      component_deactivated:
+        cue:
+          - audio_once_component_powerdown
+      all_components_activated:
+        goto: medium_round
+    after:
+      delay: 2m                     # placeholder
+      goto: passive
+
+  medium_round:
+    on:
+      enter:
+        cue:
+          - game_randomize_simon_3_goals
+          - video_loop_game1
+      first_component_activated:
+        cue:
+          - audio_once_encouragement
+          - video_once_encouragement
+      component_activated:
+        cue:
+          - audio_once_component_powerup
+      component_deactivated:
+        cue:
+          - audio_once_component_powerdown
+      all_components_activated:
+        goto: hard_round
+    after:
+      delay: 2m                     # placeholder
+      goto: passive
+
+  hard_round:
+    on:
+      enter:
+        cue:
+          - game_randomize_simon_5_goals
+          - video_loop_game1
       first_component_activated:
         cue:
           - audio_once_encouragement
@@ -144,20 +213,24 @@ states:
       goto: passive
 
   victory1:
-    on_enter_cue:
-      - video_once_test2
+    on:
+      enter:
+        cue:
+          - video_once_test2
     after:
       delay: 10s
       goto: reveal
 
   reveal:
-    on_enter_cue:
-      - video_once_test1
+    on:
+      enter:
+        cue:
+          - video_once_test1
     after:
       delay: 10s                    # placeholder
-      goto: game2
+      goto: phase2
 
-  game2:
+  phase2:
     on:
       final_component_activated:
         cue:
@@ -173,15 +246,19 @@ states:
       goto: kickout
 
   victory2:
-    on_enter_cue:
-      - video_once_test2
+    on:
+      enter:
+        cue:
+          - video_once_test2
     after:
       delay: 2m                    # placeholder
       goto: kickout
 
   kickout:
-    on_enter_cue:
-      - audio_loop_off
+    on:
+      enter:
+        cue:
+          - audio_loop_off
     after:
       delay: 2m                    # placeholder
       goto: passive
