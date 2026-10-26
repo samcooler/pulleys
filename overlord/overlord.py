@@ -31,6 +31,7 @@ from ambient import Ambient, load as load_ambient
 import gain as gain_config
 from control import ControlServer
 from serial_reader import SerialReader
+from firmware import FirmwareUpdater
 
 # On the Pi, media is synced into a directory outside the git checkout (see deploy/).
 MEDIA = Path(os.environ.get("OVERLORD_MEDIA") or Path(__file__).resolve().parent / "media")
@@ -269,9 +270,13 @@ def main():
                      "routes": ["GET /status", "GET /volume", "POST /volume/<80|+10|-10>",
                                 "POST /cue/<name>"]}
 
+    firmware_updater = None
+
     def on_serial_event(event_name):
         event_name = event_name.strip()
         if not event_name:
+            return
+        if firmware_updater and firmware_updater.handle_line(event_name):
             return
         # The bridge's lines: "cue <name>" is the arbiter's game firing a cue,
         # "EV ..." a raw sensor event the arbiter has already turned into game
@@ -298,6 +303,9 @@ def main():
         port=args.serial_port,
     )
     serial.start()
+    if not args.test:
+        firmware_updater = FirmwareUpdater(serial)
+        firmware_updater.start()
 
     # Sounds on a schedule, from the game YAML. Independent of --game and of
     # whatever the arbiter is doing: overlord is the only one that reads them.

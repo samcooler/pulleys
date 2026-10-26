@@ -9,6 +9,15 @@ looping background video and a looping background audio track. Trigger events
 play a video clip once (then return to the video loop) or overlay a sound effect
 on top of everything.
 
+At normal startup the Overlord also checks the latest GitHub firmware Release
+in a background thread. It validates every firmware asset's binary SHA-256,
+asks the bridge for a mesh census, compares release build identities, and
+updates reachable out-of-date nodes one at a time. The bridge hosts the open
+`pulleys-fw` AP on the ESP-NOW channel and serves
+node downloads by requesting chunks over its UART link to the Overlord. GitHub
+or bridge unavailability does not stop media playback; update checks are retried
+on the next Overlord reboot.
+
 ```
 ESP-NOW commands -> bridge node -> serial (115200, one event per line) -> overlord.py -> 3 kinds of mpv
                                                                                          video player (fullscreen)
@@ -164,6 +173,29 @@ current state does not react to it).
   them; you need to reach `game2`.
 
 ## Deploying on a Raspberry Pi or mini PC
+
+The Overlord needs outbound Internet access to GitHub Releases. Its bridge UART
+must be configured as the serial port used by `serial_reader.py` (the reader
+checks `/dev/serial0`, `/dev/ttyAMA*`, and USB serial devices). The bridge AP is
+open and intended for the Pulleys nodes; it does not provide Internet routing.
+
+To publish firmware, install PlatformIO and GitHub CLI, authenticate `gh`, and
+run from the repository:
+
+```sh
+python3 tools/release_firmware.py
+```
+
+The script requires a clean Git working tree, builds the active environments
+sequentially, publishes their `firmware.bin` assets plus `manifest.json`, and
+advances the minor release number. `--build-only` creates local assets without
+publishing. For a private repository, the Overlord can read releases with a
+GitHub token provided through the `GITHUB_TOKEN` environment variable.
+
+The new firmware protocol cannot be spoken by a bridge running the retired
+image-host firmware. Flash it once over USB with
+`pio run -e bridge -t upload --upload-port <port>`; the new bridge can then
+migrate existing nodes and update itself over UART after the other nodes.
 
 Targets Raspberry Pi OS Lite (Bookworm) or a plain Debian 12/13 install with
 no desktop. For a mini PC, install from the Debian netinst image: on the

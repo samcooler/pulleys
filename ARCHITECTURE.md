@@ -185,12 +185,14 @@ serial link to a Raspberry Pi:
 
 - **Role registration:** `PULLEYS_TYPE_BRIDGE` (0x06) and `MESH_ORIGIN_BRIDGE` (0x07),
   named `B-xxxx`, reported as `BRIDGE` by whoami and census. It is a normal mesh
-  citizen: it relays, beacons the shared clock, answers census and takes OTA.
+  citizen: it relays, beacons the shared clock, answers census and serves firmware.
 - **Forwarding:** the mesh event callback only queues the event; `loop()` writes
   it to UART1. A slow or unplugged Pi therefore cannot stall the radio path.
   The queue holds 32 events and drops (and counts) the rest.
-- **Two ports:** UART1 is the Pi link; the native USB console carries logs,
-  whoami and OTA. Keeping them apart means the Pi never sees boot banners.
+- **Two ports:** UART1 is the Overlord link; the native USB console carries logs
+  and diagnostics. UART1 carries cue/event lines and a bidirectional update
+  control/chunk protocol. The bridge also runs an open `pulleys-fw` AP on the
+  ESP-NOW channel and streams node image GETs from the Overlord over UART1.
 - **Hardware:** always an ESP32-C3. See `DEVELOPING.md` for pins, wiring, the
   `EV` line format and how to read it.
 
@@ -212,7 +214,8 @@ These are marked with `TODO` comments in the code:
 2. **Genetic mutation** — Random culture drift over time (`culture_mutate()` stub)
 3. **Ritual interaction** — IMU gestures modify exchange dynamics (`RitualDetector` stub)
 4. **Matrix patterns** — Spatial 8×8 patterns that use row/column position
-5. **OTA updates** — ArduinoOTA stubs in both main.cpp files
+5. **Firmware updates** — the Overlord coordinates GitHub Release images and
+   nodes pull a selected image from the bridge's same-channel AP.
 6. **Pattern library** — Multiple pattern types selectable by culture traits
 7. **Culture persistence** — Save culture to NVS flash so stations remember across reboots
 

@@ -22,7 +22,8 @@ def find_serial_port():
     # macOS patterns
     ports = glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/cu.usbserial*")
     # Linux patterns
-    ports += glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")
+    ports += (glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*") +
+              glob.glob("/dev/ttyAMA*") + glob.glob("/dev/serial0"))
     return sorted(ports)[0] if ports else None
 
 
@@ -38,6 +39,21 @@ class SerialReader:
         self.port = port
         self._running = False
         self._thread = None
+        self._serial = None
+        self._write_lock = threading.Lock()
+
+    def write_line(self, line):
+        """Write one control line to the connected bridge UART, if available."""
+        with self._write_lock:
+            port = self._serial
+            if port is None or not getattr(port, "is_open", False):
+                return False
+            try:
+                port.write((line.rstrip("\r\n") + "\n").encode("utf-8"))
+                port.flush()
+                return True
+            except Exception:
+                return False
 
     def start(self):
         """Start the reader thread."""
@@ -79,6 +95,7 @@ class SerialReader:
                 return
 
             # Connect to port
+            s = None
             try:
                 s = serial.Serial()
                 s.port = port
@@ -92,6 +109,8 @@ class SerialReader:
                 s.rts = False
                 time.sleep(0.1)
                 s.reset_input_buffer()
+                with self._write_lock:
+                    self._serial = s
                 print(f"serial: connected to {port}", flush=True)
 
                 # Read loop
@@ -111,6 +130,9 @@ class SerialReader:
             except Exception as e:
                 print(f"serial error on {port}: {e}", flush=True)
             finally:
+                with self._write_lock:
+                    if self._serial is s:
+                        self._serial = None
                 try:
                     s.close()
                 except Exception:

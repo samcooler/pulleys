@@ -21,13 +21,7 @@
 #   --install      converge, but override each board's role with the one its
 #                  hardware class calls for. How a board carrying a retired
 #                  traveler/station image gets moved onto a current one
-#   --ota          flash over the air instead of over the cable. Plug into any
-#                  one board: it is written by esptool and then hosts the image
-#                  for every other board on its own SoftAP, on the mesh channel.
-#                  With no env this is the whole piece in one command -- every
-#                  live env in turn, then the tethered board over its cable.
-#                  With an env, just that env; honours -i. Needs no network of
-#                  any kind. See tools/ota.py
+#   --ota          retired; firmware updates are coordinated by the Overlord.
 #   --any          skip the hardware-class check
 #
 # How a board is identified
@@ -84,10 +78,8 @@ ENV_GIVEN=false
 ONLY_PORTS=()
 ONLY_IDS=()
 expect=""
-# Over the air is a different delivery entirely: the tethered board is the host,
-# not the target (see lib/pulleys_ota for why the image travels that way). Hand
-# over before parsing anything, and pass the rest through untouched -- ota.py
-# takes the same env, -i and -p, plus flags of its own that mean nothing here.
+# The former mesh-hosted OTA flow has been retired in favor of Overlord-managed
+# GitHub Release updates.
 # The wireless counterpart to -l: -l sees what is plugged in, --survey sees what
 # is out there. Same handoff shape, and it disturbs nothing -- boards answer
 # from inside their normal loop.
@@ -100,11 +92,8 @@ if [[ " $* " == *" --survey "* ]]; then
 fi
 
 if [[ " $* " == *" --ota "* ]]; then
-  ota_args=()
-  for arg in "$@"; do
-    [[ "$arg" == "--ota" ]] || ota_args+=("$arg")
-  done
-  exec "/Users/sam/.platformio/penv/bin/python" "${0:A:h}/tools/ota.py" "${ota_args[@]}"
+  print -u2 "--ota has been retired; start the Overlord to update reachable nodes from GitHub Releases."
+  exit 2
 fi
 
 for arg in "$@"; do

@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <pulleys_protocol.h>
 #include <pulleys_identity.h>
+#include <Preferences.h>
 
 // ── Common identify-over-serial interface ────────────────────────────────────
 //
@@ -94,6 +95,30 @@ inline const char* whoami_build() {
         for (char* p = buf; *p; ++p) if (*p == ' ') *p = '-';
     }
     return buf;
+}
+
+// Release builds embed a deterministic SHA-256 identity for (tag, commit, env).
+// Unmanaged development images fall back to the last managed asset hash, or
+// `unknown` before their first Overlord update.
+inline const char* whoami_firmware_hash() {
+#ifdef PULLEYS_FIRMWARE_BUILD_HASH
+    return PULLEYS_FIRMWARE_BUILD_HASH;
+#else
+    static char hash[65] = {};
+    static bool loaded = false;
+    if (!loaded) {
+        loaded = true;
+        Preferences p;
+        if (p.begin("fw", true)) {
+            String value = p.getString("sha256", "unknown");
+            strlcpy(hash, value.c_str(), sizeof(hash));
+            p.end();
+        } else {
+            strlcpy(hash, "unknown", sizeof(hash));
+        }
+    }
+    return hash;
+#endif
 }
 
 // Emit the identity line. Safe to call before identity_init(): the MAC is read

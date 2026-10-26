@@ -480,9 +480,6 @@ static void renderWave(float dt) {
 //   h<c>,<s>  set the wave's centre hue and its swing (0-255), for finding the
 //             arc on the bench before writing it into WaveParams
 static void handleSerial() {
-    // Long enough for the OTA intake header, which is the longest line any
-    // role accepts: "OTA-IMG env=… size=… md5=<32 hex> id=…" runs past 70
-    // characters, and a short buffer truncates it silently rather than failing.
     static char buf[96];
     static uint8_t len = 0;
     while (Serial.available()) {
@@ -492,11 +489,8 @@ static void handleSerial() {
             buf[len] = 0;
             len = 0;
             if (pulleys::whoami_handle(buf)) continue;   // "?" → PULLEYS-ID line
-            if (pulleys::ota_handle_serial(buf)) continue;   // "OTA-SLOT" / "OTA-SERVE"
             if (pulleys::census_handle_serial(buf)) continue; // "CENSUS" → who is out there
-            if (buf[0] == 'O') {                 // "O" → become the OTA host
-                pulleys::ota_host_begin();
-            } else if (buf[0] == 'e') {
+            if (buf[0] == 'e') {
                 int ch = atoi(buf + 1);
                 if (ch >= 0 && ch < NUM_CHANNELS) {
                     pulleys::MeshEvent ev = {};
@@ -597,7 +591,7 @@ void loop() {
     pulleys::mesh_poll();
     pulleys::census_poll();
 
-    // OTA owns the board while it runs: the radio wants the airtime, and
+    // A targeted update owns the board while it runs, and
     // FastLED.show() turns interrupts off for long enough to cost packets.
     if (pulleys::ota_active()) {
         pulleys::ota_poll();

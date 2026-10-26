@@ -46,6 +46,7 @@ namespace _census {
 
 struct State {
     char     detail[16] = {};
+    Stream*  mirror = nullptr;
     uint16_t pendingNonce = 0;
     uint32_t replyAt = 0;      // 0 = nothing owed
     bool     asking  = false;
@@ -77,24 +78,27 @@ inline const char* roleName(uint8_t originType) {
 // that may be empty, and it is quoted so an empty one still parses.
 inline void print(uint16_t id, uint8_t originType, const char* env,
                   const char* build, const char* detail, uint32_t uptime,
-                  bool self) {
-    Serial.printf(PULLEYS_CENSUS_PREFIX " id=%04X name=N-%04X role=%s env=%s "
-                  "build=%s detail=\"%s\" up=%lu self=%d\n",
-                  id, id, roleName(originType),
-                  (env && env[0]) ? env : "?",
-                  (build && build[0]) ? build : "?",
-                  detail ? detail : "",
-                  (unsigned long)uptime, self ? 1 : 0);
+                  bool self, const char* fwHash = "unknown") {
+    char line[240];
+    snprintf(line, sizeof(line), PULLEYS_CENSUS_PREFIX " id=%04X name=N-%04X role=%s env=%s "
+             "build=%s detail=\"%s\" up=%lu self=%d sha256=%s",
+             id, id, roleName(originType), (env && env[0]) ? env : "?",
+             (build && build[0]) ? build : "?", detail ? detail : "",
+             (unsigned long)uptime, self ? 1 : 0,
+             (fwHash && fwHash[0]) ? fwHash : "unknown");
+    Serial.println(line);
+    if (S().mirror) S().mirror->println(line);
 }
 
 inline void onCensus(const MeshCensus& c) {
     // Copy through fixed buffers: nothing on the wire is promised to be
     // terminated, and a run-on string here would take the whole line with it.
-    char env[17] = {}, build[25] = {}, detail[17] = {};
+    char env[33] = {}, build[25] = {}, detail[17] = {}, fwHash[66] = {};
     memcpy(env, c.env, sizeof(c.env));
     memcpy(build, c.build, sizeof(c.build));
     memcpy(detail, c.detail, sizeof(c.detail));
-    print(c.originId, c.originType, env, build, detail, c.uptimeSecs, false);
+    memcpy(fwHash, c.fwHash, sizeof(c.fwHash));
+    print(c.originId, c.originType, env, build, detail, c.uptimeSecs, false, fwHash);
 }
 
 }  // namespace _census
@@ -107,6 +111,8 @@ inline void census_set_detail(const char* detail) {
             sizeof(_census::S().detail) - 1);
 }
 
+inline void census_set_mirror(Stream* stream) { _census::S().mirror = stream; }
+
 inline void census_init() {
     mesh_on_hello(_census::onHello);
     mesh_on_census(_census::onCensus);
@@ -117,7 +123,7 @@ inline void census_poll() {
     if (!s.replyAt || (int32_t)(millis() - s.replyAt) < 0) return;
     s.replyAt = 0;
     mesh_send_census(s.pendingNonce, PULLEYS_ENV, whoami_build(),
-                     s.detail, millis() / 1000);
+                     s.detail, millis() / 1000, whoami_firmware_hash());
 }
 
 // Ask everyone. Answers arrive over the next spread window and print as they
@@ -126,7 +132,8 @@ inline void census_poll() {
 inline void census_request(uint16_t spreadMs = CENSUS_SPREAD_MS) {
     Serial.printf(PULLEYS_CENSUS_PREFIX " begin spread=%ums\n", spreadMs);
     _census::print(identity_id(), _mesh::S().originType, PULLEYS_ENV,
-                   whoami_build(), _census::S().detail, millis() / 1000, true);
+                   whoami_build(), _census::S().detail, millis() / 1000, true,
+                   whoami_firmware_hash());
     mesh_send_hello(spreadMs);
 }
 

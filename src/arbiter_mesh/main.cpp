@@ -157,9 +157,6 @@ static bool           s_touchDebug = false;
 // ambiguity about field order, and local wall time rather than epoch because
 // time-of-day is the question the log exists to answer.
 static void handleSerial() {
-    // Long enough for the OTA serve header, which is the longest line any role
-    // accepts: "OTA-SERVE env=… size=… md5=<32 hex> id=…" runs past 70
-    // characters, and a short buffer truncates it silently rather than failing.
     static char buf[96];
     static uint8_t len = 0;
     while (Serial.available()) {
@@ -170,12 +167,7 @@ static void handleSerial() {
             uint8_t n = len;
             len = 0;
             if (pulleys::whoami_handle(buf)) continue;   // "?" → PULLEYS-ID line
-            if (pulleys::ota_handle_serial(buf)) continue;   // "OTA-SLOT" / "OTA-SERVE"
             if (pulleys::census_handle_serial(buf)) continue; // "CENSUS" → who is out there
-            if (buf[0] == 'O' && n == 1) {       // "O" → become the OTA host
-                pulleys::ota_host_begin();
-                continue;
-            }
             if (buf[0] == 'T' && n == 15) {
                 auto num = [&](uint8_t off, uint8_t w) {
                     int v = 0;
@@ -445,7 +437,7 @@ void loop() {
     components_tick();
     handleSerial();
 
-    // OTA owns the board while it runs. The panel holds its last frame rather
+    // A targeted update owns the board while it runs. The panel holds its last frame rather
     // than being redrawn: LVGL has nothing useful to say about a flash write,
     // and the radio would rather have the time.
     if (pulleys::ota_active()) {

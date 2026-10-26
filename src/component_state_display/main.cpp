@@ -22,7 +22,7 @@
 // goes quiet, a pixel at the right-hand end blinks red.
 //
 // Like every mesh role it relays, beacons the shared clock, answers census and
-// takes OTA.
+// supports targeted firmware updates.
 
 #ifndef LED_PIN
   #define LED_PIN   16
@@ -103,7 +103,7 @@ static void render() {
 //   c<bar> <percent>  show a bar at that level as if the arbiter had sent it, for
 //                     the bench: "c0 100" fills component 1, then it drains
 static void handleSerial() {
-    // Long enough for the OTA intake header, the longest line any role accepts.
+    // Console line input for local display controls.
     static char buf[96];
     static uint8_t len = 0;
     while (Serial.available()) {
@@ -113,11 +113,8 @@ static void handleSerial() {
             buf[len] = 0;
             len = 0;
             if (pulleys::whoami_handle(buf)) continue;
-            if (pulleys::ota_handle_serial(buf)) continue;
             if (pulleys::census_handle_serial(buf)) continue;
-            if (buf[0] == 'O') {
-                pulleys::ota_host_begin();
-            } else if (buf[0] == 'c') {
+            if (buf[0] == 'c') {
                 int bar = atoi(buf + 1);
                 const char* sp = strchr(buf, ' ');
                 int pct = sp ? atoi(sp + 1) : 100;
@@ -168,7 +165,7 @@ void loop() {
     pulleys::mesh_poll();
     pulleys::census_poll();
 
-    // OTA owns the board while it runs: the radio wants the airtime, and
+    // A targeted update owns the board while it runs, and
     // FastLED.show() turns interrupts off for long enough to cost packets.
     if (pulleys::ota_active()) {
         pulleys::ota_poll();

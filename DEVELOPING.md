@@ -7,7 +7,7 @@
 | **Traveler** | Waveshare ESP32-S3-Matrix | 8×8 WS2812B matrix, 64 LEDs (GPIO 14) | QMI8658 IMU, battery ADC (GPIO 2) |
 | **Station (C3)** | Seeed XIAO ESP32-C3 | 8×32 WS2812B matrix, 256 LEDs (GPIO 10) | — |
 | **Station (WROOM)** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | hardware FPU, CH340 USB-serial |
-| **Bridge** | ESP32-C3 (4MB, native USB) | none | UART1 to a Raspberry Pi (GPIO 21 TX, 20 RX) |
+| **Bridge** | ESP32-C3 (4MB, native USB) | none | UART1 to the Overlord (GPIO 21 TX, 20 RX); open firmware AP on mesh channel |
 | **Component state display** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | the screen's board; one bar per game component |
 
 ## Build Environments
@@ -26,6 +26,35 @@ pio run -e station_wroom     # build one env
 ```
 
 Note: PlatformIO CLI is at `~/.platformio/penv/bin/pio` if not on your PATH.
+
+## Firmware releases and updates
+
+The Overlord checks the latest GitHub Release in the background at startup,
+compares release build identities, verifies asset SHA-256 values, and updates
+reachable nodes sequentially. The bridge's open `pulleys-fw` AP remains on
+`MESH_WIFI_CHANNEL`; node downloads are served from firmware chunks requested
+from the Overlord over UART.
+
+Publish active firmware environments with:
+
+```sh
+python3 tools/release_firmware.py
+```
+
+This builds `sensor`, `screen`, `component_state_display`, `arbiter_mesh`, and
+`bridge`, then creates the next minor GitHub Release with the images and
+`manifest.json`. Use `--build-only` to create local assets only. `./flash_all.sh
+--ota` is retired; managed updates are initiated by restarting the Overlord.
+
+The first migration requires one USB flash of the new bridge environment,
+because the old bridge image cannot receive the new serial update protocol:
+
+```sh
+pio run -e bridge -t upload --upload-port /dev/serial0
+```
+
+The new bridge retains the old mesh invitation and `/firmware.bin` route long
+enough to migrate nodes that still run the legacy OTA client.
 
 ## Flashing & Monitoring
 
@@ -131,7 +160,7 @@ pulleys/
 ## Bridge (mesh → Raspberry Pi)
 
 The `bridge` node joins the ESP-NOW mesh like any other role (it relays, answers
-census and takes OTA) and forwards every deduped sensor event to a Raspberry Pi
+census and serves firmware) and forwards every deduped sensor event to the Overlord
 as one text line on a second serial port. Source: `src/bridge/main.cpp`.
 
 ```sh
@@ -148,8 +177,8 @@ unless an env is named, so flash a fresh board with the command above or
 
 | Port | Where | Carries |
 |------|-------|---------|
-| Console | native USB (`/dev/cu.usbmodem*`) | boot banner, `★` event log, `[PI]` echo, whoami / census / OTA |
-| Pi link | UART1: GPIO 21 = TX, GPIO 20 = RX, 115200 8N1 | the `EV` lines below |
+| Console | native USB (`/dev/cu.usbmodem*`) | boot banner, `★` event log, whoami / census |
+| Overlord link | UART1: GPIO 21 = TX, GPIO 20 = RX, 115200 8N1 | cues/events, update control, Base64 image chunks |
 
 They are separate on purpose, so boot banners and whoami replies never end up in
 front of whatever reads the Pi link. Do not use GPIO 18/19: they are the C3's USB
@@ -197,19 +226,10 @@ changing the game's cues never needs the bridge reflashed. Test one without the 
 `c audio_once_chime` on the console. The console shows
 only `cue <name>` lines by default; `v` toggles the per-event lines and counters.
 
-The Pi-side player lives in `overlord/` (`overlord.py`, `mpv_ipc.py`). It does not
-read this link yet (neither `EV` nor `cue` lines).
-
-## OTA Updates (Future)
-
-When deploying 5–20 stations in trees, USB cables aren't practical. Plan:
-
-1. **ArduinoOTA** over WiFi — each board connects to a local WiFi AP
-2. Station hostnames use their device ID: `S-7B01.local`
-3. Flash over WiFi: `pio run -e station_c3 -t upload --upload-port S-7B01.local`
-4. Requires adding WiFi credentials and OTA init to firmware (stubs are in place)
-
-Alternative: ESP-IDF native OTA with HTTP server for fleet updates.
+The Overlord player and boot-time firmware coordinator live in `overlord/`.
+The bridge REST firmware route is `GET /api/v1/firmware/<sha256>` on its
+continuous `pulleys-fw` AP. Each response is pulled from the Overlord through
+UART1 in bounded, checksummed chunks.
 
 ## Tips
 
