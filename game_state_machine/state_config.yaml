@@ -10,10 +10,11 @@
 #                  video_loop_*  background video; repeats until changed
 #                  video_once_*  a short video that plays once on screen
 #   event        Something that happens in the world, which a state can react to:
-#                  first_component_activated   A major component is activated while none of them were.
-#                  component_activated         One of the major components is activated.
+#                  first_goal_component_activated  A goal activates while no goal is lit.
+#                  goal_component_activated     A goal component is activated.
+#                  nongoal_component_activated  A major component outside the goal set is activated.
 #                  component_deactivated       One of the major components is deactivated.
-#                  all_components_activated    Every major component is now activated.
+#                  all_components_activated    All goals lit; every non-goal dark.
 #                  all_components_deactivated  Every major component is now deactivated.
 #                  final_component_activated   The final component is activated.
 #                  final_component_deactivated The final component is deactivated.
@@ -93,6 +94,8 @@ audio_gain:
 #   fires a cue not listed here is rejected. Order does not matter.
 cues:
   game:
+    - game_reset_components
+    - game_randomize_simon_1_goals
     - game_randomize_simon_2_goals
     - game_randomize_simon_3_goals
     - game_randomize_simon_4_goals
@@ -139,7 +142,7 @@ states:
         cue:
           - audio_loop_idle
           - video_loop_idle
-      component_activated:
+      nongoal_component_activated:
         cue:
           - audio_once_component_powerup
           - audio_once_encouragement
@@ -150,13 +153,14 @@ states:
     on:
       enter:
         cue:
+          - game_reset_components
           - game_randomize_simon_2_goals
           - video_loop_game1
-      first_component_activated:
+      first_goal_component_activated:
         cue:
           - audio_once_encouragement
           - video_once_encouragement
-      component_activated:
+      goal_component_activated:
         cue:
           - audio_once_component_powerup
       component_deactivated:
@@ -172,13 +176,14 @@ states:
     on:
       enter:
         cue:
+          - game_reset_components
           - game_randomize_simon_3_goals
           - video_loop_game1
-      first_component_activated:
+      first_goal_component_activated:
         cue:
           - audio_once_encouragement
           - video_once_encouragement
-      component_activated:
+      goal_component_activated:
         cue:
           - audio_once_component_powerup
       component_deactivated:
@@ -194,13 +199,14 @@ states:
     on:
       enter:
         cue:
+          - game_reset_components
           - game_randomize_simon_5_goals
           - video_loop_game1
-      first_component_activated:
+      first_goal_component_activated:
         cue:
           - audio_once_encouragement
           - video_once_encouragement
-      component_activated:
+      goal_component_activated:
         cue:
           - audio_once_component_powerup
       component_deactivated:
@@ -232,6 +238,9 @@ states:
 
   phase2:
     on:
+      enter:
+        cue:
+          - game_reset_components
       final_component_activated:
         cue:
           - audio_once_component_powerup

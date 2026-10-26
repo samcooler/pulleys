@@ -1,5 +1,6 @@
 #include "components.h"
 #include "gamestate.h"
+#include <stdlib.h>
 #include <Arduino.h>
 
 static const uint32_t HEARTBEAT_MS = 1000;   // how often the charge is republished
@@ -21,6 +22,7 @@ struct Component {
     uint32_t wearMs;     // how long this pull will keep it lit: its own, so a rate change mid-drain does not jump it
 };
 static Component s_comp[MAJOR_COUNT + FINAL_COUNT];
+static uint8_t s_goalMask = 0; // major component bitset; zero until the first Simon cue
 
 static bool lit(const Component& c, uint32_t now) {
     return c.litUntil && (int32_t)(c.litUntil - now) > 0;
@@ -36,6 +38,42 @@ static bool anyLit(bool isFinal, uint32_t now) {
     for (const Component& c : s_comp)
         if (c.isFinal == isFinal && lit(c, now)) return true;
     return false;
+}
+
+static uint8_t litMajorMask(uint32_t now) {
+    uint8_t mask = 0;
+    for (uint8_t i = 0; i < MAJOR_COUNT; i++)
+        if (lit(s_comp[i], now)) mask |= (uint8_t)(1u << i);
+    return mask;
+}
+
+static bool goalsComplete(uint32_t now) {
+    return s_goalMask && litMajorMask(now) == s_goalMask;
+}
+
+static uint8_t bitCount(uint8_t n) {
+    uint8_t count = 0;
+    while (n) { count += n & 1u; n >>= 1; }
+    return count;
+}
+
+static void randomizeGoals(uint8_t count) {
+    uint8_t choices[32];
+    uint8_t choiceCount = 0;
+    for (uint8_t mask = 1; mask < (1u << MAJOR_COUNT); mask++)
+        if (bitCount(mask) == count) choices[choiceCount++] = mask;
+
+    uint8_t filtered[32];
+    uint8_t filteredCount = 0;
+    for (uint8_t i = 0; i < choiceCount; i++)
+        if (choices[i] != s_goalMask) filtered[filteredCount++] = choices[i];
+    const uint8_t* pool = filteredCount ? filtered : choices;
+    uint8_t poolCount = filteredCount ? filteredCount : choiceCount;
+    s_goalMask = pool[(uint8_t)random(poolCount)];
+}
+
+static void checkSimonComplete(uint32_t now) {
+    if (goalsComplete(now)) gamestate_event(GE_ALL_COMPONENTS_ACTIVATED);
 }
 
 // Tell the displays how charged every component is. A change goes out as a burst;
@@ -58,11 +96,38 @@ static void publish(bool urgent) {
 }
 
 void components_init() {
+    s_goalMask = 0;
     for (uint8_t i = 0; i < MAJOR_COUNT + FINAL_COUNT; i++) {
         s_comp[i].isFinal  = i >= MAJOR_COUNT;
         s_comp[i].litUntil = 0;
         s_comp[i].wearMs   = 0;
     }
+}
+
+bool components_on_cue(const char* cue) {
+    if (cue && strcmp(cue, "game_reset_components") == 0) {
+        for (Component& component : s_comp) {
+            component.litUntil = 0;
+            component.wearMs = 0;
+        }
+        publish(true);
+        return false;
+    }
+
+    static const char prefix[] = "game_randomize_simon_";
+    if (!cue || strncmp(cue, prefix, sizeof(prefix) - 1) != 0) return false;
+    const char* digits = cue + sizeof(prefix) - 1;
+    char* end = nullptr;
+    long count = strtol(digits, &end, 10);
+    if (end == digits || strcmp(end, "_goals") != 0 || count < 1 || count > MAJOR_COUNT)
+        return false;
+
+    randomizeGoals((uint8_t)count);
+    return true;
+}
+
+void components_check_simon_complete() {
+    checkSimonComplete(millis()); // a retained lit set can already match new goals
 }
 
 void components_on_mesh_event(const pulleys::MeshEvent& ev) {
@@ -72,7 +137,6 @@ void components_on_mesh_event(const pulleys::MeshEvent& ev) {
     uint32_t now = millis();
     Component& c = s_comp[idx];
     bool wasLit = lit(c, now);
-    bool noneLit = !anyLit(c.isFinal, now);   // before this pull lights anything
     c.wearMs   = wearMsNow();
     c.litUntil = now + c.wearMs;
     publish(true);        // lit, or topped back up: the display's bar goes to full
@@ -82,11 +146,15 @@ void components_on_mesh_event(const pulleys::MeshEvent& ev) {
         gamestate_event(GE_FINAL_COMPONENT_ACTIVATED);
         if (allLit(true, now)) gamestate_event(GE_ALL_FINAL_COMPONENTS_ACTIVATED);
     } else {
-        // "First" is about the room, not the state: the first major to light
-        // while every major was dark. It goes out just before the plain event.
-        if (noneLit) gamestate_event(GE_FIRST_COMPONENT_ACTIVATED);
-        gamestate_event(GE_COMPONENT_ACTIVATED);
-        if (allLit(false, now)) gamestate_event(GE_ALL_COMPONENTS_ACTIVATED);
+        bool isGoal = (s_goalMask & (1u << idx)) != 0;
+        if (isGoal) {
+            bool noGoalLit = (litMajorMask(now) & s_goalMask) == (uint8_t)(1u << idx);
+            if (noGoalLit) gamestate_event(GE_FIRST_GOAL_COMPONENT_ACTIVATED);
+            gamestate_event(GE_GOAL_COMPONENT_ACTIVATED);
+        } else {
+            gamestate_event(GE_NONGOAL_COMPONENT_ACTIVATED);
+        }
+        checkSimonComplete(now);
     }
 }
 
@@ -104,6 +172,7 @@ void components_tick() {
         } else {
             gamestate_event(GE_COMPONENT_DEACTIVATED);
             if (!anyLit(false, now)) gamestate_event(GE_ALL_COMPONENTS_DEACTIVATED);
+            checkSimonComplete(now);
         }
     }
     if (changed) {

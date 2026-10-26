@@ -1,4 +1,5 @@
 #include "gamestate.h"
+#include "components.h"
 #include <ArduinoJson.h>
 #include <pulleys_mesh.h>
 #include <utility>
@@ -148,7 +149,6 @@ static bool validate(JsonDocument& doc, String& why) {
     for (JsonPair st : states) {
         String name = st.key().c_str();
         JsonVariant state = st.value();
-        if (badCues(name + ".on_enter_cue", state["on_enter_cue"])) return false;
         for (JsonPair ev : state["on"].as<JsonObject>()) {
             String where = name + ".on." + ev.key().c_str();
             if (!ev.value().isNull() && !ev.value().is<JsonObject>()) {
@@ -175,11 +175,14 @@ static bool validate(JsonDocument& doc, String& why) {
 
 // ── The machine ───────────────────────────────────────────────────────────────
 static void fire(JsonVariant cues) {
+    bool randomizedGoals = false;
     for (JsonVariant c : cues.as<JsonArray>()) {
         const char* name = c.as<const char*>();
+        randomizedGoals = components_on_cue(name) || randomizedGoals;
         if (!pulleys::mesh_send_cue(name)) continue;   // validated on load
         record('C', "%s", name);
     }
+    if (randomizedGoals) components_check_simon_complete();
 }
 
 static void enter(const char* name) {
@@ -193,8 +196,6 @@ static void enter(const char* name) {
     else record('S', "%s -> %s", from, s_state);
 
     JsonVariant state = s_doc["states"][name];
-    fire(state["on_enter_cue"]);
-
     JsonVariant after = state["after"];
     if (!after.isNull()) {
         uint32_t ms = DEFAULT_DELAY_MS;
@@ -203,6 +204,11 @@ static void enter(const char* name) {
         s_timerAt = s_enteredAt + ms;
         s_timerOn = true;
     }
+
+    // State entry is represented in the YAML like other reactions, under
+    // `on: enter:`. Set its timer first: an entry cue may complete Simon's
+    // current goal set and synchronously move the state machine again.
+    fire(state["on"]["enter"]["cue"]);
 }
 
 bool gamestate_load(const String& json, String& why) {

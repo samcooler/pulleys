@@ -59,8 +59,9 @@ CUE_NAME = re.compile(r"[a-z0-9_-]{1,%d}" % CUE_NAME_MAX)
 # Every event something emits. A state listing any other name would never fire.
 # Keep in step with src/arbiter_mesh/gameevents.h and overlord/game.py.
 KNOWN_EVENTS = {
-    "first_component_activated",
-    "component_activated",
+    "first_goal_component_activated",
+    "goal_component_activated",
+    "nongoal_component_activated",
     "component_deactivated",
     "all_components_activated",
     "all_components_deactivated",

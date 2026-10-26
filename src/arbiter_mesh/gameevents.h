@@ -17,8 +17,9 @@ static const uint8_t GAME_MAJOR_COMPONENTS = 5;
 static const uint8_t GAME_FINAL_COMPONENTS = 3;
 
 enum GameEvent : uint8_t {
-    GE_FIRST_COMPONENT_ACTIVATED,
-    GE_COMPONENT_ACTIVATED,
+    GE_FIRST_GOAL_COMPONENT_ACTIVATED,
+    GE_GOAL_COMPONENT_ACTIVATED,
+    GE_NONGOAL_COMPONENT_ACTIVATED,
     GE_COMPONENT_DEACTIVATED,
     GE_ALL_COMPONENTS_ACTIVATED,
     GE_ALL_COMPONENTS_DEACTIVATED,
@@ -30,8 +31,9 @@ enum GameEvent : uint8_t {
 
 inline const char* gameevent_name(GameEvent e) {
     static const char* const names[GE_COUNT] = {
-        "first_component_activated",
-        "component_activated",
+        "first_goal_component_activated",
+        "goal_component_activated",
+        "nongoal_component_activated",
         "component_deactivated",
         "all_components_activated",
         "all_components_deactivated",

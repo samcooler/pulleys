@@ -133,12 +133,22 @@ states:
       goto: other_state
 ```
 
-- Events used so far: `first_component_activated` (a major component lit while
-  none of them were; it comes just before `component_activated` for the same
-  pull), `component_activated` and `component_deactivated` (any
-  major component), `all_components_activated` and `all_components_deactivated`,
+- Events used so far: `first_goal_component_activated` (a goal component lit
+  while no goal component was lit; it comes just before
+  `goal_component_activated` for the same pull), `goal_component_activated`,
+  and `nongoal_component_activated` (a major component outside the current goal
+  set), `component_deactivated` (any major component), `all_components_activated`
+  (all current goals lit and every non-goal major component dark) and
+  `all_components_deactivated`,
   `final_component_activated`, `final_component_deactivated` and
   `all_final_components_activated`. The event source decides when they fire.
+- `game_randomize_simon_N_goals` cues, for N from 1 to 5, choose N distinct
+  major components as goals. A repeat of the prior set is avoided when another
+  set of that size exists. Goals persist until another randomization cue.
+- `game_reset_components` clears the activation status of all major and final
+  components and immediately publishes zero charge to the displays. It emits no
+  component-deactivation events. Put it before the round's goal-randomization
+  cue when a fresh round should start with every component dark.
 - An event with no entry in the current state is ignored.
 - `after` is cancelled when the state is left and restarts on re-entry.
   Durations are whole seconds or minutes: `10s`, `2m`. Seconds are the finest

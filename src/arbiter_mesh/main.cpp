@@ -212,7 +212,7 @@ static void handleSerial() {
                 ev.originId  = pulleys::identity_id();
                 components_on_mesh_event(ev);
             } else if (buf[0] == 'g' && n > 2 && buf[1] == ' ') {
-                // "g component_activated" -> inject a game event, as the sensors would
+                // "g goal_component_activated" -> inject a game event by name
                 GameEvent e;
                 if (gameevent_from_name(buf + 2, e)) gamestate_event(e);
                 else Serial.println("  [GAME] unknown event name");
