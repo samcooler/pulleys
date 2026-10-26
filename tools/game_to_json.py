@@ -171,7 +171,9 @@ def validate(cfg):
         state = state or {}
         check_cues(f"{name}.on_enter_cue", state.get("on_enter_cue"))
         for event, action in (state.get("on") or {}).items():
-            if event not in KNOWN_EVENTS:
+            # `enter` is a lifecycle trigger handled by both the Overlord and
+            # arbiter state machines; it is not emitted by a sensor event.
+            if event != "enter" and event not in KNOWN_EVENTS:
                 errors.append(f"{name}.on.{event}: not an event anything sends")
             if action is not None and not isinstance(action, dict):
                 errors.append(f"{name}.on.{event}: must be a map with cue and/or goto")
