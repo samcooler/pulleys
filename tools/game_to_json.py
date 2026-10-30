@@ -72,7 +72,11 @@ KNOWN_EVENTS = {
 
 # How many components of each kind there are. The mesh packet and the component
 # state display have a bar for each. Keep in step with gameevents.h.
-COMPONENT_COUNTS = {"major": 5, "final": 3}
+COMPONENT_COUNTS = {"major": 5}
+
+# The colours a major may be. Keep in step with COLOR_* / COLOR_GAME1_COUNT in
+# lib/pulleys_channel.
+GAME1_COLORS = ("red", "blue", "green", "yellow", "orange")
 
 # The mesh packet carries the decay rate in thousandths of a percent per second
 # in 16 bits. Keep in step with MeshComponents in lib/pulleys_mesh.
@@ -116,28 +120,32 @@ def validate(cfg):
         if target not in states:
             errors.append(f"{where}: goto '{target}' is not a state")
 
-    # components: which rope channel drives each (GAME_FORMAT.md)
+    # components: majors are game1 colours; finals are the purple channels and
+    # are not configured (GAME_FORMAT.md)
     comps = cfg.get("components")
     if not isinstance(comps, dict):
-        errors.append("components: missing, or not a map with major and final lists")
+        errors.append("components: missing, or not a map with a major list")
     else:
-        used = {}
-        for kind, count in COMPONENT_COUNTS.items():
-            channels = comps.get(kind)
-            if not isinstance(channels, list) or len(channels) != count:
-                errors.append(f"components.{kind}: must list exactly {count} channels")
-                continue
-            for i, ch in enumerate(channels):
-                where = f"components.{kind}[{i}]"
-                if isinstance(ch, bool) or not isinstance(ch, int) or not 0 <= ch <= 15:
-                    errors.append(f"{where}: '{ch}' is not a channel (a whole number, 0-15)")
-                elif ch in used:
-                    errors.append(f"{where}: channel {ch} already drives {used[ch]}")
+        count = COMPONENT_COUNTS["major"]
+        colors = comps.get("major")
+        if not isinstance(colors, list) or len(colors) != count:
+            errors.append(f"components.major: must list exactly {count} colours")
+        else:
+            seen = {}
+            for i, color in enumerate(colors):
+                where = f"components.major[{i}]"
+                if color not in GAME1_COLORS:
+                    errors.append(f"{where}: '{color}' is not a game1 colour ({', '.join(GAME1_COLORS)})")
+                elif color in seen:
+                    errors.append(f"{where}: {color} already drives major component {seen[color] + 1}")
                 else:
-                    used[ch] = f"{kind} component {i + 1}"
-        extra = set(comps) - set(COMPONENT_COUNTS)
+                    seen[color] = i
+        if "final" in comps:
+            errors.append("components.final: gone -- every purple channel is a final now "
+                          "(set on the arbiter's COLOURS screen); remove the list")
+        extra = set(comps) - set(COMPONENT_COUNTS) - {"final"}
         if extra:
-            errors.append(f"components: unknown kind {sorted(map(str, extra))}; use major and final")
+            errors.append(f"components: unknown kind {sorted(map(str, extra))}; use major")
 
     rate = cfg.get("default_decay_rate")
     if rate is not None and (isinstance(rate, bool) or not isinstance(rate, (int, float))

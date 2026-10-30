@@ -17,12 +17,14 @@ import time
 FPS = 10
 
 # (key, colour as RRGGBB)
+# The default game's majors, in its order (state_config.yaml: red, blue, green,
+# yellow, orange), so a key and the rope colour it stands in for agree.
 MAJOR = [
     ("1", "FF3B30"),  # red
-    ("2", "FF9500"),  # orange
-    ("3", "FF1493"),  # hot pink
-    ("4", "34C759"),  # green
-    ("5", "0A84FF"),  # blue
+    ("2", "0A84FF"),  # blue
+    ("3", "34C759"),  # green
+    ("4", "FFD60A"),  # yellow
+    ("5", "FF9500"),  # orange
 ]
 FINAL_KEYS = ["6", "7", "8"]
 FINAL_COLOR = "AF52DE"  # purple

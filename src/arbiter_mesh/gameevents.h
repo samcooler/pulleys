@@ -10,11 +10,13 @@
 // is the whole interface. The names are the keys a state lists under `on:` in
 // the game config (GAME_FORMAT.md).
 
-// How many components there are: major ones, then final ones. The component
-// state display has a bar for each (pulleys::MESH_COMPONENT_COUNT). Keep in step
-// with COMPONENT_COUNTS in tools/game_to_json.py.
+// Five major components, one per game1 colour. Keep in step with
+// COMPONENT_COUNTS in tools/game_to_json.py. The finals are not counted here:
+// every purple channel is one, so there are as many as the palette says.
+// The component state display shows the majors and GAME_FINAL_BARS finals
+// (pulleys::MESH_COMPONENT_COUNT bars in all).
 static const uint8_t GAME_MAJOR_COMPONENTS = 5;
-static const uint8_t GAME_FINAL_COMPONENTS = 3;
+static const uint8_t GAME_FINAL_BARS       = 3;
 
 enum GameEvent : uint8_t {
     GE_FIRST_GOAL_COMPONENT_ACTIVATED,

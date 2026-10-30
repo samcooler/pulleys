@@ -38,10 +38,25 @@ static void onEvent(const pulleys::MeshEvent& ev, bool relayed) {
     uint32_t now = millis();
 
     MonNode* n = findOrAdd(ev.originId, ev.originType);
+    // A remap confirmation says where a sensor now is, and nothing else: it is
+    // not a pull, so it moves no counter. It still goes to the hook, which is
+    // how the mapping screen hears it.
+    if (!pulleys::mesh_event_is_pull(ev)) {
+        if (n) {
+            n->type    = ev.originType;
+            n->channel = ev.channel;
+            n->mode    = ev.mode;
+            n->known   = true;
+            if (n->lastBeaconMs == 0) n->lastBeaconMs = now;
+        }
+        if (s_hook) s_hook(ev, relayed);
+        return;
+    }
     if (n) {
         n->type          = ev.originType;
         n->channel       = ev.channel;
         n->mode          = ev.mode;
+        n->known         = true;
         n->events++;
         n->lastEventMs   = now;
         n->lastMagnitude = ev.magnitude;

@@ -31,9 +31,14 @@ const char* gamestate_game();          // its `game` field
 const char* gamestate_state();         // current state name
 float       gamestate_decay_rate();    // percent of full charge a lit component loses per second
 
-// Which component a rope channel drives, from the config's `components`: 0-4 are
-// the major components, 5-7 the final ones. -1 if the channel drives nothing.
-int         gamestate_component_for_channel(uint8_t channel);
+// Which major component (0-4) a rope channel drives, from the config's
+// `components` and the colour the channel wears in today's palette -- so the
+// answer changes when the arbiter recolours a channel. -1 if none (purple, the
+// finals' colour, is never a major; components.cpp handles those).
+int         gamestate_major_for_channel(uint8_t channel);
+// The colour (pulleys_channel COLOR_*) of major component 0-4.
+// MESH_COLOR_UNKNOWN before a game is loaded.
+uint8_t     gamestate_major_color(uint8_t major);
 
 uint32_t    gamestate_state_age_ms();      // time in the current state
 int32_t     gamestate_timer_left_ms();     // until `after` fires; -1 if none

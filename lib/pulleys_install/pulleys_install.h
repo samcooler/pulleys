@@ -10,9 +10,17 @@
 // same ID a board prints in its whoami line, so a board is addressable before
 // it has been configured and stays addressable after it is reflashed.
 //
-// This lives in the repo rather than in each board's NVS on purpose: a swapped
-// board should need flashing and nothing else, and the answer to "what was that
-// one set to?" should be in version control rather than in someone's memory.
+// The Screen half of this lives in the repo rather than in each board's NVS on
+// purpose: a swapped board should need flashing and nothing else, and the
+// answer to "what was that one set to?" should be in version control rather
+// than in someone's memory.
+//
+// The Sensor channel table is the exception. Ropes get mapped on site, from the
+// arbiter's touch panel, and the arbiter owns that map from then on (it is
+// broadcast as MESH_MSG_CONFIG and stored in each sensor's NVS). This table
+// seeds the arbiter the first time it boots with nothing stored, and is where
+// the arbiter's `MAP` serial command prints rows to paste back so the map
+// still ends up in version control.
 //
 // Two ways in, both intended, for two different moments:
 //
@@ -32,6 +40,12 @@
 // marker comments, and keep values in range.
 
 namespace pulleys {
+
+// How many channels exist, everywhere: the mesh's config packet, the game's
+// channel validation, the arbiter's monitor and every role's per-channel table
+// size from this. The install runs ~20 ropes; nothing depends on the exact
+// number, so it is set with room to grow rather than to the install's count.
+static constexpr uint8_t CHANNEL_COUNT = 32;
 
 // ── Sensors: which rope, and how it is read ───────────────────────────────────
 // Detection mode. These mirror SENSOR_MODE_ROTATION / _LINEAR in pulleys_mesh.h
@@ -62,6 +76,7 @@ static const ChannelAssignment CHANNEL_ASSIGNMENT[] = {
     { 0xEC52,  1, LIN },   // N-EC52
     { 0xE857,  1, LIN },   // N-E857
     { 0x0664,  2, LIN },   // N-0664
+    { 0x7FF0,  2, LIN },   // N-7FF0
     { 0x611D,  3, LIN },   // N-611D
     { 0x8A32,  4, LIN },   // N-8A32
     { 0xA855,  5, LIN },   // N-A855

@@ -7,6 +7,7 @@
 #include <pulleys_ota.h>
 #include <pulleys_census.h>
 #include <pulleys_component_display.h>
+#include <pulleys_channel.h>
 
 // ── Component state display — charge bars for the game ───────────────────────
 // An 8×32 matrix showing one bar per game component: eight vertical bars side
@@ -54,11 +55,16 @@ static_assert(LED_COUNT >= pulleys::COMPONENT_DISPLAY_WIDTH * pulleys::COMPONENT
   #define COMPONENT_DISPLAY_REVERSE_Y 0
 #endif
 
-// The simulator's colours (overlord/simulate.py), so a bar and the keyboard
-// stand-in for its component agree.
-static const CRGB BAR_COLOR[pulleys::COMPONENT_DISPLAY_BARS] = {
-    0xFF3B30, 0xFF9500, 0xFF1493, 0x34C759, 0x0A84FF,   // major components 1-5
-    0xAF52DE, 0xAF52DE, 0xAF52DE,                       // final components 1-3
+// Each bar wears its component's colour, as the arbiter reports it with every
+// charge packet: a major's game1 colour, a final's channel's colour today. So a
+// bar matches the ropes that fill it, including after the palette changes.
+// These stand in until the arbiter has said (or if it is too old to say): the
+// default game's order, finals in game2's purple. A final bar the arbiter sends
+// no colour for has no purple channel behind it, and stays dark.
+static uint8_t barColor[pulleys::COMPONENT_DISPLAY_BARS] = {
+    pulleys::COLOR_RED, pulleys::COLOR_BLUE, pulleys::COLOR_GREEN,
+    pulleys::COLOR_YELLOW, pulleys::COLOR_ORANGE,
+    pulleys::COLOR_GAME2, pulleys::COLOR_GAME2, pulleys::COLOR_GAME2,
 };
 
 static CRGB leds[LED_COUNT];
@@ -66,6 +72,10 @@ static pulleys::ComponentDisplayModel model;
 
 static void onComponents(const pulleys::MeshComponents& c, bool relayed) {
     pulleys::component_display_update(model, c.charge, c.decay, millis());
+    // An arbiter that predates colours sends none at all, majors included;
+    // keep the defaults for it rather than blanking every bar.
+    if (c.color[0] != pulleys::MESH_COLOR_UNKNOWN)
+        memcpy(barColor, c.color, sizeof(barColor));
     Serial.printf("★ components%s (%.3f%%/s):", relayed ? " (relayed)" : "", c.decay / 1000.0f);
     for (uint8_t i = 0; i < pulleys::COMPONENT_DISPLAY_BARS; i++) Serial.printf(" %3u", c.charge[i]);
     Serial.println();
@@ -80,11 +90,12 @@ static void render() {
     uint32_t now = millis();
     fill_solid(leds, LED_COUNT, CRGB::Black);   // the gaps between bars stay dark
     for (uint8_t bar = 0; bar < pulleys::COMPONENT_DISPLAY_BARS; bar++) {
+        if (barColor[bar] >= pulleys::COLOR_COUNT) continue;   // no channel behind it
         uint8_t full, edge;
         pulleys::component_display_pixels(model.shown[bar], full, edge);
         uint8_t x0 = pulleys::component_display_bar_x(bar);
         for (uint8_t h = 0; h < pulleys::COMPONENT_DISPLAY_HEIGHT; h++) {
-            CRGB c = BAR_COLOR[bar];
+            CRGB c = pulleys::color_rgb(barColor[bar]);
             if (h < full)       { /* lit */ }
             else if (h == full) c.nscale8(edge > TRACK_LEVEL ? edge : TRACK_LEVEL);
             else                c.nscale8(TRACK_LEVEL);

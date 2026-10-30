@@ -7,6 +7,7 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <pulleys_install.h>   // CHANNEL_COUNT
 
 // ── pulleys_mesh — connectionless ESP-NOW broadcast with a flood relay ────────
 //
@@ -14,7 +15,6 @@
 // packets; all nodes dedupe by (originId, seq), act once, and rebroadcast unseen
 // events with a decrementing TTL. No AP, no pairing, no routing state.
 //
-// v1: EVENT packets only. DIGEST is reserved for the game/puzzle layer later.
 //
 // Usage:
 //   pulleys::mesh_init(pulleys::MESH_ORIGIN_SENSOR, id, MESH_WIFI_CHANNEL);
@@ -48,6 +48,7 @@ enum : uint8_t {
     MESH_MSG_COMPONENTS   = 0x70,   // the arbiter's view of every component's charge
     MESH_MSG_FW_OFFER     = 0x80,   // bridge: targeted firmware update offer
     MESH_MSG_FW_STATUS    = 0x81,   // node: update progress/result
+    MESH_MSG_CONFIG       = 0x90,   // arbiter: sensor -> channel map, channel -> colour
 };
 
 // Clock sync: every node beacons its own mesh clock, and each listener pulls a
@@ -76,12 +77,23 @@ struct __attribute__((packed)) MeshEvent {
     uint16_t originId;    // stable per-node id
     uint16_t seq;         // per-origin sequence (dedupe key with originId)
     uint8_t  ttl;         // remaining flood hops
-    uint8_t  channel;     // 0..15
+    uint8_t  channel;     // 0..CHANNEL_COUNT-1
     uint8_t  mode;        // SENSOR_MODE_*
     uint8_t  magnitude;   // quantized strength (degrees/2 or impulse level)
-    uint8_t  flags;       // bit0 = battery low
+    uint8_t  flags;       // MESH_EVENT_FLAG_*
     uint8_t  reserved;
 };  // 14 bytes
+
+enum : uint8_t {
+    MESH_EVENT_FLAG_BATTERY_LOW = 0x01,
+    // Not a pull: the sensor announcing the channel it has just been moved to,
+    // so the arbiter can show a remap as confirmed without anyone pulling the
+    // rope again. Anything that counts detections must skip these.
+    MESH_EVENT_FLAG_ACK         = 0x02,
+};
+inline bool mesh_event_is_pull(const MeshEvent& ev) {
+    return !(ev.flags & MESH_EVENT_FLAG_ACK);
+}
 
 struct __attribute__((packed)) MeshSync {
     uint8_t  magic0;      // 'P'
@@ -221,7 +233,59 @@ struct __attribute__((packed)) MeshComponents {
     uint8_t  ttl;         // remaining flood hops
     uint16_t decay;       // drain rate, in thousandths of a percent per second
     uint8_t  charge[MESH_COMPONENT_COUNT];   // percent: 0 = dark .. 100 = just lit
-};  // 19 bytes
+    // Appended: the colour (pulleys_channel COLOR_*) each component wears today,
+    // so a display draws a bar in its ropes' colour. A packet from an arbiter
+    // that predates it stops at charge[]; the receiver fills this with
+    // MESH_COLOR_UNKNOWN.
+    uint8_t  color[MESH_COMPONENT_COUNT];
+};  // 27 bytes
+static constexpr size_t  MESH_COMPONENTS_V1_SIZE = offsetof(MeshComponents, color);
+static constexpr uint8_t MESH_COLOR_UNKNOWN      = 0xFF;
+
+// ── Config ───────────────────────────────────────────────────────────────────
+// The install's two arbiter-owned tables, whole, in one packet: which channel
+// each sensor is on, and which colour each channel wears (an index into
+// pulleys_channel's COLOR_*). The arbiter sends a burst on every change and
+// repeats it every few seconds, so a board that missed one, rebooted or lost
+// its NVS converges on the next repeat with no acks and no retries.
+//
+// Receivers compare against what they have and act only on a difference, so
+// the repeat costs nothing. A sensor the map does not name keeps the channel it
+// has: an arbiter that boots with an empty map must never strand the field.
+//
+// Variable length like a cue: `count` rows follow the header, and a packet
+// shorter than that claims is dropped.
+static constexpr uint8_t MESH_CONFIG_MAX_ROWS = 64;
+
+struct __attribute__((packed)) MeshConfigRow {
+    uint16_t id;          // sensor device ID, as identity_id()
+    uint8_t  channel;
+};
+
+struct __attribute__((packed)) MeshConfig {
+    uint8_t  magic0;      // 'P'
+    uint8_t  magic1;      // 'M'
+    uint8_t  msgType;     // MESH_MSG_CONFIG
+    uint8_t  originType;  // MESH_ORIGIN_*
+    uint16_t originId;
+    uint16_t seq;         // shares the origin's counter with its events
+    uint8_t  ttl;         // remaining flood hops
+    uint8_t  colors[CHANNEL_COUNT];   // channel -> COLOR_*
+    uint8_t  count;       // rows that follow
+    MeshConfigRow rows[MESH_CONFIG_MAX_ROWS];
+};
+static constexpr size_t MESH_CONFIG_HEADER = offsetof(MeshConfig, rows);
+static_assert(sizeof(MeshConfig) <= 250, "ESP-NOW frames carry at most 250 bytes");
+inline size_t mesh_config_wire_size(const MeshConfig& c) {
+    return MESH_CONFIG_HEADER + (size_t)c.count * sizeof(MeshConfigRow);
+}
+
+// The channel the map gives `id`, or -1 if it does not name it.
+inline int mesh_config_channel_of(const MeshConfig& c, uint16_t id) {
+    for (uint8_t i = 0; i < c.count && i < MESH_CONFIG_MAX_ROWS; i++)
+        if (c.rows[i].id == id) return c.rows[i].channel;
+    return -1;
+}
 
 // Every node beacons, so this is also the presence signal for roles that emit
 // no events of their own: without it a Screen is invisible to a monitor.
@@ -232,6 +296,7 @@ typedef void (*MeshHelloCb)(const MeshHello& h);
 typedef void (*MeshCensusCb)(const MeshCensus& c);
 typedef void (*MeshCueCb)(const MeshCue& c, bool relayed);
 typedef void (*MeshComponentsCb)(const MeshComponents& c, bool relayed);
+typedef void (*MeshConfigCb)(const MeshConfig& c, bool relayed);
 typedef void (*MeshFwOfferCb)(const MeshFwOffer& offer);
 typedef void (*MeshFwStatusCb)(const MeshFwStatus& status);
 
@@ -271,6 +336,14 @@ struct ComponentsSlot {
     bool           used;
 };
 
+struct ConfigSlot {
+    MeshConfig pkt;
+    uint32_t   dueMs;
+    uint16_t   gapMs;
+    uint8_t    left;
+    bool       used;
+};
+
 struct State {
     uint8_t     originType = 0;
     uint16_t    originId   = 0;
@@ -282,6 +355,7 @@ struct State {
     MeshCensusCb      censusCb      = nullptr;
     MeshCueCb         cueCb         = nullptr;
     MeshComponentsCb  componentsCb  = nullptr;
+    MeshConfigCb      configCb      = nullptr;
     MeshFwOfferCb fwOfferCb = nullptr;
     MeshFwStatusCb fwStatusCb = nullptr;
     bool        relayOn    = true;
@@ -293,6 +367,7 @@ struct State {
     OutSlot out[16]     = {};
     CueSlot cueOut[8]   = {};
     ComponentsSlot compOut[4] = {};
+    ConfigSlot     cfgOut[2]  = {};
 
     // Cue RX ring, same single-producer/single-consumer shape as the events'.
     MeshCue          cueRx[4] = {};
@@ -303,6 +378,12 @@ struct State {
     MeshComponents   compRx[4] = {};
     volatile uint8_t compHead  = 0;
     volatile uint8_t compTail  = 0;
+
+    // Config RX ring. Two deep: it is large, and the next repeat replaces
+    // anything dropped.
+    MeshConfig       cfgRx[2] = {};
+    volatile uint8_t cfgHead  = 0;
+    volatile uint8_t cfgTail  = 0;
 
     // RX ring — the WiFi task is the single producer (a real FreeRTOS task, not
     // an ISR), mesh_poll() the single consumer, so volatile indices around a
@@ -398,6 +479,19 @@ inline void enqueueComponents(const MeshComponents& c, uint8_t count, uint16_t g
     }
 }
 
+inline void enqueueConfig(const MeshConfig& c, uint8_t count, uint16_t gap, uint16_t firstDelay) {
+    State& s = S();
+    for (uint8_t i = 0; i < 2; i++) {
+        if (s.cfgOut[i].used) continue;
+        s.cfgOut[i].pkt   = c;
+        s.cfgOut[i].left  = count;
+        s.cfgOut[i].gapMs = gap;
+        s.cfgOut[i].dueMs = millis() + firstDelay;
+        s.cfgOut[i].used  = true;
+        return;
+    }
+}
+
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
 static void onRecv(const esp_now_recv_info_t* /*info*/, const uint8_t* data, int len) {
 #else
@@ -481,11 +575,30 @@ static void onRecv(const uint8_t* /*mac*/, const uint8_t* data, int len) {
     }
 
     if (data[2] == MESH_MSG_COMPONENTS) {
-        if (len < (int)sizeof(MeshComponents)) { st.statBadMagic++; return; }
+        if (len < (int)MESH_COMPONENTS_V1_SIZE) { st.statBadMagic++; return; }
         uint8_t ch = (st.compHead + 1) & 3;
         if (ch != st.compTail) {
-            memcpy(&st.compRx[st.compHead], data, sizeof(MeshComponents));
+            MeshComponents& slot = st.compRx[st.compHead];
+            memset(slot.color, MESH_COLOR_UNKNOWN, sizeof(slot.color));
+            memcpy(&slot, data, len < (int)sizeof(MeshComponents) ? (size_t)len : sizeof(MeshComponents));
             st.compHead = ch;
+        }
+        return;
+    }
+
+    if (data[2] == MESH_MSG_CONFIG) {
+        if (len < (int)MESH_CONFIG_HEADER) { st.statBadMagic++; return; }
+        uint8_t count = data[MESH_CONFIG_HEADER - 1];
+        if (count > MESH_CONFIG_MAX_ROWS ||
+            len < (int)(MESH_CONFIG_HEADER + count * sizeof(MeshConfigRow))) {
+            st.statBadMagic++; return;
+        }
+        uint8_t ch = (st.cfgHead + 1) & 1;
+        if (ch != st.cfgTail) {
+            MeshConfig& slot = st.cfgRx[st.cfgHead];
+            memset(&slot, 0, sizeof(slot));
+            memcpy(&slot, data, MESH_CONFIG_HEADER + count * sizeof(MeshConfigRow));
+            st.cfgHead = ch;
         }
         return;
     }
@@ -557,6 +670,21 @@ inline void handleComponents(const MeshComponents& c) {
         MeshComponents r = c;
         r.ttl--;
         enqueueComponents(r, 1, 0, (uint16_t)random(3, 28));
+    }
+}
+
+inline void handleConfig(const MeshConfig& c) {
+    uint32_t key = keyOf(c.originId, c.seq);
+    if (wasSeen(key)) return;
+    markSeen(key);
+
+    bool relayed = c.ttl < MESH_TTL_START;
+    if (S().configCb) S().configCb(c, relayed);
+
+    if (S().relayOn && c.ttl > 0) {
+        MeshConfig r = c;
+        r.ttl--;
+        enqueueConfig(r, 1, 0, (uint16_t)random(3, 28));
     }
 }
 
@@ -639,6 +767,7 @@ inline void mesh_on_cue(MeshCueCb cb) { _mesh::S().cueCb = cb; }
 inline void mesh_on_components(MeshComponentsCb cb) { _mesh::S().componentsCb = cb; }
 
 inline void mesh_send_components(const uint8_t charge[MESH_COMPONENT_COUNT],
+                                 const uint8_t color[MESH_COMPONENT_COUNT],
                                  uint16_t decay, bool urgent) {
     MeshComponents c = {};
     c.magic0     = 'P';
@@ -651,9 +780,34 @@ inline void mesh_send_components(const uint8_t charge[MESH_COMPONENT_COUNT],
     c.ttl        = MESH_TTL_START;
     c.decay      = decay;
     memcpy(c.charge, charge, MESH_COMPONENT_COUNT);
+    memcpy(c.color,  color,  MESH_COMPONENT_COUNT);
 
     _mesh::markSeen(_mesh::keyOf(c.originId, c.seq));   // don't relay our own echo
     _mesh::enqueueComponents(c, urgent ? 3 : 1, 80, 0);
+}
+
+// Config. Sensors and Screens subscribe; the arbiter sends. Every role relays it.
+// `urgent` is a change, sent as a burst; otherwise the periodic repeat, once.
+inline void mesh_on_config(MeshConfigCb cb) { _mesh::S().configCb = cb; }
+
+inline void mesh_send_config(const uint8_t colors[CHANNEL_COUNT],
+                             const MeshConfigRow* rows, uint8_t count, bool urgent) {
+    if (count > MESH_CONFIG_MAX_ROWS) count = MESH_CONFIG_MAX_ROWS;
+    MeshConfig c = {};
+    c.magic0     = 'P';
+    c.magic1     = 'M';
+    c.msgType    = MESH_MSG_CONFIG;
+    _mesh::State& st = _mesh::S();
+    c.originType = st.originType;
+    c.originId   = st.originId;
+    c.seq        = ++st.seqCounter;
+    c.ttl        = MESH_TTL_START;
+    memcpy(c.colors, colors, CHANNEL_COUNT);
+    c.count      = count;
+    memcpy(c.rows, rows, (size_t)count * sizeof(MeshConfigRow));
+
+    _mesh::markSeen(_mesh::keyOf(c.originId, c.seq));   // don't relay our own echo
+    _mesh::enqueueConfig(c, urgent ? MESH_BURST : 1, MESH_BURST_GAP, 0);
 }
 
 // False if the name is empty or too long to send.
@@ -871,6 +1025,11 @@ inline void mesh_poll() {
         _mesh::handleComponents(c);
     }
 
+    while (st.cfgTail != st.cfgHead) {
+        _mesh::handleConfig(st.cfgRx[st.cfgTail]);
+        st.cfgTail = (st.cfgTail + 1) & 1;
+    }
+
     // 1. drain received packets (dedupe + user callback + relay enqueue)
     while (st.rxTail != st.rxHead) {
         MeshEvent ev = st.rx[st.rxTail];
@@ -892,6 +1051,15 @@ inline void mesh_poll() {
         _mesh::ComponentsSlot& s = st.compOut[i];
         if (!s.used || now < s.dueMs) continue;
         esp_err_t e = esp_now_send(_mesh::BCAST, (const uint8_t*)&s.pkt, sizeof(MeshComponents));
+        st.statSent++;
+        if (e != ESP_OK) st.statSendErr++;
+        if (--s.left == 0) s.used = false;
+        else s.dueMs = now + s.gapMs;
+    }
+    for (uint8_t i = 0; i < 2; i++) {
+        _mesh::ConfigSlot& s = st.cfgOut[i];
+        if (!s.used || now < s.dueMs) continue;
+        esp_err_t e = esp_now_send(_mesh::BCAST, (const uint8_t*)&s.pkt, mesh_config_wire_size(s.pkt));
         st.statSent++;
         if (e != ESP_OK) st.statSendErr++;
         if (--s.left == 0) s.used = false;

@@ -20,7 +20,10 @@
 // Detects a motion bout (rotation or linear), broadcasts an EVENT to the mesh.
 //
 // Per-unit config lives in NVS (namespace "sensor"): channel + mode + threshold.
-// Set it over serial at boot — see handleSerial() below.
+// The channel is normally set by the arbiter (MESH_MSG_CONFIG, from its channel
+// mapping mode); serial still works for the bench — see handleSerial() below.
+// The colour each channel wears is the arbiter's too, held in pulleys_channel's
+// palette and its own NVS namespace.
 //
 // Two LED surfaces on the one output, in this order along the strip:
 //
@@ -173,9 +176,13 @@ static float    ledEnv    = 0.0f; // 0 = dark/idle pixels, 1 = full pattern
 static uint32_t localCount = 0;
 static uint32_t heardCount = 0;
 // Where myChannel came from, in descending order of authority. Kept apart
-// because they mean different things to whoever is holding the board: LISTED is
-// settled, NVS is someone's field fix, HASH is a guess that works.
-enum ChanSource : uint8_t { CHAN_LISTED, CHAN_NVS, CHAN_HASH, CHAN_DEFAULT };
+// because they mean different things to whoever is holding the board: NVS is
+// what the arbiter (or someone on serial) set, LISTED is the repo's seed for a
+// board nobody has mapped yet, HASH is a guess that works.
+//
+// Mode keeps the old order — the repo table beats NVS — because the arbiter
+// does not manage it: how a rope is rigged is still decided in the repo.
+enum ChanSource : uint8_t { CHAN_NVS, CHAN_LISTED, CHAN_HASH, CHAN_DEFAULT };
 static ChanSource chanSource = CHAN_HASH;
 static ChanSource modeSource = CHAN_DEFAULT;   // no hash fallback for mode
 
@@ -196,7 +203,7 @@ static void loadConfig() {
     uint8_t storedMode = p.getUChar("mode", 0xFF);
     myRotDeg  = p.getFloat("rot",  180.0f);
     p.end();
-    if (stored <= 15) { myChannel = stored; chanSource = CHAN_NVS; }
+    if (stored < pulleys::CHANNEL_COUNT) { myChannel = stored; chanSource = CHAN_NVS; }
     // Same sentinel reasoning as the channel above: with LINEAR as the read
     // default, a board nobody has configured is indistinguishable from one
     // deliberately set to linear, and the boot line then claims someone chose
@@ -213,9 +220,10 @@ static void saveConfig() {
     p.end();
 }
 
-// The repo's channel table wins over the board's stored value. NVS is only
-// consulted for a board the table does not name — see pulleys_channel.h. Must
-// run after identity_init(), since the lookup is by device ID.
+// A stored channel wins over the repo's table: once the arbiter has mapped a
+// rope, a reboot must not put it back where the table said. The table is only
+// consulted for a board with nothing stored — see pulleys_install.h. Must run
+// after identity_init(), since the lookup is by device ID.
 static void applyChannelAssignment() {
     uint16_t id     = pulleys::identity_id();
     int8_t assigned = pulleys::channel_for_device(id);
@@ -228,6 +236,7 @@ static void applyChannelAssignment() {
         modeSource = CHAN_LISTED;
     }
 
+    if (chanSource == CHAN_NVS) return;
     if (assigned >= 0) {
         myChannel  = (uint8_t)assigned;
         chanSource = CHAN_LISTED;
@@ -240,18 +249,21 @@ static void applyChannelAssignment() {
     if (chanSource == CHAN_HASH) myChannel = pulleys::channel_from_id(id);
 }
 
+// Which rope, read which way: the one fact that tells two sensors apart in a
+// survey. Called on every change, not just at boot.
+static void applyCensusDetail() {
+    char detail[16];
+    snprintf(detail, sizeof(detail), "ch%d %s", myChannel,
+             pulleys::sensor_mode_name(myMode));
+    pulleys::census_set_detail(detail);
+}
+
 static void applyConfig() {
     pulleys::DetectConfig c;
     c.mode            = myMode;
     c.rotThresholdDeg = myRotDeg;
     detector.init(c);
-
-    // Which rope, read which way: the one fact that tells two sensors apart in
-    // a survey. Set here so it follows every change, not just the boot value.
-    char detail[16];
-    snprintf(detail, sizeof(detail), "ch%d %s", myChannel,
-             pulleys::sensor_mode_name(myMode));
-    pulleys::census_set_detail(detail);
+    applyCensusDetail();
 }
 
 // Centre 3x3 of the 8x8 panel — the idle candle. Rows 3-5, cols 3-5 of a
@@ -379,6 +391,48 @@ static bool     probeOn   = false;
 static uint8_t  probeIdx  = 0;
 static uint32_t probeNext = 0;
 
+// ── Confirmation flash ────────────────────────────────────────────────────────
+// When the arbiter moves this rope to another channel or recolours it, the
+// whole strip blinks the new colour, so whoever is mapping ropes sees the rope
+// answer without walking over to read it. The boot flash's look, but drawn by
+// the loop instead of with delay(): blocking here would stall the radio.
+#define CONFIRM_BLINKS   3
+#define CONFIRM_STEP_MS  150
+static uint32_t confirmAt = 0;    // 0 = not flashing
+
+// ── Mesh RX — the arbiter's config ────────────────────────────────────────────
+// Repeated every few seconds, so this runs far more often than anything
+// changes. Compare first and touch NVS only on a difference.
+static void onMeshConfig(const pulleys::MeshConfig& c, bool /*relayed*/) {
+    uint8_t oldColor = pulleys::channel_color_index(myChannel);
+    if (pulleys::palette_set(c.colors)) pulleys::palette_save();
+
+    // A row that agrees with a channel this board only got from the repo table
+    // is still stored: from now on the arbiter owns it, and a later edit to
+    // the table must not move a mapped rope.
+    int ch = pulleys::mesh_config_channel_of(c, pulleys::identity_id());
+    bool moved = false;
+    if (ch >= 0 && ch < pulleys::CHANNEL_COUNT &&
+        (ch != myChannel || chanSource != CHAN_NVS)) {
+        moved      = ch != myChannel;
+        myChannel  = (uint8_t)ch;
+        chanSource = CHAN_NVS;
+        saveConfig();
+        applyCensusDetail();   // not applyConfig: a new channel must not reset what the detector has learned
+    }
+
+    bool recoloured = pulleys::channel_color_index(myChannel) != oldColor;
+    if (!moved && !recoloured) return;
+    applyChannelVisual();
+    confirmAt = millis() | 1;
+    Serial.printf("  [CONFIG] from arbiter 0x%04X: ch%d %s\n", c.originId, myChannel,
+                  pulleys::color_name(pulleys::channel_color_index(myChannel)));
+    // Tell the arbiter where this rope is now, so its mapping screen can show
+    // the move as done. Flagged, so nothing counts it as a pull.
+    if (moved)
+        pulleys::mesh_send_event(myChannel, myMode, 0, pulleys::MESH_EVENT_FLAG_ACK);
+}
+
 // ── Mesh RX — sensors listen too, so they relay for each other ────────────────
 static void onMeshEvent(const pulleys::MeshEvent& ev, bool relayed) {
     if (ev.originId == pulleys::identity_id()) return;
@@ -390,13 +444,14 @@ static void onMeshEvent(const pulleys::MeshEvent& ev, bool relayed) {
 }
 
 // ── Serial console — field config without a reflash ───────────────────────────
-//   c<0-15> channel | m0/m1 mode | r<deg> threshold | t test event
+//   c<ch> channel | m0/m1 mode | r<deg> threshold | t test event
 //   p       colour-order probe: cycles raw RED, GREEN, BLUE on both surfaces
 static void printConfig() {
-    Serial.printf("  CONFIG  channel=%d (%s)  mode=%s (%s)  rotThreshold=%.0f deg\n",
-                  myChannel, chanSource == CHAN_LISTED ? "listed"
-                           : chanSource == CHAN_NVS    ? "set over serial"
-                                                       : "UNLISTED — hashed from ID",
+    Serial.printf("  CONFIG  channel=%d %s (%s)  mode=%s (%s)  rotThreshold=%.0f deg\n",
+                  myChannel, pulleys::color_name(pulleys::channel_color_index(myChannel)),
+                  chanSource == CHAN_NVS    ? "stored — arbiter or serial"
+                : chanSource == CHAN_LISTED ? "repo table — not yet mapped by the arbiter"
+                                            : "UNLISTED — hashed from ID",
                   myMode == pulleys::SENSOR_MODE_ROTATION ? "ROTATION" : "LINEAR",
                   modeSource == CHAN_LISTED ? "listed"
                            : modeSource == CHAN_NVS ? "set over serial"
@@ -417,14 +472,11 @@ static void handleSerial() {
             if (pulleys::census_handle_serial(buf)) continue; // "CENSUS" → who is out there
             if (buf[0] == 'c') {                 // "c7" → channel 7
                 int v = atoi(buf + 1);
-                if (v >= 0 && v <= 15) {
+                if (v >= 0 && v < pulleys::CHANNEL_COUNT) {
                     myChannel = v; chanSource = CHAN_NVS;
-                    saveConfig(); applyChannelVisual();
-                    Serial.printf("  → add to CHANNEL_ASSIGNMENT: { 0x%04X, %d },\n",
-                                  pulleys::identity_id(), v);
-                    if (chanSource == CHAN_LISTED)
-                        Serial.printf("  ! this board is listed in CHANNEL_ASSIGNMENT;"
-                                      " the table wins again at next boot\n");
+                    saveConfig(); applyCensusDetail(); applyChannelVisual();
+                    Serial.printf("  ! if the arbiter's map names this board, its next"
+                                  " repeat moves it back — remap it there instead\n");
                 }
             } else if (buf[0] == 'm') {          // "m0" rotation, "m1" linear
                 int v = atoi(buf + 1);
@@ -467,6 +519,7 @@ void setup() {
     delay(1200);
 
     loadConfig();
+    pulleys::palette_load();
 
     FastLED.addLeds<WS2812B, LED_PIN, LED_COLOR_ORDER>(leds, LED_COUNT);
     FastLED.setBrightness(255);
@@ -479,7 +532,8 @@ void setup() {
     Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     applyChannelAssignment();
     printConfig();
-    Serial.println("  serial: c<0-15> channel | m0/m1 mode | r<deg> | t test");
+    Serial.printf("  serial: c<0-%d> channel | m0/m1 mode | r<deg> | t test\n",
+                  pulleys::CHANNEL_COUNT - 1);
 
     if (!imu.init6(11, 12)) {
         Serial.println("  [IMU] 6-axis init FAILED — no detection possible");
@@ -492,6 +546,7 @@ void setup() {
     pulleys::ota_init();
     pulleys::census_init();
     pulleys::mesh_on_event(onMeshEvent);
+    pulleys::mesh_on_config(onMeshConfig);
 
     applyChannelVisual();
 
@@ -499,8 +554,8 @@ void setup() {
     // An unassigned board flashes white instead — see the UNASSIGNED note above.
     FastLED.setBrightness(255);   // brightness is applied per-pixel from here on
     for (int i = 0; i < 3; i++) {
-        CRGB boot = (chanSource == CHAN_LISTED) ? pulleys::channel_color(myChannel)
-                                                : CRGB::White;
+        CRGB boot = (chanSource != CHAN_HASH) ? pulleys::channel_color(myChannel)
+                                              : CRGB::White;
         boot.nscale8(28);         // 30% down from 40, with the rest of the panel
         fill_solid(leds, LED_COUNT, boot);
         showPixels();
@@ -617,6 +672,20 @@ void loop() {
                     p.nscale8((uint8_t)(breath * idleFlicker(i, now)));
                     leds[GRID_ORIGIN + IDLE_PIXEL_IDX[i]] += p;
                 }
+            }
+        }
+
+        // Last, so it wins over everything above for its brief run.
+        if (confirmAt) {
+            uint32_t step = (now - confirmAt) / CONFIRM_STEP_MS;
+            if (step >= CONFIRM_BLINKS * 2) {
+                confirmAt = 0;
+            } else if (step % 2 == 0) {
+                CRGB c = pulleys::channel_color(myChannel);
+                c.nscale8(28);                    // the boot flash's level
+                fill_solid(leds, LED_COUNT, c);
+            } else {
+                fill_solid(leds, LED_COUNT, CRGB::Black);
             }
         }
         showPixels();

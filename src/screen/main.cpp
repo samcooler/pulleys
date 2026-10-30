@@ -59,7 +59,7 @@ static_assert(SCREEN_FORCE_DISPLAY == pulleys::SCREEN_WAVE ||
 static_assert(LED_COUNT >= 256, "the matrix displays need the whole 8x32 (256 LEDs)");
 #endif
 
-#define NUM_CHANNELS   16
+#define NUM_CHANNELS   pulleys::CHANNEL_COUNT
 #define NUM_SLOTS      4
 #define SLOT_ROWS      8      // rows along the long axis, per slot
 #define MAT_COLS       8      // short axis
@@ -96,7 +96,7 @@ static_assert(LED_COUNT >= 256, "the matrix displays need the whole 8x32 (256 LE
 // so no pixel on the panel is ever off while this display runs. Brightness is
 // the full range rather than MAX_BRIGHTNESS: this is the display to look at a
 // panel with, and how bright it actually ends up is LED_MAX_MA's decision.
-#define ALLON_CHANNEL     2      // the channel whose colour this is — yellow
+#define ALLON_COLOR       pulleys::COLOR_YELLOW   // fixed: a hardware check, not a channel
 #define ALLON_FLOOR       70     // dim floor, 0..255 of the lit colour
 #define ALLON_BRIGHTNESS  255
 
@@ -176,6 +176,7 @@ static inline uint16_t xy(uint8_t x, uint8_t y) {
 // ── Mesh callback ─────────────────────────────────────────────────────────────
 static void onMeshEvent(const pulleys::MeshEvent& ev, bool relayed) {
     if (ev.channel >= NUM_CHANNELS) return;
+    if (!pulleys::mesh_event_is_pull(ev)) return;   // a sensor confirming a remap
     uint32_t now = millis();
 
     ChannelState& c = chans[ev.channel];
@@ -190,6 +191,17 @@ static void onMeshEvent(const pulleys::MeshEvent& ev, bool relayed) {
     Serial.printf("★ ch%-2d from 0x%04X %s mag=%3d ttl=%d  → act=%.2f total=%lu\n",
                   ev.channel, ev.originId, relayed ? "(relayed)" : "(direct) ",
                   ev.magnitude, ev.ttl, c.activity, totalCount);
+}
+
+// The arbiter's palette. The counter reads channel colours live every frame;
+// ranking caches a pattern per slot, so forget the slots and let the next
+// update rebuild them in the new colours.
+static void onMeshConfig(const pulleys::MeshConfig& c, bool /*relayed*/) {
+    if (!pulleys::palette_set(c.colors)) return;
+    pulleys::palette_save();
+    if (mode == pulleys::SCREEN_RANKING)
+        for (uint8_t s = 0; s < NUM_SLOTS; s++) slotChannel[s] = -1;
+    Serial.printf("  [CONFIG] palette from arbiter 0x%04X\n", c.originId);
 }
 
 // ── Activity decay ────────────────────────────────────────────────────────────
@@ -401,9 +413,10 @@ static void renderRanking(float dt, float t) {
 static const uint8_t ALLON_SHAPE_CH[NUM_SLOTS] = { 1, 2, 3, 4 };
 
 static void allOnInit() {
-    // Shape and oscillation come from four different channels; the colour comes
-    // from one, so all four read as the same yellow.
-    PulleysCulture yellow = pulleys::channel_culture(ALLON_CHANNEL);
+    // Shape and oscillation come from four different channels; the colour is
+    // fixed, so all four read as the same yellow whatever the palette says.
+    PulleysCulture yellow =
+        pulleys::culture_for(pulleys::COLOR_HUE[ALLON_COLOR], ALLON_SHAPE_CH[0]);
     for (uint8_t s = 0; s < NUM_SLOTS; s++) {
         pulleys::channel_slot_init(patSlots[s], ALLON_SHAPE_CH[s],
                                    leds + (uint16_t)s * SLOT_ROWS * MAT_COLS,
@@ -419,7 +432,7 @@ static void allOnInit() {
 }
 
 static void renderAllOn(float dt, float t) {
-    CRGB floorCol = pulleys::channel_color(ALLON_CHANNEL);
+    CRGB floorCol = pulleys::color_rgb(ALLON_COLOR);
     floorCol.nscale8(ALLON_FLOOR);
 
     for (uint8_t s = 0; s < NUM_SLOTS; s++) {
@@ -562,12 +575,14 @@ void setup() {
     Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
     randomSeed(esp_random());
+    pulleys::palette_load();
     applyActivitySlots();
 
     pulleys::mesh_init(pulleys::MESH_ORIGIN_SCREEN, pulleys::identity_id());
     pulleys::ota_init();
     pulleys::census_init();
     pulleys::mesh_on_event(onMeshEvent);
+    pulleys::mesh_on_config(onMeshConfig);
 
     loadDisplayMode();
     if      (mode == pulleys::SCREEN_ALLON) allOnInit();

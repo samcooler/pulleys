@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "monitor.h"
 #include "gamestate.h"
+#include "installcfg.h"
 #include <lvgl.h>
 #include <Arduino.h>
 #include <FastLED.h>
@@ -52,9 +53,16 @@ struct Quadrant {
 };
 static Quadrant s_q[4];
 
-// Channel bars live in the bottom-left quadrant
-static lv_obj_t* s_chanBar[MON_CHANNELS];
-static lv_obj_t* s_chanLbl[MON_CHANNELS];
+// Channel bars live in the bottom-left quadrant: channels 1..UI_CHANNELS (0 is
+// the fault channel, and the tail past 24 is headroom no rope is on), three
+// columns of eight.
+#define UI_CHANNELS  24
+#define CHAN_ROWS    8
+#define CHAN_COL_W   126
+#define CHAN_BAR_X   66
+#define CHAN_BAR_MAX 54
+static lv_obj_t* s_chanBar[UI_CHANNELS + 1];
+static lv_obj_t* s_chanLbl[UI_CHANNELS + 1];
 
 // Game strip
 static lv_obj_t* s_gamePanel;
@@ -115,12 +123,12 @@ void ui_init() {
     s_q[2] = makeQuadrant(0, 1, "CHANNELS");
     s_q[3] = makeQuadrant(1, 1, "MESH");
 
-    // Channel rows: a hue swatch that matches the physical install, then a bar.
-    // Two columns of eight so all 16 channels fit the quadrant.
+    // Channel rows: a label, then a bar in the channel's colour that matches the
+    // physical install (repainted in refreshChannels when the palette changes).
     lv_obj_t* p = s_q[2].panel;
-    for (int i = 0; i < MON_CHANNELS; i++) {
-        int col = i / 8, row = i % 8;
-        int x = col * 190;
+    for (int i = 1; i <= UI_CHANNELS; i++) {
+        int col = (i - 1) / CHAN_ROWS, row = (i - 1) % CHAN_ROWS;
+        int x = col * CHAN_COL_W;
         int y = 24 + row * 17;
 
         lv_obj_t* lbl = lv_label_create(p);
@@ -131,9 +139,7 @@ void ui_init() {
 
         lv_obj_t* bar = lv_obj_create(p);
         lv_obj_set_size(bar, 2, 10);
-        lv_obj_set_pos(bar, x + 58, y);
-        CRGB c = pulleys::channel_color(i);
-        lv_obj_set_style_bg_color(bar, lv_color_make(c.r, c.g, c.b), 0);
+        lv_obj_set_pos(bar, x + CHAN_BAR_X, y);
         lv_obj_set_style_border_width(bar, 0, 0);
         lv_obj_set_style_radius(bar, 0, 0);
         lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
@@ -215,7 +221,7 @@ static void refreshSensors() {
     uint32_t now = millis();
     int len = 0;
     len += snprintf(s_buf + len, sizeof(s_buf) - len,
-                    "ID    CH MODE EVENTS LAST SEEN\n");
+                    "ID    CH  MODE EVENTS LAST SEEN\n");
 
     int shown = 0;
     for (uint8_t i = 0; i < MON_MAX_NODES && shown < 7; i++) {
@@ -227,14 +233,17 @@ static void refreshSensors() {
         ageStr(quiet, seenS, sizeof(seenS));
         // Channel and mode ride on EVENT packets only. A sensor that has
         // beaconed but not yet fired is present with nothing known about it,
-        // and "ch0 rot" would be a fabrication.
-        char chS[4], modeS[4];
-        if (n.events) {
-            snprintf(chS, sizeof(chS), "%2d", n.channel);
+        // and "ch0 rot" would be a fabrication. A '!' after the channel is a
+        // rope not (yet) where the arbiter's map puts it.
+        char chS[5], modeS[4];
+        if (n.known) {
+            int mapped = installcfg_channel_of(n.id);
+            snprintf(chS, sizeof(chS), "%2d%c", n.channel,
+                     mapped >= 0 && mapped != n.channel ? '!' : ' ');
             snprintf(modeS, sizeof(modeS), "%s",
                      n.mode == pulleys::SENSOR_MODE_ROTATION ? "rot" : "lin");
         } else {
-            snprintf(chS, sizeof(chS), " ?");
+            snprintf(chS, sizeof(chS), " ? ");
             snprintf(modeS, sizeof(modeS), " ? ");
         }
         len += snprintf(s_buf + len, sizeof(s_buf) - len,
@@ -296,18 +305,27 @@ static void refreshChannels() {
     const MonChannel* ch = monitor_channels();
 
     float peak = 0.5f;
-    for (int i = 0; i < MON_CHANNELS; i++) if (ch[i].activity > peak) peak = ch[i].activity;
+    for (int i = 1; i <= UI_CHANNELS; i++) if (ch[i].activity > peak) peak = ch[i].activity;
 
-    for (int i = 0; i < MON_CHANNELS; i++) {
+    for (int i = 1; i <= UI_CHANNELS; i++) {
         char l[24];
         snprintf(l, sizeof(l), "%2d %c%4lu", i,
                  ch[i].sensors ? '*' : ' ', (unsigned long)ch[i].events);
         setTextIfChanged(s_chanLbl[i], l);
 
-        int w = (int)((ch[i].activity / peak) * 120.0f);
+        // The palette is the arbiter's to change at any moment.
+        static int lastColor[UI_CHANNELS + 1] = {};   // colour + 1; 0 = not painted yet
+        int color = pulleys::channel_color_index(i) + 1;
+        if (color != lastColor[i]) {
+            CRGB c = pulleys::channel_color(i);
+            lv_obj_set_style_bg_color(s_chanBar[i], lv_color_make(c.r, c.g, c.b), 0);
+            lastColor[i] = color;
+        }
+
+        int w = (int)((ch[i].activity / peak) * (float)CHAN_BAR_MAX);
         if (w < 2) w = 2;
-        static int  lastW[MON_CHANNELS] = {};
-        static bool lastLit[MON_CHANNELS] = {};
+        static int  lastW[UI_CHANNELS + 1] = {};
+        static bool lastLit[UI_CHANNELS + 1] = {};
         bool lit = ch[i].activity > 0.01f;
         if (w != lastW[i]) { lv_obj_set_width(s_chanBar[i], w); lastW[i] = w; }
         // Idle channels dim right down so the busy ones carry the eye.

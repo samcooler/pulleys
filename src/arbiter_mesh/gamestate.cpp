@@ -2,6 +2,7 @@
 #include "components.h"
 #include <ArduinoJson.h>
 #include <pulleys_mesh.h>
+#include <pulleys_channel.h>
 #include <utility>
 
 #define GAME_PREFIX "  [GAME]"
@@ -19,7 +20,11 @@ static char         s_game[48]  = "";
 static char         s_state[32] = "";
 static uint32_t     s_enteredAt = 0;
 static float        s_decayRate = DEFAULT_DECAY_RATE;
-static int8_t       s_componentOf[16];   // rope channel -> component, -1 = none
+// Majors go by colour: whichever ropes wear a game1 colour today drive that
+// colour's component, so recolouring channels on the arbiter re-deals the game.
+// (Finals are the purple channels, and need nothing from the config.)
+static int8_t       s_majorOfColor[pulleys::COLOR_COUNT];      // colour -> major 0-4, -1 = none
+static uint8_t      s_majorColor[GAME_MAJOR_COMPONENTS];       // major -> colour
 
 static bool     s_timerOn = false;
 static uint32_t s_timerAt = 0;
@@ -67,6 +72,14 @@ static bool isListed(JsonDocument& doc, const char* name) {
 
 // Is this a game the machine can run? Mirrors tools/game_to_json.py, because
 // a config can also arrive by POST without passing through it.
+// A colour by its pulleys_channel name, or -1.
+static int colorOfName(const char* name) {
+    if (!name) return -1;
+    for (uint8_t c = 0; c < pulleys::COLOR_COUNT; c++)
+        if (strcmp(name, pulleys::color_name(c)) == 0) return c;
+    return -1;
+}
+
 static bool validate(JsonDocument& doc, String& why) {
     if (!doc["game"].is<const char*>())  { why = "missing 'game'";  return false; }
     if (!doc["start"].is<const char*>()) { why = "missing 'start'"; return false; }
@@ -87,32 +100,33 @@ static bool validate(JsonDocument& doc, String& why) {
         }
     }
 
-    // components: five majors then three finals, each on its own channel 0-15
+    // components: five majors, each a game1 colour. No finals: those are
+    // whichever channels are purple.
     JsonObject comps = doc["components"].as<JsonObject>();
     if (comps.isNull()) { why = "missing 'components'"; return false; }
     {
-        static const char* const kinds[2] = { "major", "final" };
-        const uint8_t counts[2] = { GAME_MAJOR_COMPONENTS, GAME_FINAL_COMPONENTS };
-        uint16_t used = 0;
-        for (uint8_t k = 0; k < 2; k++) {
-            JsonArray list = comps[kinds[k]].as<JsonArray>();
-            if (list.isNull() || list.size() != counts[k]) {
-                why = String("components.") + kinds[k] + " must list exactly " + counts[k] + " channels";
+        JsonArray list = comps["major"].as<JsonArray>();
+        if (list.isNull() || list.size() != GAME_MAJOR_COMPONENTS) {
+            why = String("components.major must list exactly ") + GAME_MAJOR_COMPONENTS + " colours";
+            return false;
+        }
+        uint8_t usedColors = 0;
+        for (JsonVariant v : list) {
+            int c = colorOfName(v.as<const char*>());
+            if (c < 0 || c >= pulleys::COLOR_GAME1_COUNT) {
+                why = "components.major: every entry must be a game1 colour (red, blue, green, yellow, orange)";
                 return false;
             }
-            for (JsonVariant v : list) {
-                if (!v.is<int>() || v.as<int>() < 0 || v.as<int>() > 15) {
-                    why = String("components.") + kinds[k] + ": every entry must be a channel, 0-15";
-                    return false;
-                }
-                if (used & (1u << v.as<int>())) {
-                    why = String("components.") + kinds[k] + ": channel " + v.as<int>() +
-                          " is listed twice";
-                    return false;
-                }
-                used |= 1u << v.as<int>();
+            if (usedColors & (1u << c)) {
+                why = String("components.major: ") + pulleys::color_name(c) + " is listed twice";
+                return false;
             }
+            usedColors |= 1u << c;
         }
+    }
+    if (!comps["final"].isNull()) {
+        why = "components.final is gone: every purple channel is a final now (set on the arbiter's COLOURS screen)";
+        return false;
     }
 
     if (!doc["default_decay_rate"].isNull()) {
@@ -221,11 +235,14 @@ bool gamestate_load(const String& json, String& why) {
     s_ready = true;
     strlcpy(s_game, s_doc["game"].as<const char*>(), sizeof(s_game));
     s_decayRate = s_doc["default_decay_rate"] | DEFAULT_DECAY_RATE;
-    memset(s_componentOf, -1, sizeof(s_componentOf));
+    memset(s_majorOfColor, -1, sizeof(s_majorOfColor));
     {
         int8_t n = 0;
-        for (JsonVariant ch : s_doc["components"]["major"].as<JsonArray>()) s_componentOf[ch.as<int>()] = n++;
-        for (JsonVariant ch : s_doc["components"]["final"].as<JsonArray>()) s_componentOf[ch.as<int>()] = n++;
+        for (JsonVariant v : s_doc["components"]["major"].as<JsonArray>()) {
+            uint8_t c = (uint8_t)colorOfName(v.as<const char*>());   // validated above
+            s_majorOfColor[c] = n;
+            s_majorColor[n++] = c;
+        }
     }
     s_state[0] = 0;
     s_timerOn = false;
@@ -263,8 +280,14 @@ bool        gamestate_ready()  { return s_ready; }
 const char* gamestate_game()   { return s_game; }
 const char* gamestate_state()  { return s_state; }
 float       gamestate_decay_rate() { return s_decayRate; }
-int         gamestate_component_for_channel(uint8_t channel) {
-    return s_ready && channel < sizeof(s_componentOf) ? s_componentOf[channel] : -1;
+int         gamestate_major_for_channel(uint8_t channel) {
+    if (!s_ready || channel >= pulleys::CHANNEL_COUNT) return -1;
+    return s_majorOfColor[pulleys::channel_color_index(channel)];
+}
+
+uint8_t     gamestate_major_color(uint8_t major) {
+    if (!s_ready || major >= GAME_MAJOR_COMPONENTS) return pulleys::MESH_COLOR_UNKNOWN;
+    return s_majorColor[major];
 }
 
 uint32_t gamestate_state_age_ms() { return millis() - s_enteredAt; }

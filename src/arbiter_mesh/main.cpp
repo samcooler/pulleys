@@ -23,6 +23,8 @@
 #include "gameconfig.h"
 #include "gamestate.h"
 #include "components.h"
+#include "installcfg.h"
+#include "installui.h"
 #include "ui.h"
 
 // ── Display pin mapping — from board schematic ────────────────────────────────
@@ -168,6 +170,7 @@ static void handleSerial() {
             len = 0;
             if (pulleys::whoami_handle(buf)) continue;   // "?" → PULLEYS-ID line
             if (pulleys::census_handle_serial(buf)) continue; // "CENSUS" → who is out there
+            if (installcfg_handle_serial(buf)) continue;   // MAP / COLOR / SHUFFLE
             if (buf[0] == 'T' && n == 15) {
                 auto num = [&](uint8_t off, uint8_t w) {
                     int v = 0;
@@ -410,14 +413,21 @@ void setup() {
     Serial.println("  [MESH] observe-only: relaying disabled");
 #endif
     monitor_init();
+    installcfg_init();
     eventlog_init(&s_rtc);
-    // The monitor has one hook slot; the SD log and the game both want every event.
+    // The monitor has one hook slot; the SD log, the mapping screen and the
+    // game all want every event. The log keeps every pull, mapping or not; the
+    // game gets none while the mapping screen holds the ropes. Remap acks are
+    // not pulls, and only the mapping screen cares about them.
     monitor_on_event([](const pulleys::MeshEvent& ev, bool relayed) {
-        eventlog_record(ev, relayed);
-        components_on_mesh_event(ev);
+        bool pull = pulleys::mesh_event_is_pull(ev);
+        if (pull) eventlog_record(ev, relayed);
+        if (installui_on_event(ev)) return;
+        if (pull) components_on_mesh_event(ev);
     });
     ui_init();
     clockui_init(&s_rtc);
+    installui_init();
     // Last, so the game's opening cues go out onto a mesh that is up.
     components_init();
     gameconfig_init();
@@ -435,6 +445,7 @@ void loop() {
     gameconfig_poll();
     gamestate_tick();
     components_tick();
+    installcfg_tick();
     handleSerial();
 
     // A targeted update owns the board while it runs. The panel holds its last frame rather
@@ -454,10 +465,12 @@ void loop() {
     }
 
     clockui_tick();
-    if (!clockui_is_open()) ui_tick();
+    installui_tick();
+    bool modal = clockui_is_open() || installui_is_open();
+    if (!modal) ui_tick();
     lv_timer_handler();
 
-    if (now - last_ui >= 750 && !clockui_is_open()) {
+    if (now - last_ui >= 750 && !modal) {
         last_ui = now;
         ui_refresh();
     }
@@ -486,7 +499,7 @@ void loop() {
             uint32_t seenS = (now - n.lastBeaconMs) / 1000;
             if (n.type == pulleys::MESH_ORIGIN_SENSOR) {
                 char chS[6], modeS[4];
-                if (n.events) {
+                if (n.known) {
                     snprintf(chS, sizeof(chS), "ch%-2d", n.channel);
                     snprintf(modeS, sizeof(modeS), "%s",
                              n.mode == pulleys::SENSOR_MODE_ROTATION ? "rot" : "lin");

@@ -10,7 +10,7 @@
 // node shows up either way.
 
 #define MON_MAX_NODES     40
-#define MON_CHANNELS      16
+#define MON_CHANNELS      pulleys::CHANNEL_COUNT
 #define MON_LOG_LEN       14
 #define NODE_STALE_MS     8000     // no beacon this long → amber
 #define NODE_LOST_MS      20000    // → red, then dropped from the table
@@ -23,6 +23,7 @@ struct MonNode {
     uint32_t lastBeaconMs; // presence, from clock beacons
     int32_t  skewMs;       // that node's clock minus ours
     // Sensor-only
+    bool     known;        // channel/mode heard (from a pull or a remap ack)
     uint8_t  channel;
     uint8_t  mode;
     uint32_t events;

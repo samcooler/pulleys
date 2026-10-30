@@ -11,7 +11,7 @@ strings overlord already accepts (`video_once_test1`, `audio_once_chime`,
 | -------- | ---------------------------------------------------- |
 | `game`   | Name, for logs                                       |
 | `start`  | State to enter at launch                             |
-| `components` | Which rope channel drives each component            |
+| `components` | Which colour drives each major component            |
 | `default_decay_rate` | How fast a lit component drains, % per second (optional) |
 | `ambient_sounds` | Sounds overlord repeats on a schedule (optional)    |
 | `audio_gain` | Loudness multiplier per audio cue (optional)        |
@@ -46,25 +46,35 @@ Style: write lists and maps in multiline block form, not `{...}` / `[...]`.
 
 ```yaml
 components:
-  major:                         # major components 1-5, in order
-    - 1
-    - 10
-    - 3
-    - 4
-    - 5
-  final:                         # final components 1-3
-    - 6
-    - 7
-    - 8
+  major:                         # major components 1-5, in order: game1 colours
+    - red
+    - blue
+    - green
+    - yellow
+    - orange
 ```
 
-Which rope channel drives each component. The position in a list is the
-component's number, so the first `major` entry is major component 1, and that
-order is also the order of the bars on the component state display. There are
-always exactly five major and three final components, each on its own channel
-(0-15); a channel listed twice is an error, and a channel not listed drives
-nothing. The arbiter reads this, from its built-in game or a posted one; a new
-mapping applies to the next pull. Overlord does not use it: the keyboard
+Which colour drives each major component. The position in the list is the
+component's number, so the first entry is major component 1, and that order is
+also the order of the bars on the component state display. There are always
+exactly five.
+
+A major is a colour: one of game1's five (`red`, `blue`, `green`, `yellow`,
+`orange`), each listed once. A pull on any rope whose channel wears that colour
+today drives it, so several ropes can feed one component, and recolouring a
+channel on the arbiter's COLOURS screen changes which component its ropes drive
+from the next pull. Purple is game2's colour and is not a major.
+
+The finals are not configured here: every channel painted purple on the
+COLOURS screen is a final of its own, so painting a channel purple is what
+makes it one. Game2 is won (`all_final_components_activated`) when every purple
+channel that has a rope mapped to it is lit at once; a purple channel with no
+rope is left out, since nobody could pull it. A `final` list here is an error.
+The component state display has bars for the first three roped purple
+channels; more than three still count toward the win, without a bar.
+
+The arbiter reads this, from its built-in game or a posted one; a new mapping,
+or a recoloured channel, applies to the next pull. Overlord does not use it: the keyboard
 simulator's keys stand in for the components themselves.
 
 ## Component decay
@@ -145,8 +155,8 @@ states:
 - `game_randomize_simon_N_goals` cues, for N from 1 to 5, choose N distinct
   major components as goals. A repeat of the prior set is avoided when another
   set of that size exists. Goals persist until another randomization cue.
-- `game_reset_components` clears the activation status of all major and final
-  components and immediately publishes zero charge to the displays. It emits no
+- `game_reset_components` clears the activation status of all major
+  components and every final (purple) channel and immediately publishes zero charge to the displays. It emits no
   component-deactivation events. Put it before the round's goal-randomization
   cue when a fresh round should start with every component dark.
 - An event with no entry in the current state is ignored.

@@ -16,9 +16,9 @@
 #                  component_deactivated       One of the major components is deactivated.
 #                  all_components_activated    All goals lit; every non-goal dark.
 #                  all_components_deactivated  Every major component is now deactivated.
-#                  final_component_activated   The final component is activated.
-#                  final_component_deactivated The final component is deactivated.
-#                  all_final_components_activated  Every final component is now activated.
+#                  final_component_activated   A final (purple) channel is activated.
+#                  final_component_deactivated A final (purple) channel is deactivated.
+#                  all_final_components_activated  Every purple channel with a rope is now lit.
 #   state        What the game is doing right now. It is always in exactly one.
 #   on           What to do when a state is entered or an event happens in it.
 #                An event a state does not list is ignored.
@@ -27,7 +27,8 @@
 #   goto         The state to move to.
 #   after        Move to another state once this much time has passed.
 #   component    One of the pieces of the installation that players activate: five
-#                major ones and three final ones, each driven by one rope channel.
+#                major ones, each a colour driven by every rope wearing it, and
+#                the final ones -- every channel painted purple is one.
 #   decay rate   Percent of full charge a lit component loses per second.
 #   ambient      A sound overlord repeats on a schedule, independent of the game.
 #   gain         A multiplier on how loud one audio clip plays. 1 is unchanged.
@@ -36,22 +37,20 @@
 game: pulley-party
 start: passive
 
-# Which rope channel drives each component. The position in a list is the
-# component's number, so the first `major` entry is major component 1. There are
-# always five major and three final components, each on its own channel (0-15).
-# A channel not listed here drives nothing. The arbiter reads this; it also fixes
-# the order of the bars on the component state display.
+# Which colour drives each major component. The position in the list is the
+# component's number, so the first entry is major component 1. The five majors
+# are game1's colours -- red, blue, green, yellow, orange, each once -- and a
+# pull on any rope wearing that colour today (set on the arbiter's COLOURS
+# screen) drives it. The order also fixes the order of the bars on the component
+# state display. The finals are not listed: every purple channel is a final, and
+# game2 is won when all the purple channels with a rope on them are lit.
 components:
   major:
-    - 1
-    - 10
-    - 3
-    - 4
-    - 5
-  final:
-    - 6
-    - 7
-    - 8
+    - red
+    - blue
+    - green
+    - yellow
+    - orange
 
 # How fast a lit component drains, in percent of full per second. A pull sets a
 # component to 100 and it goes dark at 0, so it stays lit 100 / rate seconds:

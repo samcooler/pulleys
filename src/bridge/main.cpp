@@ -227,6 +227,7 @@ static uint32_t cuesSent  = 0;
 // The mesh callback only queues. The UART write happens in loop(), so a slow or
 // unplugged Pi can never stall the radio path.
 static void onMeshEvent(const pulleys::MeshEvent& ev, bool relayed) {
+    if (!pulleys::mesh_event_is_pull(ev)) return;   // a sensor confirming a remap
     uint8_t next = (qHead + 1) % QUEUE_LEN;
     if (next == qTail) { dropped++; return; }
     queue[qHead] = { ev.channel, ev.mode, ev.magnitude, ev.flags, ev.originId };
