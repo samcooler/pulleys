@@ -82,8 +82,16 @@ GAME1_COLORS = ("red", "blue", "green", "yellow", "orange")
 # in 16 bits. Keep in step with MeshComponents in lib/pulleys_mesh.
 MAX_DECAY_RATE = 65.0
 
-# Sections only overlord reads; the arbiter's JSON leaves them out.
-OVERLORD_ONLY = ("ambient_sounds",)
+# Sections only the Pis read; the arbiter's JSON leaves them out.
+OVERLORD_ONLY = ("ambient_sounds", "players")
+
+# Addressing a cue to a player: "shrine__audio_once_bell" is for the Pi named
+# shrine; no prefix is the Overlord's. Keep in step with overlord/players.py.
+PRIMARY_PLAYER = "overlord"
+TARGET_SEP = "__"
+PLAYER_NAME = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*")
+PLAYER_KINDS = ("audio_once_", "audio_loop_", "video_once_", "video_loop_", "image_show_")
+PLAYER_WORDS = ("audio_loop_off", "image_off")
 
 
 def for_arbiter(cfg):
@@ -110,6 +118,32 @@ def validate(cfg):
             if not isinstance(cue, str) or not CUE_NAME.fullmatch(cue):
                 errors.append(f"cues.{group}: '{cue}' must be 1-{CUE_NAME_MAX} characters of "
                               "lowercase letters, digits, _ and -")
+
+    # players: the satellite Pis a cue may be addressed to (GAME_FORMAT.md)
+    players = cfg.get("players") or []
+    if not isinstance(players, list):
+        errors.append("players: must be a list of player names")
+        players = []
+    for i, name in enumerate(players):
+        if (not isinstance(name, str) or not PLAYER_NAME.fullmatch(name)
+                or TARGET_SEP in name or name == PRIMARY_PLAYER):
+            errors.append(f"players[{i}]: '{name}' must be lowercase letters and digits "
+                          f"(single - or _ between), not containing '{TARGET_SEP}' "
+                          f"and not '{PRIMARY_PLAYER}'")
+    targets = set(players) | {PRIMARY_PLAYER}
+    for group, cues in (cfg["cues"] or {}).items():
+        for cue in cues or []:
+            if not isinstance(cue, str) or TARGET_SEP not in cue:
+                continue
+            player, bare = cue.split(TARGET_SEP, 1)
+            if player not in targets:
+                errors.append(f"cues.{group}: '{cue}' is addressed to '{player}', "
+                              f"which is not listed under players")
+            elif not (bare in PLAYER_WORDS or
+                      any(bare.startswith(k) and len(bare) > len(k) for k in PLAYER_KINDS)):
+                errors.append(f"cues.{group}: '{cue}': a player plays "
+                              f"{', '.join(k + '<name>' for k in PLAYER_KINDS)} or "
+                              f"{' / '.join(PLAYER_WORDS)}, not '{bare}'")
 
     def check_cues(where, cues):
         for cue in cues or []:

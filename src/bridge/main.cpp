@@ -13,8 +13,15 @@
 #include <esp_ota_ops.h>
 
 // ── Bridge — mesh events out to a Raspberry Pi ────────────────────────────────
-// Joins the mesh like any other node: it relays and answers census. It also
-// serves node firmware from the Overlord over its always-on same-channel AP.
+// Joins the mesh like any other node: it relays and answers census. On the
+// Overlord's bridge it also serves node firmware over a same-channel AP.
+//
+// Every Pi in the piece -- the Overlord and any satellite players -- has a
+// bridge, and they all run this image. Only one may host the firmware AP: a
+// node told to update joins whichever `pulleys-fw` it finds, and a satellite's
+// Pi has nothing to feed it. So the AP stays down until this bridge's own Pi
+// starts firmware work (any FW- command, which only the Overlord's updater
+// sends), and a satellite's bridge never raises it at all.
 // What it adds is a second output. Every deduped sensor EVENT is written to the
 // Pi as one text line on UART1:
 //
@@ -265,6 +272,32 @@ static void drainQueue() {
     }
 }
 
+// The firmware AP and its HTTP endpoint. Raised once, the first time this
+// bridge's Pi speaks the firmware protocol; see the note at the top.
+static bool fwHosting = false;
+
+static void startFirmwareHost() {
+    if (fwHosting) return;
+    fwHosting = true;
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP("pulleys-fw", "", MESH_WIFI_CHANNEL, 0, 8);
+    fwServer.on("/api/v1/health", HTTP_GET, []() {
+        fwServer.send(200, "application/json",
+                      String("{\"channel\":") + MESH_WIFI_CHANNEL +
+                      ",\"busy\":" + (fwOfferActive ? "true" : "false") + "}");
+    });
+    fwServer.onNotFound([]() {
+        if (fwServer.method() == HTTP_GET && fwServer.uri().startsWith("/api/v1/firmware/")) {
+            serveFirmware();
+            return;
+        }
+        fwServer.send(404, "text/plain", "not found");
+    });
+    fwServer.begin();
+    Serial.printf("  Firmware AP: pulleys-fw ch=%d ip=%s (this Pi is the Overlord)\n",
+                  MESH_WIFI_CHANNEL, WiFi.softAPIP().toString().c_str());
+}
+
 // Lines from the Pi (acks, errors) go to the console so they can be read.
 static void pollPi() {
     static char buf[256];
@@ -275,6 +308,7 @@ static void pollPi() {
             if (len) {
                 buf[len] = 0;
                 Serial.printf("  [PI] %s\n", buf);
+                if (strncmp(buf, "FW-", 3) == 0) startFirmwareHost();
                 if (strncmp(buf, "FW-PING", 7) == 0) {
                     Serial1.printf("FW-BRIDGE id=%04X env=bridge sha256=%s\n",
                                    pulleys::identity_id(), pulleys::whoami_firmware_hash());
@@ -387,23 +421,6 @@ void setup() {
 
     pulleys::census_set_detail("uart1");
     pulleys::whoami_reply();
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP("pulleys-fw", "", MESH_WIFI_CHANNEL, 0, 8);
-    fwServer.on("/api/v1/health", HTTP_GET, []() {
-        fwServer.send(200, "application/json",
-                      String("{\"channel\":") + MESH_WIFI_CHANNEL +
-                      ",\"busy\":" + (fwOfferActive ? "true" : "false") + "}");
-    });
-    fwServer.onNotFound([]() {
-        if (fwServer.method() == HTTP_GET && fwServer.uri().startsWith("/api/v1/firmware/")) {
-            serveFirmware();
-            return;
-        }
-        fwServer.send(404, "text/plain", "not found");
-    });
-    fwServer.begin();
-    Serial.printf("  Firmware AP: pulleys-fw ch=%d ip=%s\n", MESH_WIFI_CHANNEL,
-                  WiFi.softAPIP().toString().c_str());
     Serial1.printf("FW-BRIDGE id=%04X env=bridge sha256=%s\n",
                    pulleys::identity_id(), pulleys::whoami_firmware_hash());
     Serial.println("Bridge ready — forwarding mesh events to the Pi.\n");
@@ -415,7 +432,7 @@ void loop() {
 
     pulleys::mesh_poll();
     pulleys::census_poll();
-    fwServer.handleClient();
+    if (fwHosting) fwServer.handleClient();
 
     // A targeted node offer owns this node while it downloads and installs.
     if (pulleys::ota_active()) {

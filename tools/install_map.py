@@ -56,7 +56,10 @@ DEFAULT_HEADER = os.path.join(HERE, os.pardir, "lib", "pulleys_install",
 COLUMNS = {
     "channel": [("channel", 1, 12, None, "spread", 1),
                 ("mode", 0, 1, ["ROT", "LIN"], "fixed", 1)],
-    "display": [("display", 0, 1, ["SCREEN_COUNTER", "SCREEN_RANKING"], "spread", 0)],
+    # New screens are spread over counter and ranking only (lo..hi); the other
+    # labels are there so a hand-set row naming them still reads back.
+    "display": [("display", 0, 1, ["SCREEN_COUNTER", "SCREEN_RANKING", "SCREEN_ALLON",
+                                   "SCREEN_WAVE", "SCREEN_COMPONENTS"], "spread", 0)],
 }
 
 KINDS = {

@@ -15,6 +15,7 @@ strings overlord already accepts (`video_once_test1`, `audio_once_chime`,
 | `default_decay_rate` | How fast a lit component drains, % per second (optional) |
 | `ambient_sounds` | Sounds overlord repeats on a schedule (optional)    |
 | `audio_gain` | Loudness multiplier per audio cue (optional)        |
+| `players` | Satellite Pis a cue may be addressed to (optional)  |
 | `cues`   | Every cue the game may use, grouped by type                |
 | `states` | The state machine                                    |
 
@@ -41,6 +42,34 @@ the name without its prefix, `chime.mp3`, also works). A future script may valid
 list against `overlord/media/` and build it into code.
 
 Style: write lists and maps in multiline block form, not `{...}` / `[...]`.
+
+## Players
+
+```yaml
+players:
+  - shrine
+  - grove
+```
+
+The Pis that play cues besides the Overlord (see `overlord/README.md`,
+"Satellite players"). A cue is addressed to one by a prefix and two
+underscores, and is played by that Pi alone:
+
+```yaml
+cues:
+  audio_once:
+    - audio_once_chime             # the Overlord
+    - grove__audio_once_bell       # the grove Pi
+  image:
+    - shrine__image_show_cage      # a still on the shrine Pi
+    - shrine__image_off
+```
+
+A cue with no prefix is the Overlord's (`overlord__` also works). The name before
+`__` must be listed here, and what follows must be something a player plays:
+`audio_once_<name>`, `audio_loop_<name>`, `audio_loop_off`, `image_show_<name>` or
+`image_off` (the last two only on an `image` player). The whole name still has
+to fit the 47-character limit above. Only the Pis read this list.
 
 ## Components
 

@@ -9,6 +9,11 @@ Events (one per line):
   audio_loop_off     stop the background audio loop
   cue <name>         the arbiter's game fired a cue; play <name> as above (what the bridge sends)
 
+A cue may be addressed to a player: "shrine__audio_once_bell" is for the Pi
+named shrine and is ignored here; a cue with no prefix is the Overlord's. The
+same program runs those other Pis as satellites (players.py) when
+OVERLORD_PLAYER names one; only the Overlord runs the firmware updater.
+
 Escape on the panel's keyboard opens a debug menu (Wi-Fi setup, network info, restart).
 
 With --game, game events (component_activated, ...) drive the state machine in
@@ -24,6 +29,7 @@ import threading
 from pathlib import Path
 
 import keys
+import players
 import settings
 from debug_menu import DebugMenu
 from mpv_ipc import Mpv, MpvError, SoundPlayer
@@ -39,18 +45,8 @@ DEFAULT_LOOP = "idle"  # played at startup from video_loops/ and audio_loops/ if
 
 
 def find_media(folder, name, prefix=""):
-    """The file for a cue in media/<folder>/, or None. Rejects path tricks.
-
-    The file may carry the whole cue name (audio_once_chime.mp3, the form that
-    matches what the game config says) or just the part after the prefix
-    (chime.mp3). The full name wins if both exist. Any extension."""
-    if not name or "/" in name or "\\" in name or name.startswith("."):
-        return None
-    for stem in ([prefix + name] if prefix else []) + [name]:
-        matches = sorted(p for p in (MEDIA / folder).glob(f"{stem}.*") if p.is_file())
-        if matches:
-            return matches[0]
-    return None
+    """The file for a cue in media/<folder>/, or None (players.find_media)."""
+    return players.find_media(MEDIA, folder, name, prefix)
 
 
 def main():
@@ -70,9 +66,24 @@ def main():
                     help="run a game state machine (default: game_state_machine/state_config.yaml)")
     ap.add_argument("--simulate", action="store_true",
                     help="keys 1-8 stand in for the components; needs --game")
+    ap.add_argument("--player", default=os.environ.get("OVERLORD_PLAYER") or players.PRIMARY,
+                    help="this Pi's player name (default $OVERLORD_PLAYER, else overlord);\n"
+                         "any other name runs a satellite that plays only cues addressed to it")
+    ap.add_argument("--player-kind", default=os.environ.get("OVERLORD_PLAYER_KIND") or "sound",
+                    choices=sorted(players.KINDS),
+                    help="what a satellite can play (default $OVERLORD_PLAYER_KIND, else sound)")
     args = ap.parse_args()
     if args.simulate and args.game is None:
         ap.error("--simulate needs --game")
+
+    if args.player != players.PRIMARY:
+        try:
+            from game import DEFAULT_GAME
+        except ImportError:  # pyyaml missing
+            DEFAULT_GAME = None
+        players.run(args, args.player, args.player_kind, MEDIA,
+                    gain_config.load(args.game or DEFAULT_GAME))
+        return
 
     volume = [settings.load().get("volume", 100)]  # percent; mpv's 100 is unity gain
     extra = [f"--volume={volume[0]}", *args.mpv_arg]  # --mpv-arg=--volume=N still wins at start
@@ -229,6 +240,11 @@ def main():
         # Game-control cues are for the game system, not overlord media.
         if cue.startswith("game_"):
             return False
+        # A cue for another player is that Pi's; "overlord__..." is ours.
+        player, bare = players.split_target(cue)
+        if player != players.PRIMARY:
+            return False
+        cue = bare
         try:
             played = dispatch(cue)
             if played:

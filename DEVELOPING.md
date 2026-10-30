@@ -8,7 +8,7 @@
 | **Station (C3)** | Seeed XIAO ESP32-C3 | 8×32 WS2812B matrix, 256 LEDs (GPIO 10) | — |
 | **Station (WROOM)** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | hardware FPU, CH340 USB-serial |
 | **Bridge** | ESP32-C3 (4MB, native USB) | none | UART1 to the Overlord (GPIO 21 TX, 20 RX); open firmware AP on mesh channel |
-| **Component state display** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | the screen's board; one bar per game component |
+| **Component state display** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | a Screen running its `components` display: one bar per game component |
 
 ## Build Environments
 
@@ -18,7 +18,7 @@
 | `station` | XIAO ESP32-C3 | default |
 | `station_wroom` | D1 Mini ESP32-WROOM-32 | hardware FPU, SSAA=3 |
 | `bridge` | ESP32-C3 (`seeed_xiao_esp32c3`) | mesh → Pi serial bridge, default env, always a C3 |
-| `component_state_display` | D1 Mini ESP32-WROOM-32 | component charge bars on an 8×32 matrix, default env |
+| `component_state_display` | D1 Mini ESP32-WROOM-32 | the screen image pinned to its COMPONENTS display, default env |
 
 ```sh
 pio run                      # build traveler + station (defaults)
@@ -269,13 +269,21 @@ and the next timer, a bar that flashes on each trigger, and a short log.
 
 ## Component state display
 
-A mesh node on the screen's hardware (D1 Mini ESP32, 8×32 matrix on GPIO 16) that
-shows how charged each game component is. Eight vertical bars side by side along
-the long axis, each 3 pixels wide with a 1-pixel gap (31 of the 32 columns):
-major components 1-5 on the left (red, orange, hot pink, green, blue), then final
-components 1-3 (purple). A component that is lit shows a full bar, which drains
-away until the component goes dark and the bar is empty. Source:
-`src/component_state_display/main.cpp`; the bar maths is `lib/pulleys_component_display`.
+Not a role of its own: one of a Screen's displays, `components` (`SCREEN_COMPONENTS`).
+Every screen hears the same mesh -- sensor events, the arbiter's palette, the
+component charges -- so any screen can run it: name the board in
+`DISPLAY_ASSIGNMENT` in `lib/pulleys_install` with `SCREEN_COMPONENTS`, or press
+`m` on its console to step to it for one boot. The `component_state_display` env
+is the screen image with this display pinned, kept for the board already
+installed as one (the firmware updater only offers a board the env it reports).
+
+Eight vertical bars side by side along the long axis, each 3 pixels wide with a
+1-pixel gap (31 of the 32 columns): the five major components on the left, in
+the game's colour order, then up to three finals (purple). Each bar wears the
+colour the arbiter sends with it. A component that is lit shows a full bar,
+which drains away until the component goes dark and the bar is empty. Source:
+`renderComponents` in `src/screen/main.cpp`; the bar maths is
+`lib/pulleys_component_display`.
 
 ```sh
 pio run -e component_state_display -t upload --upload-port /dev/cu.usbserial-XXXX
@@ -294,7 +302,7 @@ pio run -e component_state_display -t upload --upload-port /dev/cu.usbserial-XXX
 - **Orientation:** if the bars come out mirrored (component 1 on the right) or
   fill downward, add `-D COMPONENT_DISPLAY_REVERSE_X=1` and/or
   `-D COMPONENT_DISPLAY_REVERSE_Y=1` to the env's `build_flags`. Brightness is
-  `COMPONENT_DISPLAY_BRIGHTNESS` (default 60 of 255) and the current cap
+  `COMPONENT_BRIGHTNESS` in `src/screen/main.cpp` (60 of 255) and the current cap
   `LED_MAX_MA` (450 mA, USB-safe; raise it on a real 5 V supply).
 - **Bench:** `c<bar> <percent>` on the console draws a bar as if the arbiter had
   sent it (`c0 100` fills component 1 and lets it drain). On the arbiter, `p<channel>`

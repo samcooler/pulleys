@@ -58,6 +58,10 @@ class FirmwareUpdater:
         self._assets = {}  # sha256 -> local Path
         self._release = None
         self._running = False
+        # The bridge on this machine's UART, from its FW-BRIDGE line. Satellite
+        # players have bridges too, and census reports them with the same env;
+        # only this one is updated over the UART, the rest over the mesh.
+        self._bridge_id = None
 
     def start(self):
         if self._running:
@@ -79,6 +83,8 @@ class FirmwareUpdater:
             node_id = fields.get("id")
             if node_id:
                 with self._condition:
+                    if line.startswith("FW-BRIDGE "):
+                        self._bridge_id = node_id.upper()
                     self._inventory[node_id.upper()] = fields
                     self._condition.notify_all()
             return True
@@ -151,12 +157,15 @@ class FirmwareUpdater:
         # bridge and then performs one boot-scoped inventory/update pass.
         with self._condition:
             self._inventory.clear()
+            self._bridge_id = None
         deadline = time.monotonic() + 25
         bridge_seen = False
         while time.monotonic() < deadline:
+            # The first FW- line is also what makes our bridge raise the
+            # firmware AP (src/bridge), so this has to come before any offer.
             self.serial.write_line("FW-PING")
             with self._condition:
-                bridge_seen = any(v.get("env") == "bridge" for v in self._inventory.values())
+                bridge_seen = self._bridge_id is not None
                 if bridge_seen:
                     break
                 self._condition.wait(1)
@@ -176,8 +185,9 @@ class FirmwareUpdater:
         nodes = list(self._inventory.items())
         # Preserve the requested first/last priorities; all middle entries are
         # intentionally unordered.
+        own = self._bridge_id
         nodes.sort(key=lambda item: 0 if item[1].get("env") == "arbiter_mesh" else
-                          2 if item[1].get("env") == "bridge" else 1)
+                          2 if item[0] == own else 1)
         for node_id, node in nodes:
             env = node.get("env")
             if env not in table:
@@ -186,7 +196,8 @@ class FirmwareUpdater:
             expected_build = table[env]["build_hash"]
             if node.get("sha256") == expected_build:
                 continue
-            if env == "bridge":
+            is_own_bridge = env == "bridge" and node_id == own
+            if is_own_bridge:
                 command = (f"FW-BRIDGE-UPDATE env={env} build_hash={expected_build} "
                            f"sha256={expected} size={table[env]['size']}")
             else:
@@ -205,7 +216,7 @@ class FirmwareUpdater:
                     time.sleep(8)  # allow the target to restart and rejoin ESP-NOW
                     with self._condition:
                         self._inventory.pop(node_id, None)
-                    if env == "bridge":
+                    if is_own_bridge:
                         refreshed = None
                         reconnect_deadline = time.monotonic() + 90
                         while time.monotonic() < reconnect_deadline:

@@ -417,6 +417,39 @@ another machine anyway, pass `--control-bind 0.0.0.0` (in `OVERLORD_ARGS` in
 moves it and `--control-port 0` turns it off. If the port is taken overlord logs
 that and carries on without the API.
 
+## Satellite players
+
+The Overlord is one player; the piece can have more. A satellite is another Pi
+(or mini PC) with its own bridge on its UART, running this same checkout and
+the same `overlord.service`, told what it is in `/etc/overlord.env`:
+
+```sh
+OVERLORD_PLAYER=shrine        # the name cues address
+OVERLORD_PLAYER_KIND=image    # sound (default) | image
+```
+
+Every bridge hears every cue, so a cue says which Pi it is for:
+`shrine__audio_once_bell` plays on shrine, and a cue with no prefix
+(`audio_once_chime`) plays on the Overlord as before. List each satellite under
+`players:` in the game YAML so the validator can check its cues
+(`../game_state_machine/GAME_FORMAT.md`).
+
+| Kind | Plays |
+|------|-------|
+| `sound` | `audio_once_<name>`, `audio_loop_<name>`, `audio_loop_off` |
+| `image` | all of the above, plus `image_show_<name>` (a still, full screen, held until the next) and `image_off` (black) |
+
+A satellite looks for media in `media/<player>/<folder>/` first, then the shared
+`media/<folder>/`, so one synced Drive folder can serve every Pi. Images live in
+`images/` (`media/shrine/images/cage.png` for `shrine__image_show_cage`); an
+`idle` image or audio loop, if present, starts at boot. It has the same control
+API (`POST /cue/image_show_cage` -- a bare name is taken as this player's).
+
+What a satellite does not do: it runs no firmware updater, no game simulator, no
+ambient schedule and no video. Its bridge never raises the `pulleys-fw` AP --
+a bridge only hosts it once its own Pi starts firmware work, which only the
+Overlord's updater does. So run exactly one Pi as `overlord`.
+
 ## Media
 
 ```
@@ -465,7 +498,8 @@ remote needs the same folder names.
 
 ## Files
 
-- `overlord.py` - entry point; prefix-based event dispatch, loop/clip state machine.
+- `overlord.py` - entry point; prefix-based event dispatch, loop/clip state machine. Hands off to `players.py` when `OVERLORD_PLAYER` names a satellite.
+- `players.py` - cue addressing (`player__cue`), media lookup, and the satellite classes: `SoundSatellite`, `ImageSatellite`.
 - `mpv_ipc.py` - `Mpv` drives one mpv over its JSON IPC socket (fullscreen kiosk, or headless audio with `kiosk=False`); `SoundPlayer` spawns one throwaway mpv per sound effect.
 - `serial_reader.py` - line-based event source: serial port (auto-reconnects) or, with `--test`, the Unix socket.
 - `send.sh` - sends trigger events to the test socket.

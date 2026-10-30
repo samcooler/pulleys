@@ -12,6 +12,7 @@
 #include <pulleys_mesh.h>
 #include <pulleys_ota.h>
 #include <pulleys_census.h>
+#include <pulleys_component_display.h>
 #include "font5x7.h"
 
 // ── Screen — activity display for the sensor mesh ─────────────────────────────
@@ -27,6 +28,12 @@
 //   WAVE    — three wandering sines bubbling in gold on a 14×2 panel (14, skip
 //             1, 16) instead of the 8×32 matrix. A different LED surface, so a
 //             board is built for it rather than switched into it
+//   COMPONENTS — the game's charge bars: one per component, filling when the
+//             arbiter says it is lit and draining until it goes dark
+//
+// Every display runs on the same board and hears the same mesh: every sensor
+// event, the arbiter's palette, its component charges. Which one draws is the
+// only difference, so any screen can be any of them.
 //
 // Which one it shows is chosen at boot, not on a timer. A board named in the
 // install map (lib/pulleys_install) runs the display assigned to it, so an
@@ -44,8 +51,8 @@
   #define LED_COUNT 256
 #endif
 
-// The display and the LED surface have to agree. COUNTER, RANKING and ALLON
-// address the whole 8×32 matrix; WAVE addresses a 29-LED 14×2 panel. Mixing
+// The display and the LED surface have to agree. COUNTER, RANKING, ALLON and
+// COMPONENTS address the whole 8×32 matrix; WAVE addresses a 29-LED 14×2 panel. Mixing
 // them would walk off the end of leds[], so an env that pins one display gets
 // checked against its own LED_COUNT here rather than at run time.
 #ifdef SCREEN_FORCE_DISPLAY
@@ -485,8 +492,85 @@ static void renderWave(float dt) {
     pulleys::wave_render(wavePanel, waveCfg, waveState, dt);
 }
 
+// ── Display: components ───────────────────────────────────────────────────────
+// Eight vertical bars along the long axis, 3 pixels wide with a 1-pixel gap:
+// the five majors, then the finals. It draws what the arbiter publishes
+// (MeshComponents) and nothing more -- when a component counts as lit, and for
+// how long, is the arbiter's rule alone. Between packets the bars keep draining
+// by themselves (pulleys_component_display), so a missed packet costs nothing.
+// If the arbiter goes quiet, a pixel at the right-hand end blinks red.
+//
+// The model is fed whatever display is up, so switching to this one on the
+// bench ('m') shows the game's real state at once rather than empty bars.
+//
+// Which way the panel is mounted: component 1 is the leftmost bar and bars
+// fill upward from the bottom; flip either if they come out the other way.
+#ifndef COMPONENT_DISPLAY_REVERSE_X
+  #define COMPONENT_DISPLAY_REVERSE_X 0
+#endif
+#ifndef COMPONENT_DISPLAY_REVERSE_Y
+  #define COMPONENT_DISPLAY_REVERSE_Y 0
+#endif
+#define COMPONENT_BRIGHTNESS 60   // of 255; what the bars' own board used to run at
+#define TRACK_LEVEL          10   // unlit part of a bar, 0..255 of its colour
+
+static pulleys::ComponentDisplayModel compModel;
+
+// Each bar wears its component's colour, as the arbiter reports it with every
+// charge packet: a major's game1 colour, a final's purple. These stand in until
+// the arbiter has said (or if it is too old to say). A final bar the arbiter
+// sends no colour for has no purple channel behind it, and stays dark.
+static uint8_t barColor[pulleys::COMPONENT_DISPLAY_BARS] = {
+    pulleys::COLOR_RED, pulleys::COLOR_BLUE, pulleys::COLOR_GREEN,
+    pulleys::COLOR_YELLOW, pulleys::COLOR_ORANGE,
+    pulleys::COLOR_GAME2, pulleys::COLOR_GAME2, pulleys::COLOR_GAME2,
+};
+static_assert(pulleys::COMPONENT_DISPLAY_BARS == pulleys::MESH_COMPONENT_COUNT,
+              "one bar per component in the arbiter's packet");
+
+static void onComponents(const pulleys::MeshComponents& c, bool relayed) {
+    pulleys::component_display_update(compModel, c.charge, c.decay, millis());
+    // An arbiter that predates colours sends none at all, majors included;
+    // keep the defaults for it rather than blanking every bar.
+    if (c.color[0] != pulleys::MESH_COLOR_UNKNOWN)
+        memcpy(barColor, c.color, sizeof(barColor));
+    if (mode != pulleys::SCREEN_COMPONENTS) return;
+    Serial.printf("★ components%s (%.3f%%/s):", relayed ? " (relayed)" : "", c.decay / 1000.0f);
+    for (uint8_t i = 0; i < pulleys::COMPONENT_DISPLAY_BARS; i++) Serial.printf(" %3u", c.charge[i]);
+    Serial.println();
+}
+
+static inline uint16_t barLed(uint8_t x, uint8_t y) {
+    return pulleys::component_display_index(x, y, COMPONENT_DISPLAY_REVERSE_X,
+                                            COMPONENT_DISPLAY_REVERSE_Y);
+}
+
+static void renderComponents(uint32_t now, float dt) {
+    pulleys::component_display_step(compModel, now, dt);
+    fill_solid(leds, LED_COUNT, CRGB::Black);   // the gaps between bars stay dark
+    for (uint8_t bar = 0; bar < pulleys::COMPONENT_DISPLAY_BARS; bar++) {
+        if (barColor[bar] >= pulleys::COLOR_COUNT) continue;   // no channel behind it
+        uint8_t full, edge;
+        pulleys::component_display_pixels(compModel.shown[bar], full, edge);
+        uint8_t x0 = pulleys::component_display_bar_x(bar);
+        for (uint8_t h = 0; h < pulleys::COMPONENT_DISPLAY_HEIGHT; h++) {
+            CRGB c = pulleys::color_rgb(barColor[bar]);
+            c.nscale8(COMPONENT_BRIGHTNESS);
+            if (h < full)       { /* lit */ }
+            else if (h == full) c.nscale8(edge > TRACK_LEVEL ? edge : TRACK_LEVEL);
+            else                c.nscale8(TRACK_LEVEL);
+            for (uint8_t dx = 0; dx < pulleys::COMPONENT_DISPLAY_BAR_W; dx++)
+                leds[barLed(x0 + dx, h)] = c;
+        }
+    }
+    if (pulleys::component_display_stale(compModel, now) && ((now / 500) & 1))
+        leds[barLed(pulleys::COMPONENT_DISPLAY_WIDTH - 1, 0)] = CRGB(60, 0, 0);
+}
+
 // ── Serial console — inject fake events to test the display standalone ────────
 //   e<ch>  simulate one detection on that channel
+//   c<bar> <percent>  set a component bar as if the arbiter had sent it
+//             ("c0 100" fills component 1, then it drains)
 //   r      reset all activity and the counter
 //   m      force the other display mode now (refused on a board built for one)
 //   w      flip the 14×2 panel's row direction, for matching the wiring
@@ -512,6 +596,17 @@ static void handleSerial() {
                     ev.magnitude = 90;
                     ev.ttl       = pulleys::MESH_TTL_START;
                     onMeshEvent(ev, false);
+                }
+            } else if (buf[0] == 'c') {
+                int bar = atoi(buf + 1);
+                const char* sp = strchr(buf, ' ');
+                int pct = sp ? atoi(sp + 1) : 100;
+                if (bar >= 0 && bar < pulleys::COMPONENT_DISPLAY_BARS) {
+                    uint8_t charge[pulleys::COMPONENT_DISPLAY_BARS];
+                    for (uint8_t i = 0; i < pulleys::COMPONENT_DISPLAY_BARS; i++)
+                        charge[i] = (uint8_t)(pulleys::component_display_target(compModel, i, millis()) * 100.0f + 0.5f);
+                    charge[bar] = (uint8_t)constrain(pct, 0, 100);
+                    pulleys::component_display_update(compModel, charge, compModel.decay, millis());
                 }
             } else if (buf[0] == 'r') {
                 for (uint8_t i = 0; i < NUM_CHANNELS; i++) chans[i] = ChannelState{};
@@ -583,6 +678,7 @@ void setup() {
     pulleys::census_init();
     pulleys::mesh_on_event(onMeshEvent);
     pulleys::mesh_on_config(onMeshConfig);
+    pulleys::mesh_on_components(onComponents);
 
     loadDisplayMode();
     if      (mode == pulleys::SCREEN_ALLON) allOnInit();
@@ -630,6 +726,7 @@ void loop() {
         if      (mode == pulleys::SCREEN_COUNTER) renderCounter(now);
         else if (mode == pulleys::SCREEN_ALLON)   renderAllOn(dt, pulleys::mesh_now_secs());
         else if (mode == pulleys::SCREEN_WAVE)    renderWave(dt);
+        else if (mode == pulleys::SCREEN_COMPONENTS) renderComponents(now, dt);
         else                                      renderRanking(dt, pulleys::mesh_now_secs());
 
         FastLED.show();

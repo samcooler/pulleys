@@ -10,7 +10,8 @@
 #include <pulleys_identity.h>
 #include <pulleys_whoami.h>
 
-// Node-side pull OTA. The bridge is the always-on AP and HTTP endpoint; it
+// Node-side pull OTA. The Overlord's bridge is the AP and HTTP endpoint (raised
+// once the Overlord starts firmware work; satellite bridges never host it); it
 // fetches bounded image chunks from the Overlord over UART as nodes request it.
 namespace pulleys {
 
