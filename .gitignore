@@ -3,3 +3,4 @@ dist/
 __pycache__
 .DS_Store
 game_state_machine/state_config.json
+.vscode/c_cpp_properties.json
