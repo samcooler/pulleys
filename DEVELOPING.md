@@ -7,7 +7,7 @@
 | **Traveler** | Waveshare ESP32-S3-Matrix | 8×8 WS2812B matrix, 64 LEDs (GPIO 14) | QMI8658 IMU, battery ADC (GPIO 2) |
 | **Station (C3)** | Seeed XIAO ESP32-C3 | 8×32 WS2812B matrix, 256 LEDs (GPIO 10) | — |
 | **Station (WROOM)** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | hardware FPU, CH340 USB-serial |
-| **Bridge** | ESP32-C3 (4MB, native USB) | none | UART1 to the Overlord (GPIO 21 TX, 20 RX); open firmware AP on mesh channel |
+| **Bridge** | any ESP32-C3 (4MB, native USB) | none | USB to its Pi (or UART1, GPIO 21 TX / 20 RX, with `BRIDGE_PI_USB=0`); the Overlord's hosts the firmware AP |
 | **Component state display** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | a Screen running its `components` display: one bar per game component |
 
 ## Build Environments
@@ -50,7 +50,7 @@ The first migration requires one USB flash of the new bridge environment,
 because the old bridge image cannot receive the new serial update protocol:
 
 ```sh
-pio run -e bridge -t upload --upload-port /dev/serial0
+pio run -e bridge -t upload --upload-port /dev/ttyACM0
 ```
 
 The new bridge retains the old mesh invitation and `/firmware.bin` route long
@@ -148,7 +148,7 @@ pulleys/
 ├── src/
 │   ├── traveler/main.cpp   # Traveler firmware
 │   ├── station/main.cpp    # Station firmware
-│   └── bridge/main.cpp     # Bridge: mesh events → Pi over UART1
+│   └── bridge/main.cpp     # Bridge: mesh events → Pi over USB
 ├── flash_all.sh            # Parallel flash script
 ├── serial_watch.sh         # Auto-reconnecting serial monitor
 └── docs (in root)
@@ -173,21 +173,28 @@ hardware class, but its listing and converge pass skip C3 boards as "retired"
 unless an env is named, so flash a fresh board with the command above or
 `./flash_all.sh bridge -p <port>`. Once a board reports `env=bridge` it is kept.
 
-### Two serial ports
+### The Pi link
 
-| Port | Where | Carries |
-|------|-------|---------|
-| Console | native USB (`/dev/cu.usbmodem*`) | boot banner, `★` event log, whoami / census |
-| Overlord link | UART1: GPIO 21 = TX, GPIO 20 = RX, 115200 8N1 | cues/events, update control, Base64 image chunks |
+One USB cable from the Pi to the C3's native USB port: it powers the bridge and
+carries everything, and the Pi sees it as `/dev/ttyACM0` (`/dev/cu.usbmodem*` on
+a Mac). `overlord/serial_reader.py` picks a ttyACM port ahead of the Pi's GPIO
+UART. The same port is the bridge's console, so the two share one stream:
 
-They are separate on purpose, so boot banners and whoami replies never end up in
-front of whatever reads the Pi link. Do not use GPIO 18/19: they are the C3's USB
-data lines. Pins and baud can be overridden with `-D BRIDGE_TX_PIN`,
-`BRIDGE_RX_PIN` and `BRIDGE_BAUD` in the env's `build_flags`.
+- the Pi's lines all start `FW-` and go to the firmware protocol; anything else
+  typed is a console command (`?`, `CENSUS`, `e3`, `v`, ...)
+- the bridge's console output never looks like a protocol line: the cue echo,
+  the `[PI]` echo and the census mirror are off in this mode, and the Overlord
+  logs the rest (banner, status) as `bridge: ...` and acts on none of it
+- writes to USB never wait, so a Pi that is not reading costs dropped lines,
+  not a stalled radio
 
-Wiring to the Pi: bridge TX (21) → Pi RX, bridge RX (20) ← Pi TX, ground to
-ground. Both sides are 3.3 V logic. On the Pi the port is `/dev/serial0` (enable
-the UART in `raspi-config`) or `/dev/ttyUSB0` for a USB adapter.
+The UART wiring is still there for a Pi that needs it: build with
+`-D BRIDGE_PI_USB=0` and the link moves to UART1, GPIO 21 = TX, GPIO 20 = RX,
+115200 8N1, with the USB port back to being a console alone. Wire bridge TX (21)
+→ Pi RX, bridge RX (20) ← Pi TX, ground to ground (3.3 V both sides); on the Pi
+the port is `/dev/serial0` (enable the UART in `raspi-config`). Do not use GPIO
+18/19: they are the C3's USB data lines. Pins and baud can be overridden with
+`-D BRIDGE_TX_PIN`, `BRIDGE_RX_PIN` and `BRIDGE_BAUD`.
 
 ### Line format
 
@@ -198,20 +205,20 @@ EV <channel> <mode> <magnitude> <originId hex> <flags>\n
 e.g. `EV 3 1 90 A855 0`: channel 3, linear mode (`0` = rotation, `1` = linear),
 magnitude 90, from sensor `0xA855`, flags 0 (bit 0 = battery low). Fields are
 space-separated and positional; new fields are appended. Events are deduped by
-the mesh, so one pull yields one line however many copies were heard. Lines the
-Pi writes back are echoed to the console as `[PI] ...`.
+the mesh, so one pull yields one line however many copies were heard. In UART
+mode, lines the Pi writes back are echoed to the console as `[PI] ...`.
 
 Read it from a shell:
 
 ```sh
-stty -F /dev/serial0 115200 raw -echo && cat /dev/serial0     # Linux / Pi
-stty -f /dev/cu.usbserial-XXXX 115200 raw -echo && cat /dev/cu.usbserial-XXXX   # macOS adapter
+stty -F /dev/ttyACM0 115200 raw -echo && cat /dev/ttyACM0     # Linux / Pi
+stty -f /dev/cu.usbmodemXXXX 115200 raw -echo && cat /dev/cu.usbmodemXXXX   # macOS
 ```
 
 Test without a sensor: type `e<channel>` (for example `e3`) on the console to
 inject a fake event, and it comes out on the Pi link. The console also answers
 `?` (whoami) and `CENSUS`, and prints `forwarded=` / `dropped=` every 3 s. The
-bridge queues up to 32 events and counts any it has to drop if the UART backs up.
+bridge queues up to 32 events and counts any it has to drop if the link backs up.
 
 The arbiter's game fires cues, and the bridge writes each to the Pi link as a
 line of its own:
@@ -227,9 +234,10 @@ changing the game's cues never needs the bridge reflashed. Test one without the 
 only `cue <name>` lines by default; `v` toggles the per-event lines and counters.
 
 The Overlord player and boot-time firmware coordinator live in `overlord/`.
-The bridge REST firmware route is `GET /api/v1/firmware/<sha256>` on its
-continuous `pulleys-fw` AP. Each response is pulled from the Overlord through
-UART1 in bounded, checksummed chunks.
+The bridge REST firmware route is `GET /api/v1/firmware/<sha256>` on the
+`pulleys-fw` AP, which only the Overlord's bridge raises (once the Overlord
+starts firmware work). Each response is pulled from the Overlord over the Pi
+link in bounded, checksummed chunks.
 
 ## Tips
 

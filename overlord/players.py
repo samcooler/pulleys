@@ -1,7 +1,7 @@
 """Players: the Pis that play the game's cues, and how a cue finds its Pi.
 
 Every Pi in the piece runs this checkout and has its own bridge (an ESP32-C3 on
-its UART), so every Pi hears every cue the arbiter's game fires. A cue says
+USB), so every Pi hears every cue the arbiter's game fires. A cue says
 which Pi it is for by a prefix:
 
     shrine__audio_once_bell     played by the player named "shrine"

@@ -18,13 +18,19 @@ SOCKET_PATH = os.environ.get("OVERLORD_SOCK", "/tmp/overlord.sock")
 
 
 def find_serial_port():
-    """Auto-detect ESP32 serial port, returns None if not found."""
-    # macOS patterns
-    ports = glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/cu.usbserial*")
-    # Linux patterns
-    ports += (glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*") +
-              glob.glob("/dev/ttyAMA*") + glob.glob("/dev/serial0"))
-    return sorted(ports)[0] if ports else None
+    """Auto-detect the bridge's serial port, returns None if not found.
+
+    In order of preference: the bridge's own USB port (a C3 enumerates as
+    ttyACM / usbmodem), then a USB-serial adapter, then the Pi's GPIO UART. Not
+    a plain sort: /dev/serial0 exists on every Pi and sorts ahead of ttyACM0,
+    which would pick the empty GPIO UART over a bridge plugged in by USB."""
+    for pattern in ("/dev/ttyACM*", "/dev/cu.usbmodem*",
+                    "/dev/ttyUSB*", "/dev/cu.usbserial*",
+                    "/dev/serial0", "/dev/ttyAMA*"):
+        ports = sorted(glob.glob(pattern))
+        if ports:
+            return ports[0]
+    return None
 
 
 class SerialReader:

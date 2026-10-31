@@ -14,7 +14,7 @@ in a background thread. It validates every firmware asset's binary SHA-256,
 asks the bridge for a mesh census, compares release build identities, and
 updates reachable out-of-date nodes one at a time. The bridge hosts the open
 `pulleys-fw` AP on the ESP-NOW channel and serves
-node downloads by requesting chunks over its UART link to the Overlord. GitHub
+node downloads by requesting chunks over its USB link to the Overlord. GitHub
 or bridge unavailability does not stop media playback; update checks are retried
 on the next Overlord reboot.
 
@@ -174,9 +174,10 @@ current state does not react to it).
 
 ## Deploying on a Raspberry Pi or mini PC
 
-The Overlord needs outbound Internet access to GitHub Releases. Its bridge UART
-must be configured as the serial port used by `serial_reader.py` (the reader
-checks `/dev/serial0`, `/dev/ttyAMA*`, and USB serial devices). The bridge AP is
+The Overlord needs outbound Internet access to GitHub Releases. Its bridge
+plugs into a USB port; `serial_reader.py` finds it as `/dev/ttyACM*` and prefers
+it over the Pi's GPIO UART (`/dev/serial0`, `/dev/ttyAMA*`), which it falls
+back to for a bridge built with `BRIDGE_PI_USB=0`. The bridge AP is
 open and intended for the Pulleys nodes; it does not provide Internet routing.
 
 To publish firmware, install PlatformIO and GitHub CLI, authenticate `gh`, and
@@ -420,7 +421,7 @@ that and carries on without the API.
 ## Satellite players
 
 The Overlord is one player; the piece can have more. A satellite is another Pi
-(or mini PC) with its own bridge on its UART, running this same checkout and
+(or mini PC) with its own bridge plugged in by USB, running this same checkout and
 the same `overlord.service`, told what it is in `/etc/overlord.env`:
 
 ```sh

@@ -23,6 +23,7 @@ stand-ins for the components and an overlay showing their charge.
 
 import argparse
 import os
+import re
 import signal
 import sys
 import threading
@@ -301,6 +302,12 @@ def main():
             fire_cue(event_name[4:].strip())
             return
         if event_name.startswith("EV "):
+            return
+        # A bridge on USB shares its port with its console, so its banner and
+        # status lines arrive here too. An event is one bare word; anything
+        # else is the bridge talking, worth a log line and nothing more.
+        if not re.fullmatch(r"[a-z0-9_-]+", event_name):
+            print(f"bridge: {event_name}", flush=True)
             return
         if game and game.handles(event_name):
             game.event(event_name)

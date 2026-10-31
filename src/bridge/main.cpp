@@ -22,13 +22,14 @@
 // Pi has nothing to feed it. So the AP stays down until this bridge's own Pi
 // starts firmware work (any FW- command, which only the Overlord's updater
 // sends), and a satellite's bridge never raises it at all.
+//
 // What it adds is a second output. Every deduped sensor EVENT is written to the
-// Pi as one text line on UART1:
+// Pi as one text line:
 //
 //   EV <channel> <mode> <magnitude> <originId hex> <flags>\n
 //
 // e.g. "EV 3 1 90 A855 0". Fields are space-separated and parsed by position;
-// anything new is appended. The Pi's own lines are echoed to the console.
+// anything new is appended.
 //
 // The arbiter's game fires cues, which arrive as the cue's name in ASCII and go
 // out as
@@ -38,10 +39,21 @@
 // e.g. "cue audio_once_chime". The bridge is transparent: it holds no list of
 // cues and checks nothing about the name, it passes on whatever it was given.
 //
-// The link is UART1 rather than Serial on purpose: UART0 is the console and the
-// channel whoami, census and update control arrive on, and mixing the UART traffic
-// into it would put boot banners in front of whatever is reading the Pi.
+// The Pi link is the C3's USB port by default: one cable from the Pi powers the
+// bridge and carries everything, and the Pi sees it as /dev/ttyACM0. That port
+// is also the console, so in USB mode the two share one stream: every line the
+// Pi sends is read once and routed by its prefix (FW- lines are the Pi's, the
+// rest are console commands), and nothing the bridge prints to the console may
+// look like a protocol line -- the cue echo, the "[PI]" echo and the census
+// mirror are all off, since the Pi would read them twice.
+//
+// With -D BRIDGE_PI_USB=0 the link moves to UART1 on BRIDGE_TX_PIN/RX_PIN
+// instead, and the USB port goes back to being a console alone: the wiring for
+// a Pi on its GPIO UART.
 
+#ifndef BRIDGE_PI_USB
+  #define BRIDGE_PI_USB 1
+#endif
 #ifndef BRIDGE_TX_PIN
   #define BRIDGE_TX_PIN 19
 #endif
@@ -52,7 +64,15 @@
   #define BRIDGE_BAUD   115200
 #endif
 
-#define QUEUE_LEN 32   // events waiting for the UART; a burst of sensors fits
+// Where the Pi's lines go, and whether the console shares that port.
+#if BRIDGE_PI_USB
+  #define PI_LINK Serial
+#else
+  #define PI_LINK Serial1
+#endif
+static constexpr bool PI_SHARES_CONSOLE = BRIDGE_PI_USB;
+
+#define QUEUE_LEN 32   // events waiting for the Pi link; a burst of sensors fits
 
 static WebServer fwServer(80);
 static char fwSha[65] = {};
@@ -65,14 +85,14 @@ static bool fwOfferActive = false;
 static void drainQueue();
 
 static bool requestFirmwareChunk(uint32_t offset, uint8_t* out, size_t want, size_t& got) {
-    Serial1.printf("FW-READ sha256=%s offset=%lu length=%u\n", fwSha,
+    PI_LINK.printf("FW-READ sha256=%s offset=%lu length=%u\n", fwSha,
                    (unsigned long)offset, (unsigned)want);
     char line[640];
     uint32_t start = millis();
     size_t used = 0;
     while (millis() - start < 15000) {
-        while (Serial1.available()) {
-            char c = (char)Serial1.read();
+        while (PI_LINK.available()) {
+            char c = (char)PI_LINK.read();
             if (c == '\n' || c == '\r') {
                 if (!used) continue;
                 line[used] = 0;
@@ -136,7 +156,7 @@ static void onFirmwareStatus(const pulleys::MeshFwStatus& status) {
     const char* state = status.state == pulleys::FW_OK ? "ok"
                       : status.state == pulleys::FW_FAILED ? "failed"
                       : status.state == pulleys::FW_DOWNLOADING ? "downloading" : "ready";
-    Serial1.printf("FW-STATUS id=%04X env=%s state=%s build_hash=%s sha256=%s err=%d\n",
+    PI_LINK.printf("FW-STATUS id=%04X env=%s state=%s build_hash=%s sha256=%s err=%d\n",
                    status.originId, status.env, state, status.buildHash,
                    status.sha256, (int)status.error);
     if (status.state == pulleys::FW_OK) fwOfferActive = false;
@@ -147,7 +167,7 @@ static void onLegacyOtaStatus(const pulleys::MeshOtaReady& status) {
     const char* state = status.state == pulleys::OTA_STATE_OK ? "ok"
                       : status.state == pulleys::OTA_STATE_FAILED ? "failed"
                       : status.state == pulleys::OTA_STATE_DOWNLOADING ? "downloading" : "ready";
-    Serial1.printf("FW-STATUS id=%04X env=%s state=%s build_hash=%s sha256=%s err=%d\n",
+    PI_LINK.printf("FW-STATUS id=%04X env=%s state=%s build_hash=%s sha256=%s err=%d\n",
                    status.originId, status.env, state, fwBuildHash, fwSha,
                    (int)status.err);
     if (status.state == pulleys::OTA_STATE_OK) fwOfferActive = false;
@@ -156,14 +176,14 @@ static void onLegacyOtaStatus(const pulleys::MeshOtaReady& status) {
 static void updateBridgeSelf(uint32_t size, const char* sha) {
     const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
     if (!size || strlen(sha) != 64 || !next || size > next->size) {
-        Serial1.printf("FW-STATUS id=%04X env=bridge state=failed err=bad_image\n",
+        PI_LINK.printf("FW-STATUS id=%04X env=bridge state=failed err=bad_image\n",
                        pulleys::identity_id());
         return;
     }
     strlcpy(fwSha, sha, sizeof(fwSha));
     fwSize = size;
     if (!Update.begin(size, U_FLASH)) {
-        Serial1.printf("FW-STATUS id=%04X env=bridge state=failed err=%d\n",
+        PI_LINK.printf("FW-STATUS id=%04X env=bridge state=failed err=%d\n",
                        pulleys::identity_id(), (int)Update.getError());
         return;
     }
@@ -182,7 +202,7 @@ static void updateBridgeSelf(uint32_t size, const char* sha) {
         mbedtls_sha256_update_ret(&hash, buf, got);
         off += got;
         if (off == size || off / 65536 != (off - got) / 65536)
-            Serial1.printf("FW-STATUS id=%04X env=bridge state=downloading offset=%lu\n",
+            PI_LINK.printf("FW-STATUS id=%04X env=bridge state=downloading offset=%lu\n",
                            pulleys::identity_id(), (unsigned long)off);
     }
     uint8_t digest[32];
@@ -193,20 +213,21 @@ static void updateBridgeSelf(uint32_t size, const char* sha) {
     actual[64] = 0;
     if (!ok || off != size || strcmp(actual, sha) != 0) {
         Update.abort();
-        Serial1.printf("FW-STATUS id=%04X env=bridge state=failed err=hash\n",
+        PI_LINK.printf("FW-STATUS id=%04X env=bridge state=failed err=hash\n",
                        pulleys::identity_id());
         return;
     }
     if (!Update.end(true)) {
-        Serial1.printf("FW-STATUS id=%04X env=bridge state=failed err=write\n",
+        PI_LINK.printf("FW-STATUS id=%04X env=bridge state=failed err=write\n",
                        pulleys::identity_id());
         return;
     }
     Preferences prefs;
     if (prefs.begin("fw", false)) { prefs.putString("sha256", sha); prefs.end(); }
-    Serial1.printf("FW-STATUS id=%04X env=bridge state=ok sha256=%s\n",
+    PI_LINK.printf("FW-STATUS id=%04X env=bridge state=ok sha256=%s\n",
                    pulleys::identity_id(), sha);
-    Serial.flush(); Serial1.flush();
+    Serial.flush();
+    if (!PI_SHARES_CONSOLE) PI_LINK.flush();
     delay(500);
     ESP.restart();
 }
@@ -231,8 +252,8 @@ static uint32_t forwarded = 0;
 static uint32_t dropped   = 0;
 static uint32_t cuesSent  = 0;
 
-// The mesh callback only queues. The UART write happens in loop(), so a slow or
-// unplugged Pi can never stall the radio path.
+// The mesh callback only queues. The write to the Pi happens in loop(), so a
+// slow or unplugged Pi can never stall the radio path.
 static void onMeshEvent(const pulleys::MeshEvent& ev, bool relayed) {
     if (!pulleys::mesh_event_is_pull(ev)) return;   // a sensor confirming a remap
     uint8_t next = (qHead + 1) % QUEUE_LEN;
@@ -253,19 +274,19 @@ static void onMeshCue(const pulleys::MeshCue& c, bool /*relayed*/) {
 
 static void drainQueue() {
     while (cTail != cHead) {
-        if (Serial1.availableForWrite() < 48) break;
+        if (PI_LINK.availableForWrite() < 48) break;
         const char* name = cueQueue[cTail].name;
-        Serial1.printf("cue %s\n", name);
-        Serial.printf("cue %s\n", name);
+        PI_LINK.printf("cue %s\n", name);
+        if (!PI_SHARES_CONSOLE) Serial.printf("cue %s\n", name);
         cTail = (cTail + 1) % QUEUE_LEN;
         cuesSent++;
     }
 
     while (qTail != qHead) {
-        // Leave the event queued if the UART would block; try again next loop.
-        if (Serial1.availableForWrite() < 32) return;
+        // Leave the event queued if the link would block; try again next loop.
+        if (PI_LINK.availableForWrite() < 32) return;
         const QueuedEvent& q = queue[qTail];
-        Serial1.printf("EV %u %u %u %04X %u\n", q.channel, q.mode, q.magnitude,
+        PI_LINK.printf("EV %u %u %u %04X %u\n", q.channel, q.mode, q.magnitude,
                        q.originId, q.flags);
         qTail = (qTail + 1) % QUEUE_LEN;
         forwarded++;
@@ -298,63 +319,51 @@ static void startFirmwareHost() {
                   MESH_WIFI_CHANNEL, WiFi.softAPIP().toString().c_str());
 }
 
-// Lines from the Pi (acks, errors) go to the console so they can be read.
-static void pollPi() {
-    static char buf[256];
-    static uint16_t len = 0;
-    while (Serial1.available()) {
-        char c = Serial1.read();
-        if (c == '\n' || c == '\r') {
-            if (len) {
-                buf[len] = 0;
-                Serial.printf("  [PI] %s\n", buf);
-                if (strncmp(buf, "FW-", 3) == 0) startFirmwareHost();
-                if (strncmp(buf, "FW-PING", 7) == 0) {
-                    Serial1.printf("FW-BRIDGE id=%04X env=bridge sha256=%s\n",
-                                   pulleys::identity_id(), pulleys::whoami_firmware_hash());
-                } else if (strncmp(buf, "FW-CENSUS", 9) == 0 ||
-                           strncmp(buf, "FW-QUERY", 8) == 0) {
-                    int spread = 3000;
-                    char* at = strstr(buf, "spread=");
-                    if (at) spread = atoi(at + 7);
-                    if (spread < 500 || spread > 10000) spread = 3000;
-                    pulleys::census_request((uint16_t)spread);
-                } else if (strncmp(buf, "FW-OFFER ", 9) == 0) {
-                    char id[8] = {}, env[32] = {}, buildHash[65] = {}, sha[65] = {}, md5[33] = {};
-                    unsigned size = 0;
-                    if (sscanf(buf + 9, "id=%7s env=%31s build_hash=%64s sha256=%64s md5=%32s size=%u",
-                               id, env, buildHash, sha, md5, &size) == 6 &&
-                        strlen(buildHash) == 64 && strlen(sha) == 64 && strlen(md5) == 32 && size > 0) {
-                        fwTarget = (uint16_t)strtoul(id, nullptr, 16);
-                        strlcpy(fwEnv, env, sizeof(fwEnv));
-                        strlcpy(fwBuildHash, buildHash, sizeof(fwBuildHash));
-                        strlcpy(fwSha, sha, sizeof(fwSha));
-                        strlcpy(fwMd5, md5, sizeof(fwMd5));
-                        fwSize = size;
-                        fwOfferActive = true;
-                        pulleys::mesh_send_ota_announce("pulleys-fw", "", fwEnv,
-                                                        fwTarget, 300, fwMd5);
-                        pulleys::mesh_send_fw_offer(fwTarget, fwEnv, fwBuildHash, fwSha, fwSize);
-                        Serial1.printf("FW-STATUS id=%04X env=%s state=offered sha256=%s err=0\n",
-                                       fwTarget, fwEnv, fwSha);
-                    } else {
-                        Serial1.println("FW-ERROR reason=bad_offer");
-                    }
-                } else if (strncmp(buf, "FW-BRIDGE-UPDATE ", 17) == 0) {
-                    char sha[65] = {};
-                    unsigned size = 0;
-                    char* shaAt = strstr(buf, "sha256=");
-                    char* sizeAt = strstr(buf, "size=");
-                    if (shaAt && sizeAt && sscanf(shaAt, "sha256=%64s", sha) == 1 &&
-                        sscanf(sizeAt, "size=%u", &size) == 1)
-                        updateBridgeSelf(size, sha);
-                    else Serial1.println("FW-STATUS state=failed err=bad_command");
-                }
-            }
-            len = 0;
-        } else if (len < sizeof(buf) - 1) {
-            buf[len++] = c;
+// One line from the Pi: the firmware protocol. Echoed to the console when the
+// console is a port of its own, so it can be read there.
+static void handlePiLine(char* buf) {
+    if (!PI_SHARES_CONSOLE) Serial.printf("  [PI] %s\n", buf);
+    if (strncmp(buf, "FW-", 3) == 0) startFirmwareHost();
+    if (strncmp(buf, "FW-PING", 7) == 0) {
+        PI_LINK.printf("FW-BRIDGE id=%04X env=bridge sha256=%s\n",
+                       pulleys::identity_id(), pulleys::whoami_firmware_hash());
+    } else if (strncmp(buf, "FW-CENSUS", 9) == 0 ||
+               strncmp(buf, "FW-QUERY", 8) == 0) {
+        int spread = 3000;
+        char* at = strstr(buf, "spread=");
+        if (at) spread = atoi(at + 7);
+        if (spread < 500 || spread > 10000) spread = 3000;
+        pulleys::census_request((uint16_t)spread);
+    } else if (strncmp(buf, "FW-OFFER ", 9) == 0) {
+        char id[8] = {}, env[32] = {}, buildHash[65] = {}, sha[65] = {}, md5[33] = {};
+        unsigned size = 0;
+        if (sscanf(buf + 9, "id=%7s env=%31s build_hash=%64s sha256=%64s md5=%32s size=%u",
+                   id, env, buildHash, sha, md5, &size) == 6 &&
+            strlen(buildHash) == 64 && strlen(sha) == 64 && strlen(md5) == 32 && size > 0) {
+            fwTarget = (uint16_t)strtoul(id, nullptr, 16);
+            strlcpy(fwEnv, env, sizeof(fwEnv));
+            strlcpy(fwBuildHash, buildHash, sizeof(fwBuildHash));
+            strlcpy(fwSha, sha, sizeof(fwSha));
+            strlcpy(fwMd5, md5, sizeof(fwMd5));
+            fwSize = size;
+            fwOfferActive = true;
+            pulleys::mesh_send_ota_announce("pulleys-fw", "", fwEnv,
+                                            fwTarget, 300, fwMd5);
+            pulleys::mesh_send_fw_offer(fwTarget, fwEnv, fwBuildHash, fwSha, fwSize);
+            PI_LINK.printf("FW-STATUS id=%04X env=%s state=offered sha256=%s err=0\n",
+                           fwTarget, fwEnv, fwSha);
+        } else {
+            PI_LINK.println("FW-ERROR reason=bad_offer");
         }
+    } else if (strncmp(buf, "FW-BRIDGE-UPDATE ", 17) == 0) {
+        char sha[65] = {};
+        unsigned size = 0;
+        char* shaAt = strstr(buf, "sha256=");
+        char* sizeAt = strstr(buf, "size=");
+        if (shaAt && sizeAt && sscanf(shaAt, "sha256=%64s", sha) == 1 &&
+            sscanf(sizeAt, "size=%u", &size) == 1)
+            updateBridgeSelf(size, sha);
+        else PI_LINK.println("FW-STATUS state=failed err=bad_command");
     }
 }
 
@@ -362,66 +371,106 @@ static void pollPi() {
 //   e<ch>  inject a fake event on that channel, as if the mesh had delivered it
 //   v      toggle verbose: per-event lines and the 3 s counters
 //   c <name>  inject a fake cue, e.g. "c audio_once_chime"
-static void handleSerial() {
-    // Console line input; large firmware commands arrive on UART1 instead.
-    static char buf[96];
-    static uint8_t len = 0;
-    while (Serial.available()) {
-        char c = Serial.read();
-        if (c == '\n' || c == '\r') {
-            if (len == 0) continue;
-            buf[len] = 0;
-            len = 0;
-            if (pulleys::whoami_handle(buf)) continue;
-            if (pulleys::census_handle_serial(buf)) continue;
-            if (buf[0] == 'v' && buf[1] == 0) {
-                verbose = !verbose;
-                Serial.printf("verbose %s\n", verbose ? "on" : "off");
-            } else if (buf[0] == 'c' && buf[1] == ' ') {
-                pulleys::MeshCue c = {};
-                c.nameLen = (uint8_t)strlcpy(c.name, buf + 2, sizeof(c.name));
-                onMeshCue(c, false);
-            } else if (buf[0] == 'e') {
-                pulleys::MeshEvent ev = {};
-                ev.channel   = (uint8_t)atoi(buf + 1);
-                ev.mode      = pulleys::SENSOR_MODE_LINEAR;
-                ev.magnitude = 90;
-                ev.originId  = pulleys::identity_id();
-                ev.ttl       = pulleys::MESH_TTL_START;
-                onMeshEvent(ev, false);
+static void handleConsoleLine(char* buf) {
+    if (pulleys::whoami_handle(buf)) return;
+    if (pulleys::census_handle_serial(buf)) return;
+    if (buf[0] == 'v' && buf[1] == 0) {
+        verbose = !verbose;
+        Serial.printf("verbose %s\n", verbose ? "on" : "off");
+    } else if (buf[0] == 'c' && buf[1] == ' ') {
+        pulleys::MeshCue c = {};
+        c.nameLen = (uint8_t)strlcpy(c.name, buf + 2, sizeof(c.name));
+        onMeshCue(c, false);
+    } else if (buf[0] == 'e') {
+        pulleys::MeshEvent ev = {};
+        ev.channel   = (uint8_t)atoi(buf + 1);
+        ev.mode      = pulleys::SENSOR_MODE_LINEAR;
+        ev.magnitude = 90;
+        ev.originId  = pulleys::identity_id();
+        ev.ttl       = pulleys::MESH_TTL_START;
+        onMeshEvent(ev, false);
+    }
+}
+
+// Split a stream into lines and hand each one on. Sized for the firmware
+// protocol's longest line, an FW-DATA chunk in base64.
+struct LineReader {
+    char     buf[640];
+    uint16_t len = 0;
+    template <typename S, typename F> void poll(S& in, F handle) {
+        while (in.available()) {
+            char c = (char)in.read();
+            if (c == '\n' || c == '\r') {
+                if (!len) continue;
+                buf[len] = 0;
+                len = 0;
+                handle(buf);
+            } else if (len < sizeof(buf) - 1) {
+                buf[len++] = c;
             }
-        } else if (len < sizeof(buf) - 1) {
-            buf[len++] = c;
         }
     }
+};
+static LineReader consoleIn;
+#if !BRIDGE_PI_USB
+static LineReader piIn;
+#endif
+
+// The console -- and in USB mode the Pi too, on the same port: FW- lines are
+// the Pi's, everything else a console command.
+static void handleSerial() {
+    consoleIn.poll(Serial, [](char* line) {
+        if (PI_SHARES_CONSOLE && strncmp(line, "FW-", 3) == 0) handlePiLine(line);
+        else handleConsoleLine(line);
+    });
+}
+
+static void pollPi() {
+#if !BRIDGE_PI_USB
+    piIn.poll(Serial1, handlePiLine);
+#endif
 }
 
 void setup() {
     Serial.begin(115200);
-    delay(1000);
+#if BRIDGE_PI_USB
+    // Firmware chunks arrive as ~600-character lines, more than the default
+    // buffer holds. And a Pi that is not reading (Overlord down, cable still
+    // in) must cost dropped lines, not a stalled loop and a deaf radio.
+    Serial.setRxBufferSize(1024);
+    Serial.setTxTimeoutMs(0);
+#else
     Serial1.setRxBufferSize(1024);
     Serial1.begin(BRIDGE_BAUD, SERIAL_8N1, BRIDGE_RX_PIN, BRIDGE_TX_PIN);
+#endif
+    delay(1000);
 
     pulleys::identity_init(PULLEYS_TYPE_BRIDGE);
     Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     Serial.printf("  PULLEYS Bridge  %s\n", pulleys::identity_name());
+#if BRIDGE_PI_USB
+    Serial.println("  Pi link: USB (shared with this console)");
+#else
     Serial.printf("  Pi link: UART1 tx=%d rx=%d @ %d\n",
                   BRIDGE_TX_PIN, BRIDGE_RX_PIN, BRIDGE_BAUD);
+#endif
     Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
     randomSeed(esp_random());
     pulleys::mesh_init(pulleys::MESH_ORIGIN_BRIDGE, pulleys::identity_id());
     pulleys::ota_init();
     pulleys::census_init();
-    pulleys::census_set_mirror(&Serial1);
+    // Census lines already go to Serial; a mirror onto the same port would hand
+    // the Pi every one twice.
+    if (!PI_SHARES_CONSOLE) pulleys::census_set_mirror(&PI_LINK);
     pulleys::mesh_on_fw_status(onFirmwareStatus);
     pulleys::mesh_on_ota_ready(onLegacyOtaStatus);
     pulleys::mesh_on_event(onMeshEvent);
     pulleys::mesh_on_cue(onMeshCue);
 
-    pulleys::census_set_detail("uart1");
+    pulleys::census_set_detail(BRIDGE_PI_USB ? "usb" : "uart1");
     pulleys::whoami_reply();
-    Serial1.printf("FW-BRIDGE id=%04X env=bridge sha256=%s\n",
+    PI_LINK.printf("FW-BRIDGE id=%04X env=bridge sha256=%s\n",
                    pulleys::identity_id(), pulleys::whoami_firmware_hash());
     Serial.println("Bridge ready — forwarding mesh events to the Pi.\n");
 }
