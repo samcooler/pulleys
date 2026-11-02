@@ -27,10 +27,13 @@ void installcfg_tick();     // every loop: sends a pending change, or the repeat
 // The channel the map gives a sensor, or -1 if it is not mapped.
 int  installcfg_channel_of(uint16_t id);
 
-// Changes are batched: several in one loop go out as one burst.
+// Changes are batched: they go out as one burst once they stop for a moment.
 bool installcfg_set_channel(uint16_t id, uint8_t channel);   // false if the map is full
 bool installcfg_unmap(uint16_t id);
 bool installcfg_set_color(uint8_t channel, uint8_t color);
+// What a colour is, in RGB. Applied to every rope and screen wearing it.
+bool installcfg_set_rgb(uint8_t color, uint8_t r, uint8_t g, uint8_t b);
+void installcfg_reset_rgb();   // every colour back to its factory RGB
 // Permute game1's colours among themselves, leaving purple (game2) where it is,
 // so ropes that shared a colour still share one and the game's split holds.
 void installcfg_shuffle_game1();
@@ -43,4 +46,6 @@ const pulleys::MeshConfigRow* installcfg_rows();
 //   COLOR                print the palette
 //   COLOR <ch> <colour>  by name (red, blue, ...) or index
 //   SHUFFLE              shuffle game1's colours
+//   RGB                  print each colour's RGB
+//   RGB <colour> <r> <g> <b>   set one (0-255)   RGB reset   all back to default
 bool installcfg_handle_serial(const char* line);

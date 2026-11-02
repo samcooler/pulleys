@@ -32,9 +32,13 @@ namespace pulleys {
 // five of them to ask for), and purple is game2's. Keep that order — the game
 // code relies on game1 being indices 0..COLOR_GAME1_COUNT-1.
 //
+// What each colour actually is, as RGB, is the arbiter's too: it can be tuned
+// on site (TUNE RGB) and travels with the palette. COLOR_DEFAULT_HUE is only
+// where a board starts before it has heard one.
+//
 // Blue and purple sit in the deep-blue band (hue ~150–200) the old palette left
 // out because eyes focus it worst at night. They are here because the piece
-// asks for them; if they smear on the rope, nudge the hues, not the list.
+// asks for them; if they smear on the rope, tune them, not the list.
 enum ChannelColor : uint8_t {
     COLOR_RED = 0, COLOR_BLUE, COLOR_GREEN, COLOR_YELLOW, COLOR_ORANGE,
     COLOR_PURPLE,
@@ -43,9 +47,14 @@ enum ChannelColor : uint8_t {
 static constexpr uint8_t COLOR_GAME1_COUNT = 5;            // red .. orange
 static constexpr uint8_t COLOR_GAME2       = COLOR_PURPLE;
 
-static constexpr uint8_t COLOR_HUE[COLOR_COUNT] = {
+static constexpr uint8_t COLOR_DEFAULT_HUE[COLOR_COUNT] = {
     0, 160, 96, 60, 28, 192          // red, blue, green, yellow, orange, purple
 };
+
+// A colour's factory RGB: its default hue, slightly desaturated, full value.
+inline CRGB color_default_rgb(uint8_t color) {
+    return CHSV(COLOR_DEFAULT_HUE[color % COLOR_COUNT], 235, 255);
+}
 
 inline const char* color_name(uint8_t c) {
     static const char* const N[COLOR_COUNT] = {
@@ -60,20 +69,21 @@ inline uint8_t default_channel_color(uint8_t ch) {
     return (uint8_t)((ch + COLOR_COUNT - 1) % COLOR_COUNT);
 }
 
-// ── The palette: channel -> colour ────────────────────────────────────────────
-// One shared table per program, behind a function-local static for the reason
-// pulleys_mesh gives: several translation units include this header, and a
-// namespace-scope static would give each its own copy.
+// ── The palette: channel -> colour, colour -> RGB ─────────────────────────────
+// One shared pair of tables per program, behind a function-local static for the
+// reason pulleys_mesh gives: several translation units include this header, and
+// a namespace-scope static would give each its own copy.
 namespace _palette {
-inline uint8_t* table() {
-    static uint8_t t[CHANNEL_COUNT];
-    static bool    ready = false;
-    if (!ready) {
-        for (uint8_t i = 0; i < CHANNEL_COUNT; i++) t[i] = default_channel_color(i);
-        ready = true;
+struct Tables {
+    uint8_t chan[CHANNEL_COUNT];
+    CRGB    rgb[COLOR_COUNT];
+    Tables() {
+        for (uint8_t i = 0; i < CHANNEL_COUNT; i++) chan[i] = default_channel_color(i);
+        for (uint8_t c = 0; c < COLOR_COUNT; c++)   rgb[c]  = color_default_rgb(c);
     }
-    return t;
-}
+};
+inline Tables& T() { static Tables t; return t; }
+inline uint8_t* table() { return T().chan; }
 }  // namespace _palette
 
 inline uint8_t channel_color_index(uint8_t ch) {
@@ -103,6 +113,32 @@ inline bool channel_set_color(uint8_t ch, uint8_t color) {
     return true;
 }
 
+inline CRGB color_rgb(uint8_t color) { return _palette::T().rgb[color % COLOR_COUNT]; }
+
+inline bool color_set_rgb(uint8_t color, CRGB rgb) {
+    if (color >= COLOR_COUNT) return false;
+    CRGB& cur = _palette::T().rgb[color];
+    if (cur == rgb) return false;
+    cur = rgb;
+    return true;
+}
+
+// Every colour's RGB as COLOR_COUNT r,g,b triples: the wire and NVS form.
+inline void colors_get_rgb(uint8_t out[COLOR_COUNT * 3]) {
+    for (uint8_t c = 0; c < COLOR_COUNT; c++) {
+        const CRGB& v = _palette::T().rgb[c];
+        out[c * 3] = v.r; out[c * 3 + 1] = v.g; out[c * 3 + 2] = v.b;
+    }
+}
+
+// Adopt every colour's RGB at once. True if anything changed.
+inline bool colors_set_rgb(const uint8_t in[COLOR_COUNT * 3]) {
+    bool changed = false;
+    for (uint8_t c = 0; c < COLOR_COUNT; c++)
+        changed |= color_set_rgb(c, CRGB(in[c * 3], in[c * 3 + 1], in[c * 3 + 2]));
+    return changed;
+}
+
 // NVS, namespace "palette". A board that has never heard an arbiter keeps the
 // defaults; one that has keeps the last palette it heard across reboots, so a
 // rope comes up in today's colour even before the arbiter's next repeat.
@@ -111,26 +147,28 @@ inline void palette_load() {
     p.begin("palette", true);
     uint8_t buf[CHANNEL_COUNT];
     size_t n = p.getBytes("col", buf, sizeof(buf));
+    uint8_t rgb[COLOR_COUNT * 3];
+    size_t m = p.getBytes("rgb", rgb, sizeof(rgb));
     p.end();
     if (n == sizeof(buf)) palette_set(buf);
+    if (m == sizeof(rgb)) colors_set_rgb(rgb);
 }
 
 inline void palette_save() {
+    uint8_t rgb[COLOR_COUNT * 3];
+    colors_get_rgb(rgb);
     Preferences p;
     p.begin("palette", false);
     p.putBytes("col", _palette::table(), CHANNEL_COUNT);
+    p.putBytes("rgb", rgb, sizeof(rgb));
     p.end();
 }
 
-inline uint8_t channel_hue(uint8_t ch) { return COLOR_HUE[channel_color_index(ch)]; }
+inline CRGB channel_color(uint8_t ch) { return color_rgb(channel_color_index(ch)); }
 
-inline CRGB color_rgb(uint8_t color) {
-    return CHSV(COLOR_HUE[color % COLOR_COUNT], 235, 255);
-}
-
-inline CRGB channel_color(uint8_t ch) {
-    return CHSV(channel_hue(ch), 235, 255);
-}
+// The hue of a channel's colour, for whatever is built around a hue (the
+// sensor's bar bubbles in an arc centred on it).
+inline uint8_t channel_hue(uint8_t ch) { return rgb2hsv_approximate(channel_color(ch)).hue; }
 
 // Shapes that read as one colour: a lit body with a moving edge, legible even
 // if the accent colour never appeared. CHECKER, POLKA and QUADRANTS are left
@@ -143,10 +181,10 @@ static constexpr uint8_t CHANNEL_SHAPE[] = {
 static constexpr uint8_t CHANNEL_SHAPE_COUNT =
     sizeof(CHANNEL_SHAPE) / sizeof(CHANNEL_SHAPE[0]);
 
-// The look of channel `ch` drawn in `hue`. Shape and oscillation still come
+// The look of channel `ch` drawn in colour `a`. Shape and oscillation still come
 // from the channel number, so two ropes sharing a colour stay distinguishable
 // by their movement.
-inline PulleysCulture culture_for(uint8_t hue, uint8_t ch) {
+inline PulleysCulture culture_for(CRGB a, uint8_t ch) {
     // A channel reads as ONE colour. colorB is not a contrasting hue any more —
     // it is the same colour a shade off, so the shape shows as relief within a
     // single hue instead of as two colours meeting. The step is deliberately
@@ -154,11 +192,12 @@ inline PulleysCulture culture_for(uint8_t hue, uint8_t ch) {
     // see the moving edge from across the space and not enough to read as a
     // second colour.
     //
-    // Keep the step in hue+value, never in saturation: CHSV holds value at 255,
-    // so lowering saturation lifts all three RGB channels together instead of
-    // tinting, and the accent comes out white.
-    CRGB a = CHSV(hue, 235, 255);
-    CRGB b = CHSV((uint8_t)(hue + 8), 235, 230);
+    // Keep the step in hue+value, never in saturation: lowering saturation
+    // lifts all three RGB channels together instead of tinting, and the accent
+    // comes out white. The colour is tuned as RGB, so the step is taken in an
+    // approximate HSV of it and brought back.
+    CHSV hsv = rgb2hsv_approximate(a);
+    CRGB b = CHSV((uint8_t)(hsv.hue + 8), hsv.sat, scale8(hsv.val, 230));
     PulleysCulture c;
     c.colorA      = { a.r, a.g, a.b };
     c.colorB      = { b.r, b.g, b.b };
@@ -168,7 +207,7 @@ inline PulleysCulture culture_for(uint8_t hue, uint8_t ch) {
 }
 
 inline PulleysCulture channel_culture(uint8_t ch) {
-    return culture_for(channel_hue(ch), ch);
+    return culture_for(channel_color(ch), ch);
 }
 
 // Configure an 8×8 slot to render a channel's pattern.

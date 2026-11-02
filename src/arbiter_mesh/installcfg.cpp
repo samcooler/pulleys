@@ -8,11 +8,31 @@
 
 #define NVS_NS         "installcfg"
 #define REPEAT_MS      5000    // how often the whole config is re-sent unchanged
+// How long changes must stop before they go out. A held RGB stepper changes a
+// colour twenty times a second; this sends (and writes NVS) once it settles,
+// not on every step.
+#define SETTLE_MS      300
+
+static_assert(pulleys::MESH_COLOR_COUNT == pulleys::COLOR_COUNT,
+              "the config packet carries one RGB per colour");
 
 static pulleys::MeshConfigRow s_rows[pulleys::MESH_CONFIG_MAX_ROWS];
-static uint8_t  s_count    = 0;
-static bool     s_dirty    = false;   // changed since the last send: save + burst
-static uint32_t s_lastSend = 0;
+static uint8_t  s_count     = 0;
+static bool     s_dirty     = false;   // changed since the last send: save + burst
+static uint32_t s_changedAt = 0;
+static uint32_t s_lastSend  = 0;
+
+static void markDirty() {
+    s_dirty     = true;
+    s_changedAt = millis();
+}
+
+static void send(bool urgent) {
+    uint8_t rgb[pulleys::COLOR_COUNT * 3];
+    pulleys::colors_get_rgb(rgb);
+    pulleys::mesh_send_config(pulleys::palette_get(), rgb, s_rows, s_count, urgent);
+    s_lastSend = millis();
+}
 
 static void saveMap() {
     Preferences p;
@@ -59,15 +79,13 @@ void installcfg_init() {
 
 void installcfg_tick() {
     uint32_t now = millis();
-    if (s_dirty) {
+    if (s_dirty && now - s_changedAt >= SETTLE_MS) {
         saveMap();
         pulleys::palette_save();
-        pulleys::mesh_send_config(pulleys::palette_get(), s_rows, s_count, /*urgent=*/true);
-        s_dirty    = false;
-        s_lastSend = now;
-    } else if (now - s_lastSend >= REPEAT_MS) {
-        pulleys::mesh_send_config(pulleys::palette_get(), s_rows, s_count, /*urgent=*/false);
-        s_lastSend = now;
+        send(/*urgent=*/true);
+        s_dirty = false;
+    } else if (!s_dirty && now - s_lastSend >= REPEAT_MS) {
+        send(/*urgent=*/false);
     }
 }
 
@@ -87,7 +105,7 @@ bool installcfg_set_channel(uint16_t id, uint8_t channel) {
         return true;
     }
     s_rows[i].channel = channel;
-    s_dirty = true;
+    markDirty();
     Serial.printf("  [INSTALL] N-%04X -> ch%d\n", id, channel);
     return true;
 }
@@ -96,16 +114,30 @@ bool installcfg_unmap(uint16_t id) {
     int i = findRow(id);
     if (i < 0) return false;
     s_rows[i] = s_rows[--s_count];
-    s_dirty = true;
+    markDirty();
     Serial.printf("  [INSTALL] N-%04X unmapped (it keeps the channel it has)\n", id);
     return true;
 }
 
 bool installcfg_set_color(uint8_t channel, uint8_t color) {
     if (!pulleys::channel_set_color(channel, color)) return false;
-    s_dirty = true;
+    markDirty();
     Serial.printf("  [INSTALL] ch%d -> %s\n", channel, pulleys::color_name(color));
     return true;
+}
+
+bool installcfg_set_rgb(uint8_t color, uint8_t r, uint8_t g, uint8_t b) {
+    if (!pulleys::color_set_rgb(color, CRGB(r, g, b))) return false;
+    markDirty();
+    return true;
+}
+
+void installcfg_reset_rgb() {
+    bool changed = false;
+    for (uint8_t c = 0; c < pulleys::COLOR_COUNT; c++)
+        changed |= pulleys::color_set_rgb(c, pulleys::color_default_rgb(c));
+    if (changed) markDirty();
+    Serial.println("  [INSTALL] colours back to their defaults");
 }
 
 void installcfg_shuffle_game1() {
@@ -126,7 +158,7 @@ void installcfg_shuffle_game1() {
     memcpy(next, pulleys::palette_get(), sizeof(next));
     for (uint8_t ch = 0; ch < pulleys::CHANNEL_COUNT; ch++)
         if (next[ch] < N) next[ch] = perm[next[ch]];
-    if (pulleys::palette_set(next)) s_dirty = true;
+    if (pulleys::palette_set(next)) markDirty();
     Serial.print("  [INSTALL] game1 colours shuffled:");
     for (uint8_t i = 0; i < N; i++)
         Serial.printf(" %s->%s", pulleys::color_name(i), pulleys::color_name(perm[i]));
@@ -157,6 +189,15 @@ static void printPalette() {
         Serial.printf("    ch%-2d %-6s %u rope%s\n", ch,
                       pulleys::color_name(pulleys::channel_color_index(ch)),
                       ropes, ropes == 1 ? "" : "s");
+    }
+}
+
+static void printRgb() {
+    Serial.println("  [INSTALL] colours:");
+    for (uint8_t c = 0; c < pulleys::COLOR_COUNT; c++) {
+        CRGB v = pulleys::color_rgb(c), d = pulleys::color_default_rgb(c);
+        Serial.printf("    %-6s %3u %3u %3u%s\n", pulleys::color_name(c), v.r, v.g, v.b,
+                      v == d ? "" : "   (tuned)");
     }
 }
 
@@ -199,5 +240,20 @@ bool installcfg_handle_serial(const char* line) {
         return true;
     }
     if (strcmp(line, "SHUFFLE") == 0) { installcfg_shuffle_game1(); return true; }
+    if (strcmp(line, "RGB") == 0) { printRgb(); return true; }
+    if (strcmp(line, "RGB reset") == 0) { installcfg_reset_rgb(); printRgb(); return true; }
+    if (strncmp(line, "RGB ", 4) == 0) {
+        char name[16] = {};
+        int r, g, b;
+        int color = -1;
+        if (sscanf(line + 4, "%15s %d %d %d", name, &r, &g, &b) == 4) color = parseColor(name);
+        if (color < 0 || r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255)
+            Serial.println("  [INSTALL] usage: RGB <colour> <r> <g> <b>  (0-255)  |  RGB reset");
+        else {
+            installcfg_set_rgb((uint8_t)color, r, g, b);
+            printRgb();
+        }
+        return true;
+    }
     return false;
 }

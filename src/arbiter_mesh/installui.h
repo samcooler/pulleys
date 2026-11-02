@@ -14,6 +14,8 @@
 //                        rope and it starts over, until DONE.
 //   COLOURS (CHANNELS)   tap a channel to step it through the six colours;
 //                        SHUFFLE permutes game1's colours for the day.
+//     TUNE RGB           from COLOURS: what each of the six colours is, as
+//                        R/G/B steppers, applied to every rope wearing it.
 //
 // While MAP ROPES is open the ropes belong to it: their pulls do not reach the
 // game, so mapping a rigged piece fires no cues.

@@ -337,6 +337,8 @@ static void colOpenCb(lv_event_t*) {
     lv_obj_move_foreground(s_col);
 }
 
+static void tuneOpenCb(lv_event_t*);   // TUNE RGB, below
+
 static void buildColours() {
     s_col = makeModal("COLOURS");
     lv_obj_t* hint = makeLabel(s_col, 0, 28, &lv_font_unscii_8, COL_DIM);
@@ -358,7 +360,102 @@ static void buildColours() {
     lv_label_set_text(l, legend);
 
     makeButton(s_col, 0,   376, 220, 70, "SHUFFLE\ngame1 colours", COL_CANCEL, colShuffleCb, nullptr);
+    makeButton(s_col, 278, 376, 220, 70, "TUNE RGB", COL_BTN, tuneOpenCb, nullptr);
     makeButton(s_col, 556, 376, 220, 70, "DONE", COL_OK, colCloseCb, nullptr);
+}
+
+// ── TUNE RGB ──────────────────────────────────────────────────────────────────
+// What each of the six colours actually is. One row per colour: a swatch, then
+// a -/+ stepper for each of R, G and B. A tap steps by RGB_STEP; holding a
+// button keeps stepping. Every rope and screen wearing the colour follows a
+// moment after the stepping stops (installcfg settles before it sends).
+//
+// Worth knowing while tuning: the LEDs mix differently from this LCD, so judge
+// on a rope, not on the swatch -- and a whiter colour lights all three LED dies,
+// which is more heat in a potted panel than any saturated one.
+#define RGB_STEP 8
+
+static lv_obj_t* s_tune;
+static lv_obj_t* s_tuneSwatch[pulleys::COLOR_COUNT];
+static lv_obj_t* s_tuneVal[pulleys::COLOR_COUNT][3];
+static bool      s_tuneIsOpen = false;
+
+static void refreshTune() {
+    for (uint8_t c = 0; c < pulleys::COLOR_COUNT; c++) {
+        CRGB v = pulleys::color_rgb(c);
+        lv_obj_set_style_bg_color(s_tuneSwatch[c], lv_color_make(v.r, v.g, v.b), 0);
+        const uint8_t parts[3] = { v.r, v.g, v.b };
+        for (uint8_t k = 0; k < 3; k++) {
+            char t[4];
+            snprintf(t, sizeof(t), "%u", parts[k]);
+            setTextIfChanged(s_tuneVal[c][k], t);
+        }
+    }
+}
+
+// user data: colour << 3 | component << 1 | up
+static void tuneStepCb(lv_event_t* e) {
+    intptr_t code = (intptr_t)lv_event_get_user_data(e);
+    uint8_t c = (uint8_t)(code >> 3), k = (uint8_t)((code >> 1) & 3);
+    int dir = (code & 1) ? RGB_STEP : -RGB_STEP;
+    CRGB v = pulleys::color_rgb(c);
+    uint8_t* part = k == 0 ? &v.r : k == 1 ? &v.g : &v.b;
+    *part = (uint8_t)constrain((int)*part + dir, 0, 255);
+    installcfg_set_rgb(c, v.r, v.g, v.b);
+    refreshTune();
+}
+
+static void tuneResetCb(lv_event_t*) { installcfg_reset_rgb(); refreshTune(); }
+
+static void tuneCloseCb(lv_event_t*) {
+    s_tuneIsOpen = false;
+    lv_obj_add_flag(s_tune, LV_OBJ_FLAG_HIDDEN);
+    refreshColours();   // back on COLOURS, whose buttons wear these colours
+}
+
+static void tuneOpenCb(lv_event_t*) {
+    refreshTune();
+    s_tuneIsOpen = true;
+    lv_obj_clear_flag(s_tune, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_tune);
+}
+
+static void buildTune() {
+    s_tune = makeModal("TUNE RGB");
+    lv_obj_t* hint = makeLabel(s_tune, 140, 4, &lv_font_unscii_8, COL_DIM);
+    lv_label_set_text(hint, "judge on a rope, not this screen. whiter = hotter panels.");
+
+    static const char* const PART[3] = { "R", "G", "B" };
+    for (uint8_t c = 0; c < pulleys::COLOR_COUNT; c++) {
+        int y = 30 + c * 56;
+        s_tuneSwatch[c] = lv_obj_create(s_tune);
+        lv_obj_set_size(s_tuneSwatch[c], 44, 46);
+        lv_obj_set_pos(s_tuneSwatch[c], 0, y);
+        lv_obj_set_style_radius(s_tuneSwatch[c], 4, 0);
+        lv_obj_set_style_border_width(s_tuneSwatch[c], 1, 0);
+        lv_obj_set_style_border_color(s_tuneSwatch[c], lv_color_hex(COL_DIV), 0);
+        lv_obj_clear_flag(s_tuneSwatch[c], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+        lv_obj_t* name = makeLabel(s_tune, 52, y + 14, &lv_font_unscii_16, COL_TEXT);
+        lv_label_set_text(name, pulleys::color_name(c));
+
+        for (uint8_t k = 0; k < 3; k++) {
+            int x = 160 + k * 204;
+            lv_obj_t* tag = makeLabel(s_tune, x, y + 14, &lv_font_unscii_16, COL_DIM);
+            lv_label_set_text(tag, PART[k]);
+            intptr_t code = (intptr_t)((c << 3) | (k << 1));
+            lv_obj_t* down = makeButton(s_tune, x + 20, y, 56, 46, LV_SYMBOL_MINUS, COL_BTN,
+                                        tuneStepCb, (void*)code);
+            lv_obj_add_event_cb(down, tuneStepCb, LV_EVENT_LONG_PRESSED_REPEAT, (void*)code);
+            s_tuneVal[c][k] = makeLabel(s_tune, x + 86, y + 14, &lv_font_unscii_16, COL_TEXT);
+            lv_obj_t* up = makeButton(s_tune, x + 128, y, 56, 46, LV_SYMBOL_PLUS, COL_BTN,
+                                      tuneStepCb, (void*)(code | 1));
+            lv_obj_add_event_cb(up, tuneStepCb, LV_EVENT_LONG_PRESSED_REPEAT, (void*)(code | 1));
+        }
+    }
+
+    makeButton(s_tune, 0,   376, 220, 70, "RESET\nall to default", COL_CANCEL, tuneResetCb, nullptr);
+    makeButton(s_tune, 556, 376, 220, 70, "DONE", COL_OK, tuneCloseCb, nullptr);
 }
 
 // ── Public ────────────────────────────────────────────────────────────────────
@@ -371,6 +468,7 @@ void installui_init() {
                            "COLOURS", COL_BTN, colOpenCb, nullptr);
     buildMap();
     buildColours();
+    buildTune();
 }
 
 void installui_tick() {
@@ -385,4 +483,4 @@ void installui_tick() {
     if (now - last >= 250) { last = now; refreshMap(); }
 }
 
-bool installui_is_open() { return s_mapIsOpen || s_colIsOpen; }
+bool installui_is_open() { return s_mapIsOpen || s_colIsOpen || s_tuneIsOpen; }

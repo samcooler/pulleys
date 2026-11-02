@@ -243,9 +243,9 @@ static constexpr size_t  MESH_COMPONENTS_V1_SIZE = offsetof(MeshComponents, colo
 static constexpr uint8_t MESH_COLOR_UNKNOWN      = 0xFF;
 
 // ── Config ───────────────────────────────────────────────────────────────────
-// The install's two arbiter-owned tables, whole, in one packet: which channel
-// each sensor is on, and which colour each channel wears (an index into
-// pulleys_channel's COLOR_*). The arbiter sends a burst on every change and
+// The install's arbiter-owned tables, whole, in one packet: which channel each
+// sensor is on, which colour each channel wears (an index into pulleys_channel's
+// COLOR_*), and what each of those colours is in RGB. The arbiter sends a burst on every change and
 // repeats it every few seconds, so a board that missed one, rebooted or lost
 // its NVS converges on the next repeat with no acks and no retries.
 //
@@ -255,7 +255,10 @@ static constexpr uint8_t MESH_COLOR_UNKNOWN      = 0xFF;
 //
 // Variable length like a cue: `count` rows follow the header, and a packet
 // shorter than that claims is dropped.
-static constexpr uint8_t MESH_CONFIG_MAX_ROWS = 64;
+static constexpr uint8_t MESH_CONFIG_MAX_ROWS = 62;
+// pulleys_channel's COLOR_COUNT, which this header cannot see (it has no
+// FastLED); the sender and each receiver static_assert that the two agree.
+static constexpr uint8_t MESH_COLOR_COUNT = 6;
 
 struct __attribute__((packed)) MeshConfigRow {
     uint16_t id;          // sensor device ID, as identity_id()
@@ -271,6 +274,7 @@ struct __attribute__((packed)) MeshConfig {
     uint16_t seq;         // shares the origin's counter with its events
     uint8_t  ttl;         // remaining flood hops
     uint8_t  colors[CHANNEL_COUNT];   // channel -> COLOR_*
+    uint8_t  rgb[MESH_COLOR_COUNT * 3];   // COLOR_* -> r, g, b
     uint8_t  count;       // rows that follow
     MeshConfigRow rows[MESH_CONFIG_MAX_ROWS];
 };
@@ -791,6 +795,7 @@ inline void mesh_send_components(const uint8_t charge[MESH_COMPONENT_COUNT],
 inline void mesh_on_config(MeshConfigCb cb) { _mesh::S().configCb = cb; }
 
 inline void mesh_send_config(const uint8_t colors[CHANNEL_COUNT],
+                             const uint8_t rgb[MESH_COLOR_COUNT * 3],
                              const MeshConfigRow* rows, uint8_t count, bool urgent) {
     if (count > MESH_CONFIG_MAX_ROWS) count = MESH_CONFIG_MAX_ROWS;
     MeshConfig c = {};
@@ -803,6 +808,7 @@ inline void mesh_send_config(const uint8_t colors[CHANNEL_COUNT],
     c.seq        = ++st.seqCounter;
     c.ttl        = MESH_TTL_START;
     memcpy(c.colors, colors, CHANNEL_COUNT);
+    memcpy(c.rgb, rgb, sizeof(c.rgb));
     c.count      = count;
     memcpy(c.rows, rows, (size_t)count * sizeof(MeshConfigRow));
 

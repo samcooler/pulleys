@@ -403,9 +403,14 @@ static uint32_t confirmAt = 0;    // 0 = not flashing
 // ── Mesh RX — the arbiter's config ────────────────────────────────────────────
 // Repeated every few seconds, so this runs far more often than anything
 // changes. Compare first and touch NVS only on a difference.
+static_assert(pulleys::MESH_COLOR_COUNT == pulleys::COLOR_COUNT,
+              "the config packet carries one RGB per colour");
+
 static void onMeshConfig(const pulleys::MeshConfig& c, bool /*relayed*/) {
-    uint8_t oldColor = pulleys::channel_color_index(myChannel);
-    if (pulleys::palette_set(c.colors)) pulleys::palette_save();
+    CRGB oldColor = pulleys::channel_color(myChannel);
+    bool paletteChanged = pulleys::palette_set(c.colors);
+    paletteChanged |= pulleys::colors_set_rgb(c.rgb);
+    if (paletteChanged) pulleys::palette_save();
 
     // A row that agrees with a channel this board only got from the repo table
     // is still stored: from now on the arbiter owns it, and a later edit to
@@ -421,7 +426,9 @@ static void onMeshConfig(const pulleys::MeshConfig& c, bool /*relayed*/) {
         applyCensusDetail();   // not applyConfig: a new channel must not reset what the detector has learned
     }
 
-    bool recoloured = pulleys::channel_color_index(myChannel) != oldColor;
+    // By RGB rather than by colour index: tuning this rope's colour on the
+    // arbiter recolours it as surely as moving it to another colour does.
+    bool recoloured = pulleys::channel_color(myChannel) != oldColor;
     if (!moved && !recoloured) return;
     applyChannelVisual();
     confirmAt = millis() | 1;

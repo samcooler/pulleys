@@ -200,11 +200,16 @@ static void onMeshEvent(const pulleys::MeshEvent& ev, bool relayed) {
                   ev.magnitude, ev.ttl, c.activity, totalCount);
 }
 
-// The arbiter's palette. The counter reads channel colours live every frame;
-// ranking caches a pattern per slot, so forget the slots and let the next
-// update rebuild them in the new colours.
+// The arbiter's palette and colours. The counter and the component bars read
+// colours live every frame; ranking caches a pattern per slot, so forget the
+// slots and let the next update rebuild them in the new colours.
+static_assert(pulleys::MESH_COLOR_COUNT == pulleys::COLOR_COUNT,
+              "the config packet carries one RGB per colour");
+
 static void onMeshConfig(const pulleys::MeshConfig& c, bool /*relayed*/) {
-    if (!pulleys::palette_set(c.colors)) return;
+    bool changed = pulleys::palette_set(c.colors);
+    changed |= pulleys::colors_set_rgb(c.rgb);
+    if (!changed) return;
     pulleys::palette_save();
     if (mode == pulleys::SCREEN_RANKING)
         for (uint8_t s = 0; s < NUM_SLOTS; s++) slotChannel[s] = -1;
@@ -423,7 +428,7 @@ static void allOnInit() {
     // Shape and oscillation come from four different channels; the colour is
     // fixed, so all four read as the same yellow whatever the palette says.
     PulleysCulture yellow =
-        pulleys::culture_for(pulleys::COLOR_HUE[ALLON_COLOR], ALLON_SHAPE_CH[0]);
+        pulleys::culture_for(pulleys::color_default_rgb(ALLON_COLOR), ALLON_SHAPE_CH[0]);
     for (uint8_t s = 0; s < NUM_SLOTS; s++) {
         pulleys::channel_slot_init(patSlots[s], ALLON_SHAPE_CH[s],
                                    leds + (uint16_t)s * SLOT_ROWS * MAT_COLS,
@@ -439,7 +444,7 @@ static void allOnInit() {
 }
 
 static void renderAllOn(float dt, float t) {
-    CRGB floorCol = pulleys::color_rgb(ALLON_COLOR);
+    CRGB floorCol = pulleys::color_default_rgb(ALLON_COLOR);
     floorCol.nscale8(ALLON_FLOOR);
 
     for (uint8_t s = 0; s < NUM_SLOTS; s++) {
