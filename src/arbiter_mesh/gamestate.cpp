@@ -30,6 +30,13 @@ static bool     s_timerOn = false;
 static uint32_t s_timerAt = 0;
 static char     s_timerGoto[32] = "";
 
+// The state's `idle` block: its cues fire after `delay` with no event, then
+// again every `delay` until one arrives. Any event delivered to the machine
+// counts, listed by the state or not: a pull is a pull.
+static bool     s_idleOn = false;
+static uint32_t s_idleMs = 0;
+static uint32_t s_idleAt = 0;
+
 static GameTrigger s_log[GAME_LOG_LEN];
 static uint8_t     s_logCount = 0;
 static uint32_t    s_seq = 0;
@@ -142,11 +149,26 @@ static bool validate(JsonDocument& doc, String& why) {
         return false;
     }
 
+    // An entry in a cue list is a name, or {choose_one: [names]}.
+    auto badCue = [&](const String& where, JsonVariant c) {
+        if (!c.is<const char*>() || !isListed(doc, c.as<const char*>())) {
+            why = where + ": cue '" + (c.is<const char*>() ? c.as<const char*>() : "?") +
+                  "' is not listed under cues";
+            return true;
+        }
+        return false;
+    };
     auto badCues = [&](const String& where, JsonVariant list) {
         for (JsonVariant c : list.as<JsonArray>()) {
-            if (!c.is<const char*>() || !isListed(doc, c.as<const char*>())) {
-                why = where + ": cue '" + (c.is<const char*>() ? c.as<const char*>() : "?") +
-                      "' is not listed under cues";
+            if (c.is<JsonObject>()) {
+                JsonVariant options = c["choose_one"];
+                if (!options.is<JsonArray>() || options.size() == 0) {
+                    why = where + ": choose_one must be a list of at least one cue";
+                    return true;
+                }
+                for (JsonVariant o : options.as<JsonArray>())
+                    if (badCue(where + ".choose_one", o)) return true;
+            } else if (badCue(where, c)) {
                 return true;
             }
         }
@@ -173,6 +195,15 @@ static bool validate(JsonDocument& doc, String& why) {
             if (!ev.value()["goto"].isNull() &&
                 badGoto(where, ev.value()["goto"].as<const char*>())) return false;
         }
+        JsonVariant idle = state["idle"];
+        if (!idle.isNull()) {
+            uint32_t ms;
+            if (!(idle["delay"].is<const char*>() && parseDelay(idle["delay"], ms)) || ms == 0) {
+                why = name + ".idle: delay must look like 10s or 2m, above 0";
+                return false;
+            }
+            if (badCues(name + ".idle", idle["cue"])) return false;
+        }
         JsonVariant after = state["after"];
         if (!after.isNull()) {
             if (badGoto(name + ".after", after["goto"].as<const char*>())) return false;
@@ -188,12 +219,19 @@ static bool validate(JsonDocument& doc, String& why) {
 }
 
 // ── The machine ───────────────────────────────────────────────────────────────
-static void fire(JsonVariant cues) {
+// `enter` marks cues a state fires on entry; the players treat those as
+// interrupting (see MESH_CUE_FLAG_ENTER).
+static void fire(JsonVariant cues, bool enter = false) {
     bool randomizedGoals = false;
+    uint8_t flags = enter ? pulleys::MESH_CUE_FLAG_ENTER : 0;
     for (JsonVariant c : cues.as<JsonArray>()) {
+        if (c.is<JsonObject>()) {   // {choose_one: [...]}: one of them, at random
+            JsonArray options = c["choose_one"].as<JsonArray>();
+            c = options[(size_t)random(options.size())];
+        }
         const char* name = c.as<const char*>();
         randomizedGoals = components_on_cue(name) || randomizedGoals;
-        if (!pulleys::mesh_send_cue(name)) continue;   // validated on load
+        if (!pulleys::mesh_send_cue(name, flags)) continue;   // validated on load
         record('C', "%s", name);
     }
     if (randomizedGoals) components_check_simon_complete();
@@ -205,6 +243,7 @@ static void enter(const char* name) {
     strlcpy(s_state, name, sizeof(s_state));
     s_enteredAt = millis();
     s_timerOn = false;
+    s_idleOn  = false;
 
     if (from[0] == '-') record('S', "start: %s", s_state);
     else record('S', "%s -> %s", from, s_state);
@@ -218,11 +257,17 @@ static void enter(const char* name) {
         s_timerAt = s_enteredAt + ms;
         s_timerOn = true;
     }
+    JsonVariant idle = state["idle"];
+    if (!idle.isNull()) {
+        parseDelay(idle["delay"], s_idleMs);   // validated on load
+        s_idleAt = s_enteredAt + s_idleMs;
+        s_idleOn = true;
+    }
 
     // State entry is represented in the YAML like other reactions, under
     // `on: enter:`. Set its timer first: an entry cue may complete Simon's
     // current goal set and synchronously move the state machine again.
-    fire(state["on"]["enter"]["cue"]);
+    fire(state["on"]["enter"]["cue"], true);
 }
 
 bool gamestate_load(const String& json, String& why) {
@@ -246,6 +291,7 @@ bool gamestate_load(const String& json, String& why) {
     }
     s_state[0] = 0;
     s_timerOn = false;
+    s_idleOn  = false;
     Serial.printf(GAME_PREFIX " loaded '%s'\n", s_game);
     enter(s_doc["start"].as<const char*>());
     return true;
@@ -254,6 +300,7 @@ bool gamestate_load(const String& json, String& why) {
 void gamestate_event(GameEvent e) {
     if (!s_ready) return;
     const char* name = gameevent_name(e);
+    if (s_idleOn) s_idleAt = millis() + s_idleMs;   // any event is activity
     JsonVariant state = s_doc["states"][s_state];
     JsonObject on = state["on"].as<JsonObject>();
     if (!hasKey(on, name)) {
@@ -268,12 +315,19 @@ void gamestate_event(GameEvent e) {
 }
 
 void gamestate_tick() {
-    if (!s_ready || !s_timerOn) return;
-    if ((int32_t)(millis() - s_timerAt) < 0) return;
-    char target[32];
-    strlcpy(target, s_timerGoto, sizeof(target));
-    record('T', "timer in %s", s_state);
-    enter(target);
+    if (!s_ready) return;
+    if (s_timerOn && (int32_t)(millis() - s_timerAt) >= 0) {
+        char target[32];
+        strlcpy(target, s_timerGoto, sizeof(target));
+        record('T', "timer in %s", s_state);
+        enter(target);
+        return;
+    }
+    if (s_idleOn && (int32_t)(millis() - s_idleAt) >= 0) {
+        s_idleAt = millis() + s_idleMs;   // before fire: a cue may change state
+        record('T', "idle in %s", s_state);
+        fire(s_doc["states"][s_state]["idle"]["cue"]);
+    }
 }
 
 bool        gamestate_ready()  { return s_ready; }

@@ -51,10 +51,11 @@ def load_config(path):
 
 
 # What a cue name may be: it is sent over ESP-NOW as ASCII and the bridge writes
-# it into a line on the Pi link, so only plain characters are allowed.
+# it into a line on the Pi link, so only plain characters are allowed. A * is
+# a wildcard the player resolves: the cue plays one of the files it matches.
 # CUE_NAME_MAX matches MESH_CUE_NAME_MAX in lib/pulleys_mesh.
-CUE_NAME_MAX = 47
-CUE_NAME = re.compile(r"[a-z0-9_-]{1,%d}" % CUE_NAME_MAX)
+CUE_NAME_MAX = 63
+CUE_NAME = re.compile(r"[a-z0-9_*-]{1,%d}" % CUE_NAME_MAX)
 
 # Every event something emits. A state listing any other name would never fire.
 # Keep in step with src/arbiter_mesh/gameevents.h and overlord/game.py.
@@ -145,10 +146,24 @@ def validate(cfg):
                               f"{', '.join(k + '<name>' for k in PLAYER_KINDS)} or "
                               f"{' / '.join(PLAYER_WORDS)}, not '{bare}'")
 
+    def check_cue(where, cue):
+        if cue not in known_cues:
+            errors.append(f"{where}: cue '{cue}' is not listed under cues")
+
+    # An entry in a cue list is a name, or {choose_one: [names]}: one of them,
+    # picked at random each time the list fires.
     def check_cues(where, cues):
         for cue in cues or []:
-            if cue not in known_cues:
-                errors.append(f"{where}: cue '{cue}' is not listed under cues")
+            if isinstance(cue, dict):
+                options = cue.get("choose_one")
+                if set(cue) != {"choose_one"} or not isinstance(options, list) or not options:
+                    errors.append(f"{where}: a map in a cue list must be "
+                                  "choose_one: [cue, ...] with at least one cue")
+                    continue
+                for option in options:
+                    check_cue(f"{where}.choose_one", option)
+            else:
+                check_cue(where, cue)
 
     def check_goto(where, target):
         if target not in states:
@@ -230,6 +245,12 @@ def validate(cfg):
                 check_goto(f"{name}.after", after["goto"])
             else:
                 errors.append(f"{name}.after: missing goto")
+        idle = state.get("idle")
+        if idle is not None:
+            if not isinstance(idle, dict) or not re.fullmatch(r"[1-9]\d*[sm]", str(idle.get("delay"))):
+                errors.append(f"{name}.idle: needs delay like 20s or 1m, above 0, and cue")
+            else:
+                check_cues(f"{name}.idle", idle.get("cue"))
     return errors
 
 

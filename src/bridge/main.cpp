@@ -35,9 +35,12 @@
 // out as
 //
 //   cue <name>\n
+//   cue <name> enter\n
 //
-// e.g. "cue audio_once_chime". The bridge is transparent: it holds no list of
-// cues and checks nothing about the name, it passes on whatever it was given.
+// e.g. "cue audio_once_chime". The second form is a cue the game fired on
+// entering a state (MESH_CUE_FLAG_ENTER). The bridge is transparent: it holds
+// no list of cues and checks nothing about the name, it passes on whatever it
+// was given.
 //
 // The Pi link is the C3's USB port by default: one cable from the Pi powers the
 // bridge and carries everything, and the Pi sees it as /dev/ttyACM0. That port
@@ -239,7 +242,7 @@ struct QueuedEvent {
 static QueuedEvent queue[QUEUE_LEN];
 static uint8_t     qHead = 0, qTail = 0;
 
-struct QueuedCue { char name[pulleys::MESH_CUE_NAME_MAX + 1]; };
+struct QueuedCue { char name[pulleys::MESH_CUE_NAME_MAX + 1]; uint8_t flags; };
 static QueuedCue   cueQueue[QUEUE_LEN];
 static uint8_t     cHead = 0, cTail = 0;
 
@@ -269,15 +272,17 @@ static void onMeshCue(const pulleys::MeshCue& c, bool /*relayed*/) {
     uint8_t next = (cHead + 1) % QUEUE_LEN;
     if (next == cTail) { dropped++; return; }
     strlcpy(cueQueue[cHead].name, c.name, sizeof(cueQueue[cHead].name));
+    cueQueue[cHead].flags = c.flags;
     cHead = next;
 }
 
 static void drainQueue() {
     while (cTail != cHead) {
-        if (PI_LINK.availableForWrite() < 48) break;
+        if (PI_LINK.availableForWrite() < 80) break;
         const char* name = cueQueue[cTail].name;
-        PI_LINK.printf("cue %s\n", name);
-        if (!PI_SHARES_CONSOLE) Serial.printf("cue %s\n", name);
+        const char* tail = (cueQueue[cTail].flags & pulleys::MESH_CUE_FLAG_ENTER) ? " enter" : "";
+        PI_LINK.printf("cue %s%s\n", name, tail);
+        if (!PI_SHARES_CONSOLE) Serial.printf("cue %s%s\n", name, tail);
         cTail = (cTail + 1) % QUEUE_LEN;
         cuesSent++;
     }
@@ -370,7 +375,7 @@ static void handlePiLine(char* buf) {
 // ── Serial console ────────────────────────────────────────────────────────────
 //   e<ch>  inject a fake event on that channel, as if the mesh had delivered it
 //   v      toggle verbose: per-event lines and the 3 s counters
-//   c <name>  inject a fake cue, e.g. "c audio_once_chime"
+//   c <name>  inject a fake cue, e.g. "c audio_once_chime"; "c <name> enter" as an enter cue
 static void handleConsoleLine(char* buf) {
     if (pulleys::whoami_handle(buf)) return;
     if (pulleys::census_handle_serial(buf)) return;
@@ -379,6 +384,11 @@ static void handleConsoleLine(char* buf) {
         Serial.printf("verbose %s\n", verbose ? "on" : "off");
     } else if (buf[0] == 'c' && buf[1] == ' ') {
         pulleys::MeshCue c = {};
+        char* sp = strchr(buf + 2, ' ');
+        if (sp) {
+            *sp = 0;
+            if (strcmp(sp + 1, "enter") == 0) c.flags = pulleys::MESH_CUE_FLAG_ENTER;
+        }
         c.nameLen = (uint8_t)strlcpy(c.name, buf + 2, sizeof(c.name));
         onMeshCue(c, false);
     } else if (buf[0] == 'e') {

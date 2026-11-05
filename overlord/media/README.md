@@ -20,7 +20,13 @@ a file whose end joins its start. `idle.*` plays at startup. Switched with
 ## `video_once/`
 
 Short videos (with their audio) that play once on screen, then return to the
-video loop. Triggered with `video_once_<name>`.
+video loop. Triggered with `video_once_<name>`. While a clip plays, another
+`video_once` cue is dropped, unless it is one the game fires on entering a
+state (or one sent by hand over the REST API): that one cuts the running clip off.
+
+A `*` in the name plays one of the matching files at random, never the same
+one twice in a row: `video_once_janis_nag_*` plays any of `janis_nag_thread.mp4`,
+`janis_nag_essences.mp4`, ... Works in every folder.
 
 ## `audio_once/`
 

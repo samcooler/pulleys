@@ -5,6 +5,7 @@ state reacts by firing cues through overlord's dispatch and maybe moving to
 another state. Format: game_state_machine/GAME_FORMAT.md.
 """
 
+import random
 import re
 import threading
 import time
@@ -47,7 +48,8 @@ def reactions(state):
 
 class Game:
     def __init__(self, path, fire_cue):
-        """fire_cue: callback(cue_name) that plays one cue."""
+        """fire_cue: callback(cue_name, enter) that plays one cue; enter is
+        True for a cue fired on entering a state."""
         with open(path) as f:
             config = yaml.safe_load(f)
         self.name = config.get("game", Path(path).stem)
@@ -59,6 +61,7 @@ class Game:
         self._fire_cue = fire_cue
         self._lock = threading.RLock()
         self._timer = None
+        self._idle_timer = None
         self.state = None
         self.timer_deadline = None  # monotonic time the current `after` fires, or None
 
@@ -67,6 +70,9 @@ class Game:
             if state.get("after"):
                 parse_duration(state["after"]["delay"])
                 targets.append(state["after"]["goto"])
+            if state.get("idle"):
+                if parse_duration(state["idle"]["delay"]) <= 0:
+                    raise ValueError(f"state {name}: idle delay must be above 0")
             for t in targets:
                 if t and t not in self.states:
                     raise ValueError(f"state {name} goes to unknown state {t}")
@@ -92,6 +98,7 @@ class Game:
 
     def event(self, event_name):
         with self._lock:
+            self._arm_idle()   # any event is activity, listed or not
             listed = reactions(self.states[self.state])
             if event_name not in listed:
                 print(f"game: {event_name} ignored in {self.state}", flush=True)
@@ -105,6 +112,7 @@ class Game:
     def stop(self):
         with self._lock:
             self._cancel_timer()
+            self._cancel_idle()
 
     def _enter(self, name):
         self._cancel_timer()
@@ -112,7 +120,7 @@ class Game:
         self.state = name
         state = self.states[name]
         enter = reactions(state).get("enter") or {}
-        self._fire(enter.get("cue"))
+        self._fire(enter.get("cue"), enter=True)
         after = state.get("after")
         if after:
             seconds = parse_duration(after["delay"])
@@ -121,6 +129,7 @@ class Game:
             self._timer = timer
             self.timer_deadline = time.monotonic() + seconds
             timer.start()
+        self._arm_idle()
 
     def _timeout(self, timer, to_state):
         with self._lock:
@@ -136,6 +145,34 @@ class Game:
         self._timer = None
         self.timer_deadline = None
 
-    def _fire(self, cues):
+    # `idle`: the state's cues fire after `delay` with no event, and again
+    # every `delay` until one arrives. Re-armed by every event and on entry.
+    def _arm_idle(self):
+        self._cancel_idle()
+        idle = self.states[self.state].get("idle") if self.state else None
+        if not idle:
+            return
+        timer = threading.Timer(parse_duration(idle["delay"]),
+                                lambda: self._idle(timer, idle))
+        timer.daemon = True
+        self._idle_timer = timer
+        timer.start()
+
+    def _idle(self, timer, idle):
+        with self._lock:
+            if self._idle_timer is not timer:
+                return
+            print(f"game: idle in {self.state}", flush=True)
+            self._arm_idle()   # before firing: a cue may change state
+            self._fire(idle.get("cue"))
+
+    def _cancel_idle(self):
+        if self._idle_timer:
+            self._idle_timer.cancel()
+        self._idle_timer = None
+
+    def _fire(self, cues, enter=False):
         for cue in cues or []:
-            self._fire_cue(cue)
+            if isinstance(cue, dict):   # {choose_one: [...]}: one of them, at random
+                cue = random.choice(cue["choose_one"])
+            self._fire_cue(cue, enter)

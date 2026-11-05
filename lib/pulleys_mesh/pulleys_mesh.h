@@ -191,7 +191,12 @@ struct __attribute__((packed)) MeshFwStatus {
 //
 // Flooded and deduped exactly like an EVENT -- same (originId, seq) key, same
 // TTL and burst -- because a lost cue is a missed sound.
-static constexpr uint8_t MESH_CUE_NAME_MAX = 47;
+//
+// `flags` says how the cue was fired. MESH_CUE_FLAG_ENTER marks one a game
+// state fires on entry: a player lets such a clip cut off one already playing,
+// where a cue fired for an event is dropped instead.
+static constexpr uint8_t MESH_CUE_NAME_MAX   = 63;
+static constexpr uint8_t MESH_CUE_FLAG_ENTER = 0x01;
 
 struct __attribute__((packed)) MeshCue {
     uint8_t  magic0;      // 'P'
@@ -201,9 +206,10 @@ struct __attribute__((packed)) MeshCue {
     uint16_t originId;
     uint16_t seq;         // shares the origin's counter with its events
     uint8_t  ttl;         // remaining flood hops
+    uint8_t  flags;       // MESH_CUE_FLAG_*
     uint8_t  nameLen;     // bytes of name that follow, 1..MESH_CUE_NAME_MAX
     char     name[MESH_CUE_NAME_MAX + 1];   // NUL-terminated here; not sent on the wire
-};  // 10 bytes of header, then nameLen bytes of name
+};  // 11 bytes of header, then nameLen bytes of name
 
 static constexpr size_t MESH_CUE_HEADER = offsetof(MeshCue, name);
 inline size_t mesh_cue_wire_size(const MeshCue& c) { return MESH_CUE_HEADER + c.nameLen; }
@@ -816,8 +822,8 @@ inline void mesh_send_config(const uint8_t colors[CHANNEL_COUNT],
     _mesh::enqueueConfig(c, urgent ? MESH_BURST : 1, MESH_BURST_GAP, 0);
 }
 
-// False if the name is empty or too long to send.
-inline bool mesh_send_cue(const char* name) {
+// False if the name is empty or too long to send. `flags` is MESH_CUE_FLAG_*.
+inline bool mesh_send_cue(const char* name, uint8_t flags = 0) {
     size_t n = name ? strlen(name) : 0;
     if (n == 0 || n > MESH_CUE_NAME_MAX) return false;
     MeshCue c = {};
@@ -829,6 +835,7 @@ inline bool mesh_send_cue(const char* name) {
     c.originId   = st.originId;
     c.seq        = ++st.seqCounter;
     c.ttl        = MESH_TTL_START;
+    c.flags      = flags;
     c.nameLen    = (uint8_t)n;
     memcpy(c.name, name, n);
 

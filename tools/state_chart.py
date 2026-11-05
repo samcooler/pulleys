@@ -62,7 +62,10 @@ def cue_cell(cue):
 def section_rows(title, cues):
     rows = [f'<TR><TD ALIGN="LEFT" BGCOLOR="{BAND_FILL}" BORDER="0" CELLPADDING="3">'
             f'<FONT POINT-SIZE="10" COLOR="{MUTED}"><B>{esc(title)}</B></FONT></TD></TR>']
-    rows += [f"<TR>{cue_cell(c)}</TR>" for c in cues]
+    for c in cues:
+        if isinstance(c, dict):   # choose_one: one of several, shown as a | b
+            c = " | ".join(c["choose_one"])
+        rows.append(f"<TR>{cue_cell(c)}</TR>")
     return rows
 
 
@@ -78,6 +81,9 @@ def state_label(name, state, is_start):
         cues = (action or {}).get("cue") or []
         if cues:
             rows += section_rows(f"ON {event}", cues)
+    idle = state.get("idle")
+    if idle and idle.get("cue"):
+        rows += section_rows(f"IDLE every {idle['delay']}", idle["cue"])
     return ('<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" '
             f'COLOR="{CARD_BORDER}" BGCOLOR="{CARD_FILL}" STYLE="ROUNDED">'
             + "".join(rows) + "</TABLE>>")

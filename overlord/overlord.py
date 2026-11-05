@@ -8,6 +8,14 @@ Events (one per line):
   audio_loop_<name>  switch the background audio loop to media/audio_loops/<name>.*
   audio_loop_off     stop the background audio loop
   cue <name>         the arbiter's game fired a cue; play <name> as above (what the bridge sends)
+  cue <name> enter   the same, fired on entering a game state
+
+A video_once clip never cuts off a clip already playing, except one fired on
+entering a state, which always plays: it marks a change of scene and the old
+clip belongs to the old one. The skipped clip is dropped, not queued.
+
+A * in a cue name picks one of the files it matches, at random, never the same
+twice running: video_once_janis_nag_* plays one of the janis_nag_ clips.
 
 A cue may be addressed to a player: "shrine__audio_once_bell" is for the Pi
 named shrine and is ignored here; a cue with no prefix is the Overlord's. The
@@ -105,7 +113,7 @@ def main():
     game = None
     if args.game is not None:
         from game import DEFAULT_GAME, Game
-        game = Game(args.game or DEFAULT_GAME, lambda cue: fire_cue(cue))
+        game = Game(args.game or DEFAULT_GAME, lambda cue, enter=False: fire_cue(cue, enter))
     sim = None
     if args.simulate:
         from simulate import Simulator
@@ -189,10 +197,15 @@ def main():
 
     gains = {}  # cue name -> loudness multiplier; filled below once the game file is known
 
-    def play_clip(path):
+    def play_clip(path, interrupt=False):
+        """Play a clip once. Unless interrupt, a clip already playing wins and
+        this one is dropped. Returns whether it played."""
         with lock:
+            if state["playing_clip"] and not interrupt:
+                return False
             state["playing_clip"] = True
             video.play(path, loop=False)
+            return True
 
     def set_video_loop(path):
         with lock:
@@ -218,8 +231,10 @@ def main():
         ("audio_once_", "audio_once", sounds.play),
     ]
 
-    def dispatch(event_name):
-        """Play the cue. Returns what it played (the media file's name), or None."""
+    def dispatch(event_name, enter=False):
+        """Play the cue. Returns what it played (the media file's name), None if
+        the name is no cue, False if there is no media for it, or "skipped" for
+        a clip dropped because another is playing. `enter` lets a clip interrupt."""
         if event_name == "audio_loop_off":
             stop_audio_loop()
             return "stopped"
@@ -231,13 +246,17 @@ def main():
                     return False
                 if prefix.startswith("audio_"):
                     action(path, gains.get(event_name, 1.0))
+                elif action is play_clip:
+                    if not play_clip(path, interrupt=enter):
+                        return "skipped"
                 else:
                     action(path)
                 return path.name
         return None
 
-    def fire_cue(cue):
-        """Play one cue; True if it played."""
+    def fire_cue(cue, enter=False):
+        """Play one cue; True if it played. `enter` marks a cue a game state
+        fires on entry: its clip plays even if another clip is running."""
         # Game-control cues are for the game system, not overlord media.
         if cue.startswith("game_"):
             return False
@@ -247,7 +266,10 @@ def main():
             return False
         cue = bare
         try:
-            played = dispatch(cue)
+            played = dispatch(cue, enter)
+            if played == "skipped":
+                print(f"cue skipped, a clip is playing: {cue}", flush=True)
+                return False
             if played:
                 print(f"cue: {cue} ({played})", flush=True)
                 return True
@@ -280,7 +302,7 @@ def main():
                 print(f"volume: {volume[0]}%", flush=True)
                 return 200, {"volume": volume[0]}
         if len(parts) == 2 and parts[0] == "cue" and method in ("POST", "PUT"):
-            if fire_cue(parts[1]):
+            if fire_cue(parts[1], enter=True):   # an operator's cue always plays
                 return 200, {"cue": parts[1]}
             return 404, {"error": f"cue not played: {parts[1]} (see the log)"}
         return 404, {"error": "no such route",
@@ -298,22 +320,26 @@ def main():
         # The bridge's lines: "cue <name>" is the arbiter's game firing a cue,
         # "EV ..." a raw sensor event the arbiter has already turned into game
         # events, so there is nothing for us to do with it.
-        if event_name.startswith("cue "):
-            fire_cue(event_name[4:].strip())
+        parsed = players.parse_cue_line(event_name)
+        if parsed:
+            fire_cue(*parsed)
             return
         if event_name.startswith("EV "):
             return
         # A bridge on USB shares its port with its console, so its banner and
         # status lines arrive here too. An event is one bare word; anything
         # else is the bridge talking, worth a log line and nothing more.
-        if not re.fullmatch(r"[a-z0-9_-]+", event_name):
+        if not re.fullmatch(r"[a-z0-9_*-]+", event_name):
             print(f"bridge: {event_name}", flush=True)
             return
         if game and game.handles(event_name):
             game.event(event_name)
             return
         try:
-            if dispatch(event_name):
+            played = dispatch(event_name)
+            if played == "skipped":
+                print(f"event skipped, a clip is playing: {event_name}", flush=True)
+            elif played:
                 print(f"event: {event_name}", flush=True)
             else:
                 print(f"unknown event: {event_name}", flush=True)

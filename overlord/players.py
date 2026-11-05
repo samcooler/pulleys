@@ -24,6 +24,8 @@ in media/<player>/<folder>/ first, then media/<folder>/, so a file meant for one
 Pi can sit apart from everyone else's, and a shared one can be used by all.
 """
 
+import random
+import re
 import signal
 import threading
 from pathlib import Path
@@ -48,22 +50,61 @@ def split_target(cue):
     return PRIMARY, cue
 
 
+# The last file each wildcard cue picked, so the next pick is a different one.
+_last_pick = {}
+
+
+def _matching(d, stem):
+    """Files in d named <stem>.<ext>, where a * in stem matches anything. Only
+    the file's own name is matched, so a pattern can never leave the folder."""
+    parts = [re.escape(p) for p in stem.split("*")]
+    pattern = re.compile("^" + ".*".join(parts) + r"\..+$")
+    try:
+        return sorted(p for p in d.iterdir() if p.is_file() and pattern.match(p.name))
+    except OSError:
+        return []
+
+
 def find_media(root, folder, name, prefix="", player=None):
     """The file for a cue in <root>/[<player>/]<folder>/, or None. Rejects path tricks.
 
     The file may carry the whole cue name (audio_once_chime.mp3, the form that
     matches what the game config says) or just the part after the prefix
     (chime.mp3). The full name wins if both exist. Any extension. A player's own
-    folder wins over the shared one."""
+    folder wins over the shared one.
+
+    A * in the name matches any run of characters, so janis_nag_* is any file
+    whose name starts janis_nag_. One of the matches is picked at random, never
+    the same one twice running while there is a choice."""
     if not name or "/" in name or "\\" in name or name.startswith("."):
         return None
     dirs = ([Path(root) / player / folder] if player else []) + [Path(root) / folder]
     for d in dirs:
         for stem in ([prefix + name] if prefix else []) + [name]:
-            matches = sorted(p for p in d.glob(f"{stem}.*") if p.is_file())
-            if matches:
+            matches = _matching(d, stem)
+            if not matches:
+                continue
+            if "*" not in name or len(matches) == 1:
                 return matches[0]
+            key = (str(d), stem)
+            choices = [p for p in matches if p != _last_pick.get(key)]
+            pick = random.choice(choices)
+            _last_pick[key] = pick
+            return pick
     return None
+
+
+CUE_LINE = re.compile(r"cue (\S+)( enter)?$")
+
+
+def parse_cue_line(line):
+    """(name, enter) for a bridge line "cue <name>" or "cue <name> enter", or
+    None for any other line. `enter` is True when the cue is one a game state
+    fires on entry rather than for an event."""
+    m = CUE_LINE.match(line.strip())
+    if not m:
+        return None
+    return m.group(1), bool(m.group(2))
 
 
 class Satellite:
@@ -142,9 +183,9 @@ class Satellite:
     def on_line(self, line):
         """A line from the bridge. Only cues matter here: sensor events are the
         arbiter's to turn into a game, and FW- lines belong to the Overlord."""
-        line = line.strip()
-        if line.startswith("cue "):
-            self.fire_cue(line[4:].strip())
+        parsed = parse_cue_line(line)
+        if parsed:
+            self.fire_cue(parsed[0])   # enter or not makes no difference to a satellite
 
     def control(self, method, parts):
         """The REST API, the Overlord's routes that make sense here."""

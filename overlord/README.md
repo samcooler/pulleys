@@ -97,7 +97,7 @@ else is still played as a cue directly. State changes are printed as
 
 The arbiter can also run the game itself (`src/arbiter_mesh/gamestate.cpp`). It
 sends each cue it fires through the bridge as a line `cue <name>`, for example
-`cue audio_once_chime`, and overlord plays it. Run overlord **without** `--game`
+`cue audio_once_chime` (`cue <name> enter` for a cue fired on entering a state), and overlord plays it. Run overlord **without** `--game`
 in that setup, or both state machines fire cues. The bridge's `EV ...` sensor
 lines are ignored.
 

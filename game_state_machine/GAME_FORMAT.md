@@ -33,7 +33,10 @@ cues:
 ```
 
 A cue goes over the mesh as its name in ASCII (`audio_once_chime`), so a name has
-to fit one packet: 1 to 47 characters of lowercase letters, digits, `_` and `-`.
+to fit one packet: 1 to 63 characters of lowercase letters, digits, `_`, `-` and
+`*`. A `*` is a wildcard the player resolves when the cue arrives: the cue plays
+one of the media files whose name matches, chosen at random and never the same
+one twice in a row. `video_once_janis_nag_*` plays any of the `janis_nag_` clips.
 The list is checked, not numbered: a state may only fire cues listed here, and
 the order does not matter.
 
@@ -69,7 +72,7 @@ A cue with no prefix is the Overlord's (`overlord__` also works). The name befor
 `__` must be listed here, and what follows must be something a player plays:
 `audio_once_<name>`, `audio_loop_<name>`, `audio_loop_off`, `image_show_<name>` or
 `image_off` (the last two only on an `image` player). The whole name still has
-to fit the 47-character limit above. Only the Pis read this list.
+to fit the 63-character limit above. Only the Pis read this list.
 
 ## Components
 
@@ -170,7 +173,27 @@ states:
     after:                       # optional one-shot timer
       delay: 2m                  # default
       goto: other_state
+    idle:                        # optional; fires while nothing is pulled
+      delay: 20s
+      cue:
+        - some_cue
 ```
+
+Anywhere a list of cues goes, an entry may be `choose_one:` with cues under
+it; one of those is picked at random each time the list fires:
+
+```yaml
+        cue:
+          - audio_once_chime
+          - choose_one:
+              - video_once_janis_warn_*
+              - video_once_janis_beg_*
+```
+
+`idle` fires its cues once `delay` has passed with no event, then again every
+`delay` until an event arrives. Any event the arbiter delivers re-arms it,
+whether or not the state lists that event. Entering the state arms it, and
+leaving cancels it. `after` runs alongside and is unaffected.
 
 - Events used so far: `first_goal_component_activated` (a goal component lit
   while no goal component was lit; it comes just before
@@ -193,3 +216,6 @@ states:
   Durations are whole seconds or minutes: `10s`, `2m`. Seconds are the finest
   granularity; there is no `ms`. `2m` is the default delay.
 - Order on a transition: the event's `cue`, then the new state's `on_enter_cue`.
+- A `video_once_*` clip fired on entering a state cuts off any clip still
+  playing; one fired for an event is dropped if a clip is playing. The cue
+  carries which it was over the mesh, so the player needs no state table.

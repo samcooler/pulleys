@@ -8,7 +8,13 @@
 #                  audio_loop_*  background music; repeats until changed
 #                  audio_once_*  a short sound effect played on top of everything
 #                  video_loop_*  background video; repeats until changed
-#                  video_once_*  a short video that plays once on screen
+#                  video_once_*  a short video that plays once on screen. One
+#                                fired by `enter` cuts off a clip already playing;
+#                                one fired for an event is dropped if a clip is
+#                                playing.
+#                A * in a cue name plays one of the files it matches, at random
+#                (never the same twice running): video_once_janis_nag_* is any
+#                janis_nag_ clip.
 #   event        Something that happens in the world, which a state can react to:
 #                  first_goal_component_activated  A goal activates while no goal is lit.
 #                  goal_component_activated     A goal component is activated.
@@ -23,7 +29,11 @@
 #   on           What to do when a state is entered or an event happens in it.
 #                An event a state does not list is ignored.
 #   enter        Cues to fire the moment the game arrives in a state.
-#   cue (in on)  Cues to fire for that event.
+#   cue (in on)  Cues to fire for that event. An entry in any cue list may be
+#                `choose_one:` with a list under it; one of those fires, picked
+#                at random each time.
+#   idle         A state's cues to fire after `delay` with no pull, then again
+#                every `delay` until a pull comes. A pull on any rope counts.
 #   goto         The state to move to.
 #   after        Move to another state once this much time has passed.
 #   component    One of the pieces of the installation that players activate: five
@@ -88,8 +98,9 @@ audio_gain:
 
 # CUES
 #   Cues travel over the mesh as their name in ASCII, e.g. audio_once_chime,
-#   so a name has to fit one packet: 1 to 47 characters, lowercase letters,
-#   digits, _ and -. This block lists every cue the game may use; a state that
+#   so a name has to fit one packet: 1 to 63 characters, lowercase letters,
+#   digits, _, - and * (a wildcard, see the glossary). This block lists every
+#   cue the game may use; a state that
 #   fires a cue not listed here is rejected. Order does not matter.
 cues:
   game:
@@ -106,6 +117,82 @@ cues:
     - video_once_test1
     - video_once_test2
     - video_once_encouragement      # placeholder
+    # Janis clips, from the drive. One wildcard cue per mood plays a random take
+    # of that mood; below them, one line per file, the comment is what she says.
+    - video_once_janis_encouragement_*
+    - video_once_janis_progress_confirmation_*
+    - video_once_janis_nag_*
+    - video_once_janis_suspicion_*
+    - video_once_janis_warn_*
+    - video_once_janis_beg_*
+    - video_once_janis_anger_*
+    - video_once_janis_threatening_*
+    - video_once_janis_panic_*
+    # janis_encouragement (13)
+    - video_once_janis_encouragement_good_work_1  # Keep up the good work.
+    - video_once_janis_encouragement_rewarded_1  # If you do a good job, you will be handsomely rewarded.
+    - video_once_janis_encouragement_rewarded_2  # If you do a good job, you're going to be handsomely rewarded.
+    - video_once_janis_encouragement_doing_great  # You're doing great.
+    - video_once_janis_encouragement_awesome_job_1  # You're doing an awesome job.
+    - video_once_janis_encouragement_productivity  # We love your productivity.
+    - video_once_janis_encouragement_awesome_job_2  # You're doing an awesome job.
+    - video_once_janis_encouragement_keep_going  # Keep going.
+    - video_once_janis_encouragement_dont_worry  # Don't worry. You're doing a good job.
+    - video_once_janis_encouragement_awesome_job_3  # You're doing an awesome job.
+    - video_once_janis_encouragement_good_work_2  # Keep up the good work.
+    - video_once_janis_encouragement_great_job  # You're doing a great job.
+    - video_once_janis_encouragement_awesome_job_4  # You're doing an awesome job.
+    # janis_progress_confirmation (11)
+    - video_once_janis_progress_confirmation_yes  # Yes!
+    - video_once_janis_progress_confirmation_thats_it  # Yes, that's it.
+    - video_once_janis_progress_confirmation_essences_1  # You're on your way to collecting the necessary essences.
+    - video_once_janis_progress_confirmation_essences_2  # You're on your way to collecting the necessary essences.
+    - video_once_janis_progress_confirmation_congrats_1  # Congratulations!
+    - video_once_janis_progress_confirmation_celebration_1  # Please enjoy your celebration.
+    - video_once_janis_progress_confirmation_pizza_1  # Pizza's on the way.
+    - video_once_janis_progress_confirmation_congrats_2  # Congratulations!
+    - video_once_janis_progress_confirmation_celebration_2  # Please enjoy your celebration.
+    - video_once_janis_progress_confirmation_pizza_2  # Pizza's on the way!
+    - video_once_janis_progress_confirmation_congrats_3  # Congratulations!
+    # janis_nag (7)
+    - video_once_janis_nag_thread  # Don't drop the thread.
+    - video_once_janis_nag_thread_whatever  # Whatever you do, don't drop the thread.
+    - video_once_janis_nag_unraveled  # Don't let things come unraveled.
+    - video_once_janis_nag_maintain_1  # Maintain productivity.
+    - video_once_janis_nag_maintain_2  # Please maintain productivity.
+    - video_once_janis_nag_maintain_3  # Please maintain your productivity.
+    - video_once_janis_nag_essences  # Keep those essences moving.
+    # janis_suspicion (4)
+    - video_once_janis_suspicion_deadlines  # It seems like you might be missing some of your deliverable deadlines.
+    - video_once_janis_suspicion_what_doing_1  # What are you doing?
+    - video_once_janis_suspicion_what_doing_2  # What are you doing?
+    - video_once_janis_suspicion_what_doing_3  # What are you doing?
+    # janis_warn (4)
+    - video_once_janis_warn_authorized_1  # That's for authorized personnel only.
+    - video_once_janis_warn_dont_go_in  # Don't go in there.
+    - video_once_janis_warn_authorized_2  # That's for authorized personnel only.
+    - video_once_janis_warn_dont_look  # Don't look in there.
+    # janis_beg (5)
+    - video_once_janis_beg_back_to_work_1  # Get back to work.
+    - video_once_janis_beg_ignore_that  # Ignore that. Stay away. Get back to work.
+    - video_once_janis_beg_back_to_work_2  # Get back to work.
+    - video_once_janis_beg_please_work  # Please get back to work.
+    - video_once_janis_beg_button  # That button has been disabled. Now get back to work.
+    # janis_anger (3)
+    - video_once_janis_anger_no_1  # No!
+    - video_once_janis_anger_no_2  # No!
+    - video_once_janis_anger_stop_it  # Stop it. Get out of there.
+    # janis_threatening (4)
+    - video_once_janis_threatening_disciplinary_1  # If you don't return to work, it may result in disciplinary action.
+    - video_once_janis_threatening_disciplinary_2  # If you don't... if you don't return to work, it may result in disciplinary action.
+    - video_once_janis_threatening_disciplinary_3  # If you don't return to work, it may result in disciplinary action.
+    - video_once_janis_threatening_disciplined  # Please maintain productivity and get back to work or you will be disciplined.
+    # janis_panic (5)
+    - video_once_janis_panic_imminent  # Disciplinary action is imminent.
+    - video_once_janis_panic_terminated  # If you don't stop immediately, you will be terminated.
+    - video_once_janis_panic_unraveled  # Things will come unraveled if you continue.
+    - video_once_janis_panic_sabotaging  # You're sabotaging our productivity.
+    - video_once_janis_panic_immediately  # Get back to work immediately.
   audio_once:
     - audio_once_steam
     - audio_once_component_powerup  # placeholder
@@ -131,7 +218,14 @@ cues:
     - video_loop_idle
     - video_loop_game1
 
-# Flow: passive -> easy_round -> medium_round -> hard_round -> victory1 -> reveal -> phase2 -> victory2 -> kickout -> passive
+# Flow: passive -> easy_round -> medium_round -> hard_round -> party -> final -> victory2 -> kickout -> passive
+#
+# Janis: encouragement for every correct component in the rounds, nagging when
+# the ropes go quiet, and an escalating reaction to purple (warn, beg, anger)
+# as the rounds go on. The party is her congratulations. In the final phase she
+# is past that: threats when idle, panic at every purple, and nothing at all for
+# the majors. Her clips carry their own voice, so no audio_once Janis cues here.
+#
 # Delays marked placeholder are not final timings yet.
 states:
 
@@ -144,8 +238,7 @@ states:
       nongoal_component_activated:
         cue:
           - audio_once_component_powerup
-          - audio_once_encouragement
-          - video_once_encouragement
+          - video_once_janis_encouragement_*
         goto: easy_round
 
   easy_round:
@@ -155,18 +248,22 @@ states:
           - game_reset_components
           - game_randomize_simon_2_goals
           - video_loop_game1
-      first_goal_component_activated:
-        cue:
-          - audio_once_encouragement
-          - video_once_encouragement
       goal_component_activated:
         cue:
           - audio_once_component_powerup
+          - video_once_janis_encouragement_*
       component_deactivated:
         cue:
           - audio_once_component_powerdown
+      final_component_activated:
+        cue:
+          - video_once_janis_warn_*
       all_components_activated:
         goto: medium_round
+    idle:
+      delay: 20s                    # placeholder
+      cue:
+        - video_once_janis_nag_*
     after:
       delay: 2m                     # placeholder
       goto: passive
@@ -178,18 +275,27 @@ states:
           - game_reset_components
           - game_randomize_simon_3_goals
           - video_loop_game1
-      first_goal_component_activated:
-        cue:
-          - audio_once_encouragement
-          - video_once_encouragement
+          - choose_one:               # the round just won; on enter so it cuts
+              - video_once_janis_progress_confirmation_yes        # off the last
+              - video_once_janis_progress_confirmation_thats_it   # encouragement
+              - video_once_janis_progress_confirmation_essences_1
+              - video_once_janis_progress_confirmation_essences_2
       goal_component_activated:
         cue:
           - audio_once_component_powerup
+          - video_once_janis_encouragement_*
       component_deactivated:
         cue:
           - audio_once_component_powerdown
+      final_component_activated:
+        cue:
+          - video_once_janis_beg_*
       all_components_activated:
         goto: hard_round
+    idle:
+      delay: 20s                    # placeholder
+      cue:
+        - video_once_janis_nag_*
     after:
       delay: 2m                     # placeholder
       goto: passive
@@ -201,54 +307,72 @@ states:
           - game_reset_components
           - game_randomize_simon_5_goals
           - video_loop_game1
-      first_goal_component_activated:
-        cue:
-          - audio_once_encouragement
-          - video_once_encouragement
+          - choose_one:               # the round just won; on enter so it cuts
+              - video_once_janis_progress_confirmation_yes        # off the last
+              - video_once_janis_progress_confirmation_thats_it   # encouragement
+              - video_once_janis_progress_confirmation_essences_1
+              - video_once_janis_progress_confirmation_essences_2
       goal_component_activated:
         cue:
           - audio_once_component_powerup
+          - video_once_janis_encouragement_*
       component_deactivated:
         cue:
           - audio_once_component_powerdown
+      final_component_activated:
+        cue:
+          - video_once_janis_anger_*
       all_components_activated:
-        goto: victory1
+        goto: party
+    idle:
+      delay: 20s                    # placeholder
+      cue:
+        - video_once_janis_nag_*
     after:
       delay: 2m                     # placeholder
       goto: passive
 
-  victory1:
+  # The celebration between the rounds and the final phase. Entry plays one
+  # congratulations; the party chatter (celebration, pizza) comes from the idle
+  # timer, since enter cues cut each other off and only the last would play.
+  # No new video loop yet: game1 stays behind her.
+  party:
     on:
       enter:
         cue:
-          - video_once_test2
+          - choose_one:
+              - video_once_janis_progress_confirmation_congrats_1
+              - video_once_janis_progress_confirmation_congrats_2
+              - video_once_janis_progress_confirmation_congrats_3
+    idle:
+      delay: 12s                    # placeholder
+      cue:
+        - choose_one:
+            - video_once_janis_progress_confirmation_celebration_1
+            - video_once_janis_progress_confirmation_celebration_2
+            - video_once_janis_progress_confirmation_pizza_1
+            - video_once_janis_progress_confirmation_pizza_2
     after:
-      delay: 10s
-      goto: reveal
+      delay: 60s                    # placeholder
+      goto: final
 
-  reveal:
-    on:
-      enter:
-        cue:
-          - video_once_test1
-    after:
-      delay: 10s                    # placeholder
-      goto: phase2
-
-  phase2:
+  # Only purple matters now. The majors are not listed, so a pull on one does
+  # nothing: no powerup or powerdown sound, no Janis.
+  final:
     on:
       enter:
         cue:
           - game_reset_components
+          - video_once_janis_threatening_*
       final_component_activated:
         cue:
-          - audio_once_component_powerup
-          - video_once_encouragement
-      final_component_deactivated:
-        cue:
-          - audio_once_component_powerdown
+          - video_once_janis_panic_*
       all_final_components_activated:
         goto: victory2
+    idle:
+      delay: 20s                    # placeholder
+      cue:
+        - video_once_janis_threatening_*
     after:
       delay: 2m                     # placeholder
       goto: kickout
@@ -257,7 +381,7 @@ states:
     on:
       enter:
         cue:
-          - video_once_test2
+          - video_once_test2        # placeholder
     after:
       delay: 2m                    # placeholder
       goto: kickout

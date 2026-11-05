@@ -225,9 +225,10 @@ line of its own:
 
 ```
 cue <name>\n
+cue <name> enter\n
 ```
 
-e.g. `cue audio_once_chime`. On the air a cue is its name in ASCII, and the bridge
+e.g. `cue audio_once_chime`; the second form is a cue fired on entering a game state. On the air a cue is its name in ASCII, and the bridge
 passes it on as it arrived and checks nothing: it holds no list of cues, so
 changing the game's cues never needs the bridge reflashed. Test one without the arbiter by typing
 `c audio_once_chime` on the console. The console shows
