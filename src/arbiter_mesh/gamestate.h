@@ -29,7 +29,8 @@ void gamestate_tick();                 // every loop: the `after` timer
 bool        gamestate_ready();         // a config is loaded
 const char* gamestate_game();          // its `game` field
 const char* gamestate_state();         // current state name
-float       gamestate_decay_rate();    // percent of full charge a lit component loses per second
+float       gamestate_decay_rate();    // percent of full charge a component loses per second
+float       gamestate_charge_per_pull(); // percent of full charge one pull adds
 
 // Which major component (0-4) a rope channel drives, from the config's
 // `components` and the colour the channel wears in today's palette -- so the

@@ -11,8 +11,10 @@
 //
 // Each major component is a game1 colour, driven by every rope wearing it today
 // (the config's `components` section, in state_config.yaml); every purple
-// channel is a final, and game2 is won when all the roped ones are lit. A pull lights it, and it drains from 100% at the game's
-// default_decay_rate; another pull tops it back up. Major activation events
+// channel is a final, and game2 is won when all the roped ones are lit. Each
+// pull adds the game's charge_per_pull and the charge drains at its
+// default_decay_rate, so only keeping at it fills one: it lights at 100% and
+// stays lit until it has drained back to 0. Major activation events
 // also track the Simon goal set selected by game_randomize_simon_N_goals cues.
 //
 // It also publishes every component's charge for the displays (MeshComponents):

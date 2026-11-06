@@ -39,7 +39,8 @@
 #   component    One of the pieces of the installation that players activate: five
 #                major ones, each a colour driven by every rope wearing it, and
 #                the final ones -- every channel painted purple is one.
-#   decay rate   Percent of full charge a lit component loses per second.
+#   decay rate   Percent of full charge a component loses per second.
+#   charge       How full a component is, 0-100. Pulls add to it, time drains it.
 #   ambient      A sound overlord repeats on a schedule, independent of the game.
 #   gain         A multiplier on how loud one audio clip plays. 1 is unchanged.
 #   placeholder  Media that does not exist yet.
@@ -62,12 +63,19 @@ components:
     - yellow
     - orange
 
-# How fast a lit component drains, in percent of full per second. A pull sets a
-# component to 100 and it goes dark at 0, so it stays lit 100 / rate seconds:
-# 6.6667 is 15 seconds. The arbiter owns this, and publishes it to the component
-# state displays along with each component's charge. It applies to every
-# component (hence "default").
+# How fast a component's charge drains, in percent of full per second. Pulls
+# fill it (charge_per_pull below); it lights at 100 and goes dark at 0, so
+# once full and left alone it stays lit 100 / rate seconds: 6.6667 is 15
+# seconds. The arbiter owns this, and publishes it to the component state
+# displays along with each component's charge. It applies to every component
+# (hence "default").
 default_decay_rate: 6.6667
+
+# How much one pull adds to a component's charge, in percent of full. Below 100
+# so no single pull lights anything: it takes pulls coming faster than the
+# drain. At 20 against 6.6667, six quick pulls (two a second) fill one, and a
+# lone rope pulled once every three seconds only just holds its level.
+charge_per_pull: 20
 
 # Sounds overlord plays on its own, forever, whatever state the game is in.
 # Only overlord reads this; the arbiter never sees it. Each entry plays its

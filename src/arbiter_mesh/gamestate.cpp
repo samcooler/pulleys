@@ -13,6 +13,9 @@ static const uint32_t DEFAULT_DELAY_MS = 2 * 60 * 1000;   // GAME_FORMAT.md: 2m
 // MAX is what the packet's 16 bits can carry (thousandths of a percent per second).
 static const float DEFAULT_DECAY_RATE = 100.0f / 15.0f;
 static const float MAX_DECAY_RATE = 65.0f;
+// charge_per_pull, when the config does not give one: six quick pulls (two a
+// second) fill a component, and one pull on its own never does.
+static const float DEFAULT_CHARGE_PER_PULL = 20.0f;
 
 static JsonDocument s_doc;
 static bool         s_ready = false;
@@ -20,6 +23,7 @@ static char         s_game[48]  = "";
 static char         s_state[32] = "";
 static uint32_t     s_enteredAt = 0;
 static float        s_decayRate = DEFAULT_DECAY_RATE;
+static float        s_chargePerPull = DEFAULT_CHARGE_PER_PULL;
 // Majors go by colour: whichever ropes wear a game1 colour today drive that
 // colour's component, so recolouring channels on the arbiter re-deals the game.
 // (Finals are the purple channels, and need nothing from the config.)
@@ -140,6 +144,13 @@ static bool validate(JsonDocument& doc, String& why) {
         float rate = doc["default_decay_rate"] | 0.0f;
         if (!doc["default_decay_rate"].is<float>() || rate <= 0.0f || rate > MAX_DECAY_RATE) {
             why = "default_decay_rate must be a number above 0 and at most 65 (percent per second)";
+            return false;
+        }
+    }
+    if (!doc["charge_per_pull"].isNull()) {
+        float add = doc["charge_per_pull"] | 0.0f;
+        if (!doc["charge_per_pull"].is<float>() || add <= 0.0f || add > 100.0f) {
+            why = "charge_per_pull must be a number above 0 and at most 100 (percent of full charge)";
             return false;
         }
     }
@@ -280,6 +291,7 @@ bool gamestate_load(const String& json, String& why) {
     s_ready = true;
     strlcpy(s_game, s_doc["game"].as<const char*>(), sizeof(s_game));
     s_decayRate = s_doc["default_decay_rate"] | DEFAULT_DECAY_RATE;
+    s_chargePerPull = s_doc["charge_per_pull"] | DEFAULT_CHARGE_PER_PULL;
     memset(s_majorOfColor, -1, sizeof(s_majorOfColor));
     {
         int8_t n = 0;
@@ -334,6 +346,7 @@ bool        gamestate_ready()  { return s_ready; }
 const char* gamestate_game()   { return s_game; }
 const char* gamestate_state()  { return s_state; }
 float       gamestate_decay_rate() { return s_decayRate; }
+float       gamestate_charge_per_pull() { return s_chargePerPull; }
 int         gamestate_major_for_channel(uint8_t channel) {
     if (!s_ready || channel >= pulleys::CHANNEL_COUNT) return -1;
     return s_majorOfColor[pulleys::channel_color_index(channel)];

@@ -9,6 +9,7 @@
 | **Station (WROOM)** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | hardware FPU, CH340 USB-serial |
 | **Bridge** | any ESP32-C3 (4MB, native USB) | none | USB to its Pi (or UART1, GPIO 21 TX / 20 RX, with `BRIDGE_PI_USB=0`); the Overlord's hosts the firmware AP |
 | **Component state display** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | a Screen running its `components` display: one bar per game component |
+| **Extractor** | D1 Mini ESP32-WROOM-32 | two 32×8 panels as a 64×8 ring + a hanging strip, one chain (GPIO 16) | a Screen running an `extractor_<colour>` display: that colour's score as liquid |
 
 ## Build Environments
 
@@ -19,6 +20,7 @@
 | `station_wroom` | D1 Mini ESP32-WROOM-32 | hardware FPU, SSAA=3 |
 | `bridge` | ESP32-C3 (`seeed_xiao_esp32c3`) | mesh → Pi serial bridge, default env, always a C3 |
 | `component_state_display` | D1 Mini ESP32-WROOM-32 | the screen image pinned to its COMPONENTS display, default env |
+| `screen_extractor` | D1 Mini ESP32-WROOM-32 | the screen image on the extractor surface (ring + strip), default env |
 
 ```sh
 pio run                      # build traveler + station (defaults)
@@ -41,8 +43,8 @@ Publish active firmware environments with:
 python3 tools/release_firmware.py
 ```
 
-This builds `sensor`, `screen`, `component_state_display`, `arbiter_mesh`, and
-`bridge`, then creates the next minor GitHub Release with the images and
+This builds `sensor`, `screen`, `component_state_display`, `screen_extractor`,
+`arbiter_mesh`, and `bridge`, then creates the next minor GitHub Release with the images and
 `manifest.json`. Use `--build-only` to create local assets only. `./flash_all.sh
 --ota` is retired; managed updates are initiated by restarting the Overlord.
 
@@ -289,8 +291,9 @@ installed as one (the firmware updater only offers a board the env it reports).
 Eight vertical bars side by side along the long axis, each 3 pixels wide with a
 1-pixel gap (31 of the 32 columns): the five major components on the left, in
 the game's colour order, then up to three finals (purple). Each bar wears the
-colour the arbiter sends with it. A component that is lit shows a full bar,
-which drains away until the component goes dark and the bar is empty. Source:
+colour the arbiter sends with it, and shows its component's charge: pulls
+raise it, it drains the whole time, and the component lights when the bar is
+full and goes dark when it is empty again. Source:
 `renderComponents` in `src/screen/main.cpp`; the bar maths is
 `lib/pulleys_component_display`.
 
@@ -317,3 +320,26 @@ pio run -e component_state_display -t upload --upload-port /dev/cu.usbserial-XXX
   sent it (`c0 100` fills component 1 and lets it drain). On the arbiter, `p<channel>`
   injects a pull (`p1` lights major component 1, `p10` major component 2), which is how to see
   it without a sensor.
+
+## Extractors
+
+Five screens, one per colour except purple, each showing that colour's score as
+a column of liquid. The surface is one chain: two 32×8 panels bent into a 64×8
+ring (512 LEDs), then a strip hanging below it, its first LED at the top. The
+liquid fills the strip from its far (bottom) end, then the ring from the bottom
+row up; every pixel runs from off to the full colour. In the strip the surface
+bobs; in the ring it becomes waves -- summed sines that wrap once round the 64
+columns -- and pouring kicks up the slosh, which settles over a few seconds.
+
+The score is the charge of the major component wearing that colour, as the
+arbiter publishes it for the component bars (pulls add to it, it drains at the
+game's rate). `c<bar> <percent>` on the console drives it on the bench.
+
+Built with `screen_extractor`; it runs only the extractor displays, and a plain
+8×32 screen refuses them. Pick the colour in `DISPLAY_ASSIGNMENT` with
+`SCREEN_EXTRACTOR_RED` .. `_ORANGE`; an unlisted extractor steps to the next
+colour each power cycle, and `m` steps it for one boot. Set the strip's length
+with `EXTRACTOR_STRIP_LEDS` (and `LED_COUNT` = 512 + it) in `platformio.ini`;
+flip `EXTRACTOR_REVERSE_Y` / `EXTRACTOR_STRIP_REVERSE` if either fills the wrong
+way. The liquid maths and wiring are `lib/pulleys_extractor`; the render is
+`renderExtractor` in `src/screen/main.cpp`.

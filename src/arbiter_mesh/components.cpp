@@ -7,12 +7,11 @@
 
 static const uint32_t HEARTBEAT_MS = 1000;   // how often the charge is republished
 
-// A pull sets a component to 100% and it drains at the game's default_decay_rate
-// (percent per second), so it stays lit 100 / rate seconds.
-static uint32_t wearMsNow() {
-    return (uint32_t)(100000.0f / gamestate_decay_rate());
-}
-
+// A pull adds the game's charge_per_pull and the charge drains at its
+// default_decay_rate (both percent), so no one pull fills a component: it takes
+// pulls coming faster than the drain. Reaching 100% lights it, and it stays lit
+// until it has drained all the way back to 0 -- the hysteresis keeps a
+// component hovering near full from flickering on and off.
 static const uint8_t MAJOR_COUNT = GAME_MAJOR_COMPONENTS;
 
 // Which rope drives what follows the palette, not a fixed table:
@@ -27,15 +26,28 @@ static const uint8_t MAJOR_COUNT = GAME_MAJOR_COMPONENTS;
 //           screen is what makes it a final.
 
 struct Component {
-    uint32_t litUntil;   // 0 = dark
-    uint32_t wearMs;     // how long this pull will keep it lit: its own, so a rate change mid-drain does not jump it
+    float    charge;     // percent, as of stampMs
+    uint32_t stampMs;
+    bool     on;         // reached 100% and has not yet drained to 0
 };
 static Component s_major[MAJOR_COUNT];
 static Component s_final[pulleys::CHANNEL_COUNT];   // by channel; only purple ones are used
 static uint8_t s_goalMask = 0; // major component bitset; zero until the first Simon cue
 
-static bool lit(const Component& c, uint32_t now) {
-    return c.litUntil && (int32_t)(c.litUntil - now) > 0;
+// Bring the charge up to `now`. Drains at whatever the rate is today, so a game
+// posted with a new rate takes over from the charge as it stands.
+static void settle(Component& c, uint32_t now) {
+    if (c.charge > 0.0f) {
+        c.charge -= gamestate_decay_rate() * (float)(now - c.stampMs) / 1000.0f;
+        if (c.charge < 0.0f) c.charge = 0.0f;
+    }
+    c.stampMs = now;
+}
+
+// Whether it counts as activated. components_tick() turns it off once it has
+// drained, so this is the flag and not a reading of the charge.
+static bool lit(const Component& c, uint32_t /*now*/) {
+    return c.on;
 }
 
 static bool isFinalChannel(uint8_t ch) {
@@ -106,11 +118,10 @@ static void checkSimonComplete(uint32_t now) {
 // the once-a-second repeat covers a display that missed one, and carries the
 // drain so it can keep counting down on its own in between.
 // Percent, rounded up so a component that is still lit never reads 0.
-static uint8_t chargeOf(const Component& c, uint32_t now) {
-    int32_t left = c.litUntil ? (int32_t)(c.litUntil - now) : 0;
-    uint32_t wear = c.wearMs ? c.wearMs : 1;
-    uint32_t pct = left <= 0 ? 0 : ((uint32_t)left * 100UL + wear - 1) / wear;
-    return pct > 100 ? 100 : (uint8_t)pct;
+static uint8_t chargeOf(Component& c, uint32_t now) {
+    settle(c, now);
+    float pct = ceilf(c.charge);
+    return pct > 100.0f ? 100 : (uint8_t)pct;
 }
 
 // The display has a bar per major and GAME_FINAL_BARS for the finals, which go
@@ -172,14 +183,16 @@ void components_check_simon_complete() {
     checkSimonComplete(millis()); // a retained lit set can already match new goals
 }
 
-// Light (or top up) a component. True if it was dark: a refill is not a new
-// activation.
-static bool light(Component& c, uint32_t now) {
-    bool wasLit = lit(c, now);
-    c.wearMs   = wearMsNow();
-    c.litUntil = now + c.wearMs;
-    publish(true);        // lit, or topped back up: the display's bar goes to full
-    return !wasLit;
+// Pour one pull into a component. True if that filled it and it was dark: a
+// top-up of one already lit is not a new activation.
+static bool pull(Component& c, uint32_t now) {
+    settle(c, now);
+    c.charge += gamestate_charge_per_pull();
+    if (c.charge > 100.0f) c.charge = 100.0f;
+    bool lights = !c.on && c.charge >= 100.0f;
+    if (lights) c.on = true;
+    publish(true);        // the display's bar rises now, not at the next heartbeat
+    return lights;
 }
 
 void components_on_mesh_event(const pulleys::MeshEvent& ev) {
@@ -187,7 +200,7 @@ void components_on_mesh_event(const pulleys::MeshEvent& ev) {
     uint32_t now = millis();
 
     if (isFinalChannel(ev.channel)) {
-        if (!light(s_final[ev.channel], now)) return;
+        if (!pull(s_final[ev.channel], now)) return;
         gamestate_event(GE_FINAL_COMPONENT_ACTIVATED);
         if (allFinalsLit(now)) gamestate_event(GE_ALL_FINAL_COMPONENTS_ACTIVATED);
         return;
@@ -195,7 +208,7 @@ void components_on_mesh_event(const pulleys::MeshEvent& ev) {
 
     int idx = gamestate_major_for_channel(ev.channel);
     if (idx < 0) return;
-    if (!light(s_major[idx], now)) return;
+    if (!pull(s_major[idx], now)) return;
     bool isGoal = (s_goalMask & (1u << idx)) != 0;
     if (isGoal) {
         bool noGoalLit = (litMajorMask(now) & s_goalMask) == (uint8_t)(1u << idx);
@@ -211,18 +224,22 @@ void components_tick() {
     static uint32_t lastPublish = 0;
     uint32_t now = millis();
     bool changed = false;
-    // litUntil is cleared once the wear-out has been reported
+    // A lit component goes dark once it has drained to empty.
     for (Component& c : s_major) {
-        if (!c.litUntil || lit(c, now)) continue;
-        c.litUntil = 0;
+        if (!c.on) continue;
+        settle(c, now);
+        if (c.charge > 0.0f) continue;
+        c.on = false;
         changed = true;
         gamestate_event(GE_COMPONENT_DEACTIVATED);
         if (!anyMajorLit(now)) gamestate_event(GE_ALL_COMPONENTS_DEACTIVATED);
         checkSimonComplete(now);
     }
     for (Component& c : s_final) {
-        if (!c.litUntil || lit(c, now)) continue;
-        c.litUntil = 0;
+        if (!c.on) continue;
+        settle(c, now);
+        if (c.charge > 0.0f) continue;
+        c.on = false;
         changed = true;
         gamestate_event(GE_FINAL_COMPONENT_DEACTIVATED);
     }

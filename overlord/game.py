@@ -31,6 +31,9 @@ GAME_EVENTS = {
 # Percent of full charge a lit component loses per second when the config does not say:
 # a full charge lasts 15 s. state_config.yaml's default_decay_rate overrides it.
 DEFAULT_DECAY_RATE = 100.0 / 15.0
+# Percent of full charge one pull adds when the config does not say: six quick
+# pulls (two a second) fill a component. state_config.yaml's charge_per_pull overrides it.
+DEFAULT_CHARGE_PER_PULL = 20.0
 
 
 def parse_duration(text):
@@ -58,6 +61,9 @@ class Game:
         self.decay_rate = float(config.get("default_decay_rate", DEFAULT_DECAY_RATE))
         if self.decay_rate <= 0:
             raise ValueError(f"default_decay_rate must be above 0, not {self.decay_rate}")
+        self.charge_per_pull = float(config.get("charge_per_pull", DEFAULT_CHARGE_PER_PULL))
+        if not 0 < self.charge_per_pull <= 100:
+            raise ValueError(f"charge_per_pull must be above 0 and at most 100, not {self.charge_per_pull}")
         self._fire_cue = fire_cue
         self._lock = threading.RLock()
         self._timer = None

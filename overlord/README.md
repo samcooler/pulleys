@@ -133,23 +133,26 @@ window has focus. Drop `--windowed` to run it fullscreen, and add
 | `1-5` | major components | red, orange, hot pink, green, blue |
 | `6-8` | final components | purple                           |
 
-- A key lights its component, which wears out after 100 / `default_decay_rate` seconds (15 s in the example
-  game), the same as the arbiter's rule.
-- Pressing a lit key refills it to full.
+- A key is one pull: it adds `charge_per_pull` to its component (20% in the
+  example game), and the charge drains at `default_decay_rate` -- the same as
+  the arbiter's rule. Press fast enough to fill it and the component lights;
+  it stays lit until it drains to 0 (15 s from full in the example game).
+- Pressing a lit key tops it up.
 - `game2` shows bars 6-8 (it is the state that reacts to the final
   components). Every other state shows bars 1-5.
 
 ### The overlay
 
 The bottom half of the screen shows the current state name and one bar per
-component, labelled with its key. A bar starts full when its key is pressed and
-drains right to left as the component wears out.
+component, labelled with its key. Each press raises a bar, and it drains right
+to left the whole time.
 
 ### Play through the game
 
 1. **passive**: press any of `1-5` to start; the game moves to `game1`.
-2. **game1**: light all of `1-5` at once (each lasts 15 s with the example
-   game's decay rate, so press them within that time). The game moves to `victory1`.
+2. **game1**: light all of `1-5` at once (fill each with a burst of presses;
+   a full one lasts 15 s with the example game's decay rate, so fill them all
+   within that time). The game moves to `victory1`.
 3. **victory1**, then **reveal**: these play on their own timers and move to
    `game2`.
 4. **game2**: light all of `6-8` at once to win; the game moves to `victory2`.

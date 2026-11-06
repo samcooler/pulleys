@@ -201,6 +201,11 @@ def validate(cfg):
                              or not 0 < rate <= MAX_DECAY_RATE):
         errors.append(f"default_decay_rate: must be a number above 0 and at most "
                       f"{MAX_DECAY_RATE} (percent of full charge per second), not {rate!r}")
+    add = cfg.get("charge_per_pull")
+    if add is not None and (isinstance(add, bool) or not isinstance(add, (int, float))
+                            or not 0 < add <= 100):
+        errors.append(f"charge_per_pull: must be a number above 0 and at most 100 "
+                      f"(percent of full charge), not {add!r}")
 
     # ambient_sounds: overlord's own schedule (GAME_FORMAT.md)
     for i, entry in enumerate(cfg.get("ambient_sounds") or []):

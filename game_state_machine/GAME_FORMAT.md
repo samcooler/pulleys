@@ -12,7 +12,8 @@ strings overlord already accepts (`video_once_test1`, `audio_once_chime`,
 | `game`   | Name, for logs                                       |
 | `start`  | State to enter at launch                             |
 | `components` | Which colour drives each major component            |
-| `default_decay_rate` | How fast a lit component drains, % per second (optional) |
+| `default_decay_rate` | How fast a component's charge drains, % per second (optional) |
+| `charge_per_pull` | How much one pull adds to a component's charge, % (optional) |
 | `ambient_sounds` | Sounds overlord repeats on a schedule (optional)    |
 | `audio_gain` | Loudness multiplier per audio cue (optional)        |
 | `players` | Satellite Pis a cue may be addressed to (optional)  |
@@ -113,16 +114,25 @@ simulator's keys stand in for the components themselves.
 
 ```yaml
 default_decay_rate: 6.6667       # percent of full charge lost per second
+charge_per_pull: 20              # percent of full charge one pull adds
 ```
 
-A component's charge is a number from 0 to 100. A pull sets it to 100, and it
-drains at this rate until it reaches 0, when the component counts as deactivated.
-So it stays lit `100 / rate` seconds: 6.6667 is 15 seconds, 10 is 10, 5 is 20. It
-applies to every component. The arbiter owns it: it decides when a component goes
-dark and publishes the rate to the component state displays together with each
-charge, so a display never has its own copy. It must be above 0 and at most 65.
-If left out, the default is the 15-second rate. `overlord`'s keyboard simulator
-reads the same value. A game posted to the arbiter takes effect from the next pull.
+A component's charge is a number from 0 to 100. Every pull on a rope driving it
+adds `charge_per_pull`, and it drains at `default_decay_rate` the whole time, so
+filling one takes pulls coming faster than the drain -- no one pull does it.
+When the charge reaches 100 the component counts as activated, and it stays
+activated until it has drained all the way to 0, when it counts as deactivated;
+pulls in between top it up. Left alone from full it stays lit `100 / rate`
+seconds: 6.6667 is 15 seconds, 10 is 10, 5 is 20. Both apply to every component,
+majors and finals alike. `charge_per_pull` must be above 0 and at most 100 (100
+is the old rule: one pull fills it); if left out it is 20.
+
+The arbiter owns both: it decides when a component lights and goes dark, and
+publishes each charge and the drain rate to the displays, so a display never has
+its own copy. The rate must be above 0 and at most 65; if left out, the default
+is the 15-second rate. `overlord`'s keyboard simulator reads the same values,
+one key press standing in for one pull. A game posted to the arbiter takes
+effect at once, from the charge each component has.
 
 ## Ambient sounds
 
