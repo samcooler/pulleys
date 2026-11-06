@@ -78,10 +78,15 @@ static const ChannelAssignment CHANNEL_ASSIGNMENT[] = {
     { 0x0664,  2, LIN },   // N-0664
     { 0x7FF0,  2, LIN },   // N-7FF0
     { 0x611D,  3, LIN },   // N-611D
+    { 0x6288,  3, LIN },   // N-6288
     { 0x8A32,  4, LIN },   // N-8A32
+    { 0x46CB,  4, LIN },   // N-46CB
     { 0xA855,  5, LIN },   // N-A855
+    { 0x1955,  5, LIN },   // N-1955
     { 0xE250,  6, LIN },   // N-E250
+    { 0x4837,  6, LIN },   // N-4837
     { 0x2452,  7, LIN },   // N-2452
+    { 0x6007,  7, LIN },   // N-6007
     { 0x08FF,  8, LIN },   // N-08FF
     { 0x026D,  9, LIN },   // N-026D
     { 0xA08A, 10, LIN },   // N-A08A
