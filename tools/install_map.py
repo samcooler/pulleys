@@ -59,7 +59,10 @@ COLUMNS = {
     # New screens are spread over counter and ranking only (lo..hi); the other
     # labels are there so a hand-set row naming them still reads back.
     "display": [("display", 0, 1, ["SCREEN_COUNTER", "SCREEN_RANKING", "SCREEN_ALLON",
-                                   "SCREEN_WAVE", "SCREEN_COMPONENTS"], "spread", 0)],
+                                   "SCREEN_WAVE", "SCREEN_COMPONENTS",
+                                   "SCREEN_EXTRACTOR_RED", "SCREEN_EXTRACTOR_BLUE",
+                                   "SCREEN_EXTRACTOR_GREEN", "SCREEN_EXTRACTOR_YELLOW",
+                                   "SCREEN_EXTRACTOR_ORANGE"], "spread", 0)],
 }
 
 KINDS = {

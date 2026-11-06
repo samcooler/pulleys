@@ -145,6 +145,13 @@ enum ScreenDisplay : uint8_t {
     SCREEN_ALLON   = 2,   // every pixel lit: four yellow symbols, no mesh input
     SCREEN_WAVE    = 3,   // gold/amber sine sliding along a 16×2 panel
     SCREEN_COMPONENTS = 4,   // the game's component charge bars, from the arbiter
+    // One colour's score as liquid filling a strip and a 64×8 ring. In
+    // pulleys_channel's COLOR_* order, so the colour is the offset from RED.
+    SCREEN_EXTRACTOR_RED    = 5,
+    SCREEN_EXTRACTOR_BLUE   = 6,
+    SCREEN_EXTRACTOR_GREEN  = 7,
+    SCREEN_EXTRACTOR_YELLOW = 8,
+    SCREEN_EXTRACTOR_ORANGE = 9,
     SCREEN_DISPLAY_COUNT,
 
     // Displays the power-cycle steps through on an unlisted board. The ones
@@ -153,9 +160,16 @@ enum ScreenDisplay : uint8_t {
     // surface altogether (16×2, not the 8×32 matrix), so a board must be built
     // for it -- see [env:screen_allon] and [env:screen_wave] -- and COMPONENTS
     // is one specific panel's job, so it is assigned here or built in
-    // ([env:component_state_display]), never stumbled into.
+    // ([env:component_state_display]), never stumbled into. The extractors
+    // need their own surface too ([env:screen_extractor]); a board built for it
+    // runs only those, and one a 256-LED screen is listed for is refused.
     SCREEN_CYCLE_COUNT = SCREEN_ALLON
 };
+static constexpr uint8_t SCREEN_EXTRACTOR_COUNT = 5;   // one per game1 colour
+
+inline bool screen_is_extractor(uint8_t d) {
+    return d >= SCREEN_EXTRACTOR_RED && d < SCREEN_EXTRACTOR_RED + SCREEN_EXTRACTOR_COUNT;
+}
 
 inline const char* screen_display_name(uint8_t d) {
     switch (d) {
@@ -164,6 +178,11 @@ inline const char* screen_display_name(uint8_t d) {
         case SCREEN_ALLON:   return "allon";
         case SCREEN_WAVE:    return "wave";
         case SCREEN_COMPONENTS: return "components";
+        case SCREEN_EXTRACTOR_RED:    return "extractor_red";
+        case SCREEN_EXTRACTOR_BLUE:   return "extractor_blue";
+        case SCREEN_EXTRACTOR_GREEN:  return "extractor_green";
+        case SCREEN_EXTRACTOR_YELLOW: return "extractor_yellow";
+        case SCREEN_EXTRACTOR_ORANGE: return "extractor_orange";
         default:             return "?";
     }
 }

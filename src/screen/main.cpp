@@ -13,6 +13,7 @@
 #include <pulleys_ota.h>
 #include <pulleys_census.h>
 #include <pulleys_component_display.h>
+#include <pulleys_extractor.h>
 #include "font5x7.h"
 
 // ── Screen — activity display for the sensor mesh ─────────────────────────────
@@ -30,6 +31,9 @@
 //             board is built for it rather than switched into it
 //   COMPONENTS — the game's charge bars: one per component, filling when the
 //             arbiter says it is lit and draining until it goes dark
+//   EXTRACTOR — one colour's score as liquid: a hanging strip, then a 64×8
+//             ring, filling bottom to top with a sloshing surface. Five of
+//             them, one per colour but purple, on their own LED surface
 //
 // Every display runs on the same board and hears the same mesh: every sensor
 // event, the arbiter's palette, its component charges. Which one draws is the
@@ -64,6 +68,17 @@ static_assert(SCREEN_FORCE_DISPLAY == pulleys::SCREEN_WAVE ||
               "the matrix displays need the whole 8x32 (256 LEDs)");
 #else
 static_assert(LED_COUNT >= 256, "the matrix displays need the whole 8x32 (256 LEDs)");
+#endif
+
+// An extractor build ([env:screen_extractor]) is the only one whose surface
+// carries the ring and the strip, so it is the only one that may run them --
+// and it runs nothing else. EXTRACTOR_STRIP_LEDS being set is what marks it.
+#ifdef EXTRACTOR_STRIP_LEDS
+  #define SCREEN_EXTRACTOR_BUILD 1
+static_assert(LED_COUNT >= pulleys::EXTRACTOR_RING_LEDS + EXTRACTOR_STRIP_LEDS,
+              "an extractor needs both 32x8 panels (512) plus its strip");
+#else
+  #define SCREEN_EXTRACTOR_BUILD 0
 #endif
 
 #define NUM_CHANNELS   pulleys::CHANNEL_COUNT
@@ -153,17 +168,31 @@ static void loadDisplayMode() {
     return;
 #endif
     int8_t listed = pulleys::display_for_device(pulleys::identity_id());
+    // The install map names a display; the build names a surface. If they
+    // disagree the surface wins -- drawing a ring on an 8×32 would run off the
+    // end of leds[] -- and the board is treated as unlisted.
+    if (listed >= 0 && pulleys::screen_is_extractor(listed) != SCREEN_EXTRACTOR_BUILD) {
+        Serial.printf("  install map says %s, but this build is %s: ignoring it\n",
+                      pulleys::screen_display_name(listed),
+                      SCREEN_EXTRACTOR_BUILD ? "an extractor" : "an 8x32 screen");
+        listed = -1;
+    }
     if (listed >= 0) {
         mode         = (uint8_t)listed;
         modeIsListed = true;
         return;
     }
+    // An unlisted extractor steps through the five colours instead.
+    const uint8_t first = SCREEN_EXTRACTOR_BUILD ? pulleys::SCREEN_EXTRACTOR_RED
+                                                 : pulleys::SCREEN_COUNTER;
+    const uint8_t n     = SCREEN_EXTRACTOR_BUILD ? pulleys::SCREEN_EXTRACTOR_COUNT
+                                                 : pulleys::SCREEN_CYCLE_COUNT;
     Preferences p;
     p.begin(NVS_NS, false);
-    uint8_t stored = p.getUChar("mode", pulleys::SCREEN_COUNTER);
-    if (stored >= pulleys::SCREEN_CYCLE_COUNT) stored = pulleys::SCREEN_COUNTER;
+    uint8_t stored = p.getUChar("mode", first);
+    if (stored < first || stored >= first + n) stored = first;
     mode = stored;
-    p.putUChar("mode", (uint8_t)((stored + 1) % pulleys::SCREEN_CYCLE_COUNT));
+    p.putUChar("mode", (uint8_t)(first + (stored - first + 1) % n));
     p.end();
 }
 
@@ -539,7 +568,7 @@ static void onComponents(const pulleys::MeshComponents& c, bool relayed) {
     // keep the defaults for it rather than blanking every bar.
     if (c.color[0] != pulleys::MESH_COLOR_UNKNOWN)
         memcpy(barColor, c.color, sizeof(barColor));
-    if (mode != pulleys::SCREEN_COMPONENTS) return;
+    if (mode != pulleys::SCREEN_COMPONENTS && !pulleys::screen_is_extractor(mode)) return;
     Serial.printf("★ components%s (%.3f%%/s):", relayed ? " (relayed)" : "", c.decay / 1000.0f);
     for (uint8_t i = 0; i < pulleys::COMPONENT_DISPLAY_BARS; i++) Serial.printf(" %3u", c.charge[i]);
     Serial.println();
@@ -571,6 +600,76 @@ static void renderComponents(uint32_t now, float dt) {
     if (pulleys::component_display_stale(compModel, now) && ((now / 500) & 1))
         leds[barLed(pulleys::COMPONENT_DISPLAY_WIDTH - 1, 0)] = CRGB(60, 0, 0);
 }
+
+// ── Display: extractor ────────────────────────────────────────────────────────
+// One colour's score, poured: the strip hanging below fills from its far end
+// up, then the 64×8 ring fills from the bottom, every pixel between off and
+// the full colour. The surface bobs while it is in the strip and becomes waves
+// round the ring; pulleys_extractor has the liquid and the wiring.
+//
+// The score is the charge of the major component wearing this colour, as the
+// arbiter publishes it for the component bars: pulls add to it, and it drains
+// at the game's rate. 'c<bar> <percent>' on serial drives it on the bench.
+//
+// Which way the surface is mounted: ring row 0 is the bottom, and the strip's
+// first LED is its top (nearest the ring). Flip either if it fills the wrong way.
+#if SCREEN_EXTRACTOR_BUILD
+#ifndef EXTRACTOR_REVERSE_Y
+  #define EXTRACTOR_REVERSE_Y 0
+#endif
+#ifndef EXTRACTOR_STRIP_REVERSE
+  #define EXTRACTOR_STRIP_REVERSE 0
+#endif
+// Of 255. A full extractor is 512 panel pixels lit in one colour, potted in
+// plastic like every other panel: this is a heat budget as much as a look.
+#ifndef EXTRACTOR_BRIGHTNESS
+  #define EXTRACTOR_BRIGHTNESS 60
+#endif
+
+static pulleys::ExtractorLiquid liquid;
+
+// This colour's score, 0..1: the major that wears it today. None does (the
+// arbiter has moved the colour off every major) → empty.
+static float extractorScore(uint8_t color, uint32_t now) {
+    for (uint8_t bar = 0; bar < pulleys::COMPONENT_DISPLAY_BARS; bar++)
+        if (barColor[bar] == color) return pulleys::component_display_target(compModel, bar, now);
+    return 0.0f;
+}
+
+// The colour at `cover` of a pixel. Squared, so a half-covered edge looks half
+// as bright rather than nearly full.
+static inline CRGB liquidPixel(CRGB c, float cover) {
+    c.nscale8(dim8_raw((uint8_t)(cover * 255.0f)));
+    return c;
+}
+
+static void renderExtractor(uint32_t now, float dt) {
+    const uint16_t S = EXTRACTOR_STRIP_LEDS;
+    uint8_t color = mode - pulleys::SCREEN_EXTRACTOR_RED;
+    pulleys::extractor_step(liquid, extractorScore(color, now), dt);
+
+    CRGB full = pulleys::color_rgb(color);
+    full.nscale8(EXTRACTOR_BRIGHTNESS);
+
+    float s = pulleys::extractor_strip_surface(liquid, S);
+    for (uint16_t i = 0; i < S; i++)
+        leds[pulleys::extractor_strip_index(i, S, EXTRACTOR_STRIP_REVERSE)] =
+            liquidPixel(full, pulleys::extractor_cover(s, i));
+
+    for (uint8_t x = 0; x < pulleys::EXTRACTOR_RING_W; x++) {
+        float r = pulleys::extractor_ring_surface(liquid, S, x);
+        for (uint8_t y = 0; y < pulleys::EXTRACTOR_RING_H; y++)
+            leds[pulleys::extractor_ring_index(x, y, EXTRACTOR_REVERSE_Y)] =
+                liquidPixel(full, pulleys::extractor_cover(r, (float)(S + y)));
+    }
+
+    // Arbiter silent: blink the ring's top-left pixel a dim white -- not red,
+    // which is one of the colours an extractor pours.
+    if (pulleys::component_display_stale(compModel, now) && ((now / 500) & 1))
+        leds[pulleys::extractor_ring_index(0, pulleys::EXTRACTOR_RING_H - 1,
+                                           EXTRACTOR_REVERSE_Y)] = CRGB(30, 30, 30);
+}
+#endif
 
 // ── Serial console — inject fake events to test the display standalone ────────
 //   e<ch>  simulate one detection on that channel
@@ -642,7 +741,13 @@ static void handleSerial() {
                               pulleys::screen_display_name(mode));
             } else if (buf[0] == 'm') {
                 // Bench override only -- does not touch the stored boot mode.
-                mode = (mode + 1) % pulleys::SCREEN_DISPLAY_COUNT;
+                // Steps within what this build's surface can draw: the five
+                // extractor colours, or every display before them.
+                if (SCREEN_EXTRACTOR_BUILD)
+                    mode = pulleys::SCREEN_EXTRACTOR_RED +
+                           (mode - pulleys::SCREEN_EXTRACTOR_RED + 1) % pulleys::SCREEN_EXTRACTOR_COUNT;
+                else
+                    mode = (mode + 1) % pulleys::SCREEN_EXTRACTOR_RED;
                 pulleys::census_set_detail(pulleys::screen_display_name(mode));
                 // 'm' reaches every display, ALLON included -- unlike the boot
                 // cycle, which stops short of it.
@@ -732,6 +837,9 @@ void loop() {
         else if (mode == pulleys::SCREEN_ALLON)   renderAllOn(dt, pulleys::mesh_now_secs());
         else if (mode == pulleys::SCREEN_WAVE)    renderWave(dt);
         else if (mode == pulleys::SCREEN_COMPONENTS) renderComponents(now, dt);
+#if SCREEN_EXTRACTOR_BUILD
+        else if (pulleys::screen_is_extractor(mode)) renderExtractor(now, dt);
+#endif
         else                                      renderRanking(dt, pulleys::mesh_now_secs());
 
         FastLED.show();
