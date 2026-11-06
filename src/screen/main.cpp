@@ -14,6 +14,7 @@
 #include <pulleys_census.h>
 #include <pulleys_component_display.h>
 #include <pulleys_extractor.h>
+#include <pulleys_diorama.h>
 #include "font5x7.h"
 
 // ── Screen — activity display for the sensor mesh ─────────────────────────────
@@ -34,6 +35,9 @@
 //   EXTRACTOR — one colour's score as liquid: a hanging strip, then a 64×8
 //             ring, filling bottom to top with a sloshing surface. Five of
 //             them, one per colour but purple, on their own LED surface
+//   DIORAMA   — a strip of failing hospital fluorescents, dark until the game
+//             says so; it also unlatches the diorama's door and turns to
+//             rainbow when someone opens it. One board, built for it
 //
 // Every display runs on the same board and hears the same mesh: every sensor
 // event, the arbiter's palette, its component charges. Which one draws is the
@@ -59,11 +63,28 @@
 // COMPONENTS address the whole 8×32 matrix; WAVE addresses a 29-LED 14×2 panel. Mixing
 // them would walk off the end of leds[], so an env that pins one display gets
 // checked against its own LED_COUNT here rather than at run time.
+// A diorama build ([env:screen_diorama]) is marked by DIORAMA_LEDS, and is
+// pinned to DIORAMA: its strip is the only LED surface it has.
+#ifdef DIORAMA_LEDS
+  #define SCREEN_DIORAMA_BUILD 1
+  #ifndef SCREEN_FORCE_DISPLAY
+    #error "a diorama build pins its display: -D SCREEN_FORCE_DISPLAY=pulleys::SCREEN_DIORAMA"
+  #endif
+static_assert(SCREEN_FORCE_DISPLAY == pulleys::SCREEN_DIORAMA,
+              "DIORAMA_LEDS is set, so this build is the diorama and nothing else");
+static_assert(LED_COUNT >= DIORAMA_LEDS, "LED_COUNT has to cover the diorama strip");
+#else
+  #define SCREEN_DIORAMA_BUILD 0
+#endif
+
 #ifdef SCREEN_FORCE_DISPLAY
+static_assert(SCREEN_FORCE_DISPLAY != pulleys::SCREEN_DIORAMA || SCREEN_DIORAMA_BUILD,
+              "the diorama display needs DIORAMA_LEDS: build [env:screen_diorama]");
 static_assert(SCREEN_FORCE_DISPLAY != pulleys::SCREEN_WAVE ||
               LED_COUNT >= pulleys::PANEL_14X2_LEDS,
               "the wave display needs at least 29 LEDs (14, skip 1, 14)");
 static_assert(SCREEN_FORCE_DISPLAY == pulleys::SCREEN_WAVE ||
+              SCREEN_FORCE_DISPLAY == pulleys::SCREEN_DIORAMA ||
               LED_COUNT >= 256,
               "the matrix displays need the whole 8x32 (256 LEDs)");
 #else
@@ -671,6 +692,152 @@ static void renderExtractor(uint32_t now, float dt) {
 }
 #endif
 
+// ── Display: diorama ──────────────────────────────────────────────────────────
+// A strip of fluorescent tubes in a cold, painful blue-green white: 8 pixels
+// lit, 3 dark, over and over (pulleys_diorama has the tubes and their
+// flicker). Dark for most of the game. The arbiter's game fires
+// game_diorama_on when game 1 is won; DIORAMA_ON_DELAY_MS later the tubes
+// strike up and the door unlatches. game_diorama_off -- game 2 won, or the game
+// back at its start -- puts them out and latches the door again.
+//
+// The door has a switch on an input with a pull-up. While the lights are on,
+// opening the door turns every tube to a running rainbow for
+// DIORAMA_RAINBOW_MS, then the room jolts back to its flicker.
+//
+// The latch is a solid-state relay on an output. DIORAMA_LATCH_UNLOCK is the
+// level that releases the door: HIGH for a fail-secure strike (power opens
+// it), LOW for a maglock (power holds it). It is driven to the locked level as
+// the very first thing on boot, and held unlocked for as long as the lights
+// are on. DIORAMA_DOOR_OPEN is the level the input reads with the door open:
+// HIGH for a switch that closes to ground when the door is shut.
+#if SCREEN_DIORAMA_BUILD
+#ifndef DIORAMA_LATCH_PIN
+  #define DIORAMA_LATCH_PIN    26
+#endif
+#ifndef DIORAMA_DOOR_PIN
+  #define DIORAMA_DOOR_PIN     27
+#endif
+#ifndef DIORAMA_LATCH_UNLOCK
+  #define DIORAMA_LATCH_UNLOCK HIGH
+#endif
+#ifndef DIORAMA_DOOR_OPEN
+  #define DIORAMA_DOOR_OPEN    HIGH
+#endif
+#ifndef DIORAMA_ON_DELAY_MS
+  #define DIORAMA_ON_DELAY_MS  10000   // after game 1 is won
+#endif
+#ifndef DIORAMA_RAINBOW_MS
+  #define DIORAMA_RAINBOW_MS   2000
+#endif
+#ifndef DIORAMA_BRIGHTNESS
+  #define DIORAMA_BRIGHTNESS   180     // of 255
+#endif
+#define DIORAMA_DEBOUNCE_MS    40
+#define DIORAMA_TUBE_END       180     // a tube's end pixels, of its middle: dim cathodes
+#define DIORAMA_LATCH_LOCK     (DIORAMA_LATCH_UNLOCK == HIGH ? LOW : HIGH)
+
+static pulleys::DioramaLights diorama;
+static CRGB     dioramaTint     = CRGB(150, 255, 215);   // 't r,g,b' on serial to tune
+static bool     dioramaPending  = false;   // heard "on", waiting out the delay
+static uint32_t dioramaOnAt     = 0;
+static uint32_t rainbowUntil    = 0;       // 0 = not showing it
+static bool     doorOpen        = false;   // debounced
+static bool     doorRaw         = false;
+static uint32_t doorRawSince    = 0;
+
+static void dioramaLatch(bool unlocked) {
+    digitalWrite(DIORAMA_LATCH_PIN, unlocked ? DIORAMA_LATCH_UNLOCK : DIORAMA_LATCH_LOCK);
+}
+
+static void dioramaOn() {
+    dioramaPending = false;
+    if (diorama.on) return;
+    pulleys::diorama_switch(diorama, true);
+    dioramaLatch(true);
+    Serial.println("  [DIORAMA] ON: lights striking, door unlatched");
+}
+
+static void dioramaOff() {
+    bool was = diorama.on || dioramaPending;
+    dioramaPending = false;
+    rainbowUntil   = 0;
+    pulleys::diorama_switch(diorama, false);
+    dioramaLatch(false);
+    if (was) Serial.println("  [DIORAMA] OFF: lights out, door latched");
+}
+
+// Repeats of a cue (the burst, relays) are deduped by the mesh, and a second
+// "on" while already on or waiting changes nothing.
+static void onMeshCue(const pulleys::MeshCue& c, bool /*relayed*/) {
+    if (strcmp(c.name, "game_diorama_on") == 0) {
+        if (diorama.on || dioramaPending) return;
+        dioramaPending = true;
+        dioramaOnAt    = millis() + DIORAMA_ON_DELAY_MS;
+        Serial.printf("  [DIORAMA] on in %lus\n", (unsigned long)(DIORAMA_ON_DELAY_MS / 1000));
+    } else if (strcmp(c.name, "game_diorama_off") == 0) {
+        dioramaOff();
+    }
+}
+
+static void dioramaDoorOpened(uint32_t now) {
+    if (!diorama.on) return;   // latched: nobody should be in there
+    rainbowUntil = (now + DIORAMA_RAINBOW_MS) | 1;
+}
+
+static void dioramaInit() {
+    pulleys::diorama_init(diorama, pulleys::diorama_tubes_for(DIORAMA_LEDS), esp_random());
+    pinMode(DIORAMA_DOOR_PIN, INPUT_PULLUP);
+    doorRaw = doorOpen = digitalRead(DIORAMA_DOOR_PIN) == DIORAMA_DOOR_OPEN;
+    doorRawSince = millis();
+    pulleys::mesh_on_cue(onMeshCue);
+    Serial.printf("  [DIORAMA] %u tubes on %u LEDs; latch GPIO %d, door GPIO %d (%s)\n",
+                  diorama.tubes, DIORAMA_LEDS, DIORAMA_LATCH_PIN, DIORAMA_DOOR_PIN,
+                  doorOpen ? "open" : "shut");
+}
+
+// Every loop, not every frame: the door and the delay should not wait on the LEDs.
+static void dioramaPoll(uint32_t now) {
+    if (dioramaPending && (int32_t)(now - dioramaOnAt) >= 0) dioramaOn();
+
+    bool raw = digitalRead(DIORAMA_DOOR_PIN) == DIORAMA_DOOR_OPEN;
+    if (raw != doorRaw) { doorRaw = raw; doorRawSince = now; }
+    if (doorRaw != doorOpen && now - doorRawSince >= DIORAMA_DEBOUNCE_MS) {
+        doorOpen = doorRaw;
+        Serial.printf("  [DIORAMA] door %s\n", doorOpen ? "opened" : "shut");
+        if (doorOpen) dioramaDoorOpened(now);
+    }
+}
+
+static void renderDiorama(uint32_t now, float dt) {
+    fill_solid(leds, LED_COUNT, CRGB::Black);   // the gaps between fixtures
+    bool rainbow = rainbowUntil && (int32_t)(rainbowUntil - now) > 0;
+    if (rainbowUntil && !rainbow) {
+        rainbowUntil = 0;
+        pulleys::diorama_jolt(diorama);   // and back to the flicker, with a shudder
+    }
+    pulleys::diorama_step(diorama, dt);
+
+    uint8_t hue0 = (uint8_t)(now / 4);   // a full turn of the wheel each second
+    for (uint8_t i = 0; i < diorama.tubes; i++) {
+        uint16_t p0 = pulleys::diorama_tube_start(i);
+        float level = diorama.tube[i].level;
+        if (!rainbow && level <= 0.0f) continue;
+        for (uint8_t k = 0; k < pulleys::DIORAMA_TUBE_PX && p0 + k < DIORAMA_LEDS; k++) {
+            uint16_t p = p0 + k;
+            CRGB c;
+            if (rainbow) {
+                c = CHSV(hue0 + p * 6, 255, DIORAMA_BRIGHTNESS);
+            } else {
+                c = dioramaTint;
+                c.nscale8((uint8_t)(level * DIORAMA_BRIGHTNESS));
+                if (k == 0 || k == pulleys::DIORAMA_TUBE_PX - 1) c.nscale8(DIORAMA_TUBE_END);
+            }
+            leds[p] = c;
+        }
+    }
+}
+#endif
+
 // ── Serial console — inject fake events to test the display standalone ────────
 //   e<ch>  simulate one detection on that channel
 //   c<bar> <percent>  set a component bar as if the arbiter had sent it
@@ -680,6 +847,9 @@ static void renderExtractor(uint32_t now, float dt) {
 //   w      flip the 14×2 panel's row direction, for matching the wiring
 //   h<c>,<s>  set the wave's centre hue and its swing (0-255), for finding the
 //             arc on the bench before writing it into WaveParams
+//   d      diorama: lights on (at once, no delay) / off, as the game's cues do
+//   o      diorama: act as if the door had just been opened
+//   t<r>,<g>,<b>  diorama: set the tubes' tint, for finding it on the bench
 static void handleSerial() {
     static char buf[96];
     static uint8_t len = 0;
@@ -729,6 +899,19 @@ static void handleSerial() {
                 Serial.printf("  wave hue: centre=%u swing=±%u "
                               "(put an arc you like in WaveParams)\n",
                               waveCfg.centerHue, waveCfg.hueSwing);
+#if SCREEN_DIORAMA_BUILD
+            } else if (buf[0] == 'd') {
+                if (diorama.on || dioramaPending) dioramaOff(); else dioramaOn();
+            } else if (buf[0] == 'o') {
+                if (diorama.on) dioramaDoorOpened(millis());
+                else Serial.println("  [DIORAMA] lights are off: the door does nothing ('d' first)");
+            } else if (buf[0] == 't') {
+                int r, g, b;
+                if (sscanf(buf + 1, "%d,%d,%d", &r, &g, &b) == 3)
+                    dioramaTint = CRGB(constrain(r, 0, 255), constrain(g, 0, 255), constrain(b, 0, 255));
+                Serial.printf("  diorama tint: %u,%u,%u (put one you like in dioramaTint)\n",
+                              dioramaTint.r, dioramaTint.g, dioramaTint.b);
+#endif
             } else if (buf[0] == 'w') {
                 wavePanel.serpentine = !wavePanel.serpentine;
                 Serial.printf("  14x2 rows: %s (set PANEL_14X2_SERPENTINE to keep it)\n",
@@ -765,6 +948,12 @@ static void handleSerial() {
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 void setup() {
+#if SCREEN_DIORAMA_BUILD
+    // The door stays latched from the first instruction: before the serial
+    // wait below, before the radio, before anything that could crash.
+    pinMode(DIORAMA_LATCH_PIN, OUTPUT);
+    digitalWrite(DIORAMA_LATCH_PIN, DIORAMA_LATCH_LOCK);
+#endif
     Serial.begin(115200);
     delay(1000);
 
@@ -793,6 +982,9 @@ void setup() {
     loadDisplayMode();
     if      (mode == pulleys::SCREEN_ALLON) allOnInit();
     else if (mode == pulleys::SCREEN_WAVE)  waveInit();
+#if SCREEN_DIORAMA_BUILD
+    dioramaInit();
+#endif
     pulleys::census_set_detail(pulleys::screen_display_name(mode));
     Serial.printf("  display=%s (%s)\n", pulleys::screen_display_name(mode),
                   forcedByBuild ? "built in — reflash to change it"
@@ -821,6 +1013,9 @@ void loop() {
     }
 
     handleSerial();
+#if SCREEN_DIORAMA_BUILD
+    dioramaPoll(now);
+#endif
 
     // No dwell timer: the mode was chosen at boot and holds until the next
     // power cycle. 'm' on serial still flips it for bench testing.
@@ -839,6 +1034,9 @@ void loop() {
         else if (mode == pulleys::SCREEN_COMPONENTS) renderComponents(now, dt);
 #if SCREEN_EXTRACTOR_BUILD
         else if (pulleys::screen_is_extractor(mode)) renderExtractor(now, dt);
+#endif
+#if SCREEN_DIORAMA_BUILD
+        else if (mode == pulleys::SCREEN_DIORAMA) renderDiorama(now, dt);
 #endif
         else                                      renderRanking(dt, pulleys::mesh_now_secs());
 

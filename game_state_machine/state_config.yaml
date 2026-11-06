@@ -118,6 +118,8 @@ cues:
     - game_randomize_simon_3_goals
     - game_randomize_simon_4_goals
     - game_randomize_simon_5_goals
+    - game_diorama_on               # the diorama lights up 10 s later and unlatches its door
+    - game_diorama_off              # lights out, door latched
   audio_loop:
     - audio_loop_idle
     - audio_loop_off
@@ -241,6 +243,7 @@ states:
     on:
       enter:
         cue:
+          - game_diorama_off          # the game is back at its start
           - audio_loop_idle
           - video_loop_idle
       nongoal_component_activated:
@@ -348,6 +351,7 @@ states:
     on:
       enter:
         cue:
+          - game_diorama_on           # game 1 won: the diorama comes on 10 s from now
           - choose_one:
               - video_once_janis_progress_confirmation_congrats_1
               - video_once_janis_progress_confirmation_congrats_2
@@ -389,6 +393,7 @@ states:
     on:
       enter:
         cue:
+          - game_diorama_off
           - video_once_test2        # placeholder
     after:
       delay: 2m                    # placeholder

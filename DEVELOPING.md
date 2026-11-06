@@ -10,6 +10,7 @@
 | **Bridge** | any ESP32-C3 (4MB, native USB) | none | USB to its Pi (or UART1, GPIO 21 TX / 20 RX, with `BRIDGE_PI_USB=0`); the Overlord's hosts the firmware AP |
 | **Component state display** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | a Screen running its `components` display: one bar per game component |
 | **Extractor** | D1 Mini ESP32-WROOM-32 | two 32×8 panels as a 64×8 ring + a hanging strip, one chain (GPIO 16) | a Screen running an `extractor_<colour>` display: that colour's score as liquid |
+| **Diorama** | D1 Mini ESP32-WROOM-32 | LED strip (GPIO 16), door-latch SSR (GPIO 26), door switch with pull-up (GPIO 27) | a Screen running its `diorama` display: fluorescent tubes, the door latch and sensor |
 
 ## Build Environments
 
@@ -21,6 +22,7 @@
 | `bridge` | ESP32-C3 (`seeed_xiao_esp32c3`) | mesh → Pi serial bridge, default env, always a C3 |
 | `component_state_display` | D1 Mini ESP32-WROOM-32 | the screen image pinned to its COMPONENTS display, default env |
 | `screen_extractor` | D1 Mini ESP32-WROOM-32 | the screen image on the extractor surface (ring + strip), default env |
+| `screen_diorama` | D1 Mini ESP32-WROOM-32 | the screen image pinned to DIORAMA, on its strip, latch and door switch, default env |
 
 ```sh
 pio run                      # build traveler + station (defaults)
@@ -44,7 +46,7 @@ python3 tools/release_firmware.py
 ```
 
 This builds `sensor`, `screen`, `component_state_display`, `screen_extractor`,
-`arbiter_mesh`, and `bridge`, then creates the next minor GitHub Release with the images and
+`screen_diorama`, `arbiter_mesh`, and `bridge`, then creates the next minor GitHub Release with the images and
 `manifest.json`. Use `--build-only` to create local assets only. `./flash_all.sh
 --ota` is retired; managed updates are initiated by restarting the Overlord.
 
@@ -343,3 +345,33 @@ with `EXTRACTOR_STRIP_LEDS` (and `LED_COUNT` = 512 + it) in `platformio.ini`;
 flip `EXTRACTOR_REVERSE_Y` / `EXTRACTOR_STRIP_REVERSE` if either fills the wrong
 way. The liquid maths and wiring are `lib/pulleys_extractor`; the render is
 `renderExtractor` in `src/screen/main.cpp`.
+
+## Diorama
+
+One board: a Screen built as `screen_diorama`, with an LED strip, a solid-state
+relay on the door latch and a switch on the door. The strip is cut, in light,
+into fluorescent tubes -- 8 pixels lit (5 in at 60/m), 3 dark (2 in) -- in a
+cold blue-green white. Each tube strikes up with a stutter, hums, and drops out
+now and then; one is the bad tube and flickers far more. The tube model is
+`lib/pulleys_diorama`; the board side is the DIORAMA section of
+`src/screen/main.cpp`.
+
+The game drives it with two cues (`state_config.yaml`, group `game`):
+
+- `game_diorama_on`, fired on entering `party` (game 1 won). The diorama waits
+  `DIORAMA_ON_DELAY_MS` (10 s), then the tubes come on and the door unlatches.
+- `game_diorama_off`, fired on entering `victory2` (game 2 won) and `passive`
+  (the game back at its start, including a reboot or a newly posted game).
+  Lights out, door latched.
+
+Opening the door while the lights are on turns the tubes to a running rainbow
+for 2 s, then they shudder back to their flicker. The latch is driven locked
+from the first line of `setup()` and stays unlocked for as long as the lights
+are on.
+
+Wiring and polarity are build flags in `[env:screen_diorama]`: `DIORAMA_LEDS`
+(and `LED_COUNT`), `DIORAMA_LATCH_PIN` / `DIORAMA_DOOR_PIN`,
+`DIORAMA_LATCH_UNLOCK` (HIGH: power opens it, a strike; LOW: power holds it, a
+maglock) and `DIORAMA_DOOR_OPEN` (HIGH: the switch closes to ground when the
+door is shut). On the console, `d` switches the lights on (no delay) or off, `o`
+acts as if the door opened, and `t r,g,b` tunes the tint live.

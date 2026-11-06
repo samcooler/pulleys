@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ENVS = ("sensor", "screen", "component_state_display", "screen_extractor", "arbiter_mesh", "bridge")
+ENVS = ("sensor", "screen", "component_state_display", "screen_extractor", "screen_diorama", "arbiter_mesh", "bridge")
 PIO = os.environ.get("PLATFORMIO_CMD") or shutil.which("pio") or str(Path.home() / ".platformio/penv/bin/pio")
 
 
