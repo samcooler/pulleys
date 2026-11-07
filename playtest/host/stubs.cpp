@@ -39,7 +39,10 @@ bool mesh_send_flood(uint8_t msgType, const void* body, uint8_t len, uint8_t, ui
     if (msgType == MESH_MSG_GAME_INFO) printf("info %.*s\n", (int)len, (const char*)body);
     return true;
 }
-void mesh_send_components(const uint8_t*, const uint8_t*, uint16_t, bool) {}
+void mesh_send_components(const uint8_t*, const uint8_t*, uint16_t, bool, uint8_t goals) {
+    static int last = -1;   // the goal marks the displays would show, when they change
+    if (goals != last) { printf("marks %u\n", goals); last = goals; }
+}
 }  // namespace pulleys
 
 void stubs_reset(uint32_t seed) {

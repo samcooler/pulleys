@@ -32,7 +32,7 @@ GAP = 40.0
 FUN_WEIGHTS = {
     "dwell": 1.0,       # per doubling of minutes stayed: log2(1 + minutes)
     "progress": 1.0,    # how far through the game they got, 0-1
-    "advances": 0.6,    # rounds won, up to 4, scaled 0-1
+    "advances": 0.6,    # rounds won (not counting starting the game), up to 4, scaled 0-1
     "sustain": 0.0,     # late pull rate vs early, 0-1. Off: a party or victory
                         # needs no pulling, so the best sessions slow down at
                         # the end, and in simulation this ran against fun.
@@ -78,10 +78,14 @@ class GameShape:
         if milestones:
             self.depth = {s: (i + 1) / len(milestones) for i, s in enumerate(milestones)}
 
+    def is_start(self, prev, name):
+        """Getting the game going: an event's move out of the start state."""
+        return prev == self.start and (prev, name) in self.win_edges
+
     def is_win(self, prev, name):
-        """A move the players earned: an event's goto, out of the start state
-        or onward. Leaving the start state counts as getting the game going."""
-        return (prev, name) in self.win_edges and (prev, name) not in self.timeout_edges
+        """A round won: an event's move onward from anywhere but the start."""
+        return ((prev, name) in self.win_edges and (prev, name) not in self.timeout_edges
+                and prev != self.start)
 
     def is_timeout(self, prev, name):
         return (prev, name) in self.timeout_edges and (prev, name) not in self.win_edges
@@ -133,12 +137,15 @@ def session_metrics(sess, shape, context=None):
             state = r["name"]
     depth = shape.depth.get(state, 0.0) if state else 0.0
     wins = timeouts = 0
+    started = False
     last_timeout = None
     states = []
     for r in recs:
         if r["kind"] == "state" and r["t"] <= b + 1:
             prev = r.get("prev") or state
-            if shape.is_win(prev, r["name"]):
+            if shape.is_start(prev, r["name"]):
+                started = True
+            elif shape.is_win(prev, r["name"]):
                 wins += 1
             elif shape.is_timeout(prev, r["name"]):
                 timeouts += 1
@@ -165,6 +172,7 @@ def session_metrics(sess, shape, context=None):
         "nongoal_share": cls.get("nongoal", 0) / n if n else 0.0,
         "final_share": cls.get("final", 0) / n if n else 0.0,
         "progress": depth,
+        "started": started or depth > 0,
         "wins": wins,
         "timeouts": timeouts,
         "sustain": sustain,

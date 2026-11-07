@@ -75,6 +75,9 @@ class Python:
         out, self.cues = self.cues, []
         return out
 
+    def marks(self):
+        return self.e.goal_marks()
+
 
 class Cpp:
     """The arbiter's engine, built for this computer, over a pipe."""
@@ -83,10 +86,12 @@ class Cpp:
     def __init__(self, binary):
         self.p = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         self.cues = []
+        self.last_marks = 0
 
     def close(self):
         self.p.stdin.close()
         self.p.wait(timeout=5)
+        self.p.stdout.close()
 
     def _do(self, line):
         self.p.stdin.write(line + "\n")
@@ -101,6 +106,8 @@ class Cpp:
                 return out
             if got.startswith("cue "):
                 self.cues.append(got.split()[1])
+            elif got.startswith("marks "):
+                self.last_marks = int(got.split()[1])
             elif got.startswith("err "):
                 raise AssertionError(got)
             out.append(got)
@@ -131,16 +138,24 @@ class Cpp:
         out, self.cues = self.cues, []
         return out
 
+    def marks(self):
+        return self.last_marks
+
 
 def chan(color):
     """A rope channel wearing `color` in the default palette."""
     return 1 + COLORS.index(color)
 
 
-def burst(E, ch, n=6):
+def burst(E, ch, n=6, until_moved=False):
+    """n quick pulls on one rope; with until_moved, stop once the game moves on
+    (leftover pulls would light that colour in the next round)."""
+    before = E.state() if until_moved else None
     for _ in range(n):
         E.pull(ch)
         E.wait(0.05)
+        if until_moved and E.state() != before:
+            return
 
 
 # ── Scenarios: each returns what it saw ─────────────────────────────────────────
@@ -274,12 +289,19 @@ SC_PARAMS = (mini({
 def sc_production(E):
     """The installation's game, start to finish and round again."""
     seen = []
-    burst(E, chan("red"))
+    for _ in range(10):                          # pull until it starts, and no more
+        E.pull(chan("red"))
+        E.wait(0.05)
+        if E.state() != "passive":
+            break
     seen.append(E.state())
+    goals = E.goals()
+    seen.append(E.marks() == sum(1 << i for i, c in enumerate(spec.GAME1_COLORS) if c in goals))
     for _ in range(3):                           # easy, medium, hard
         for c in E.goals():
-            burst(E, chan(c))
+            burst(E, chan(c), until_moved=True)
         seen.append(E.state())
+    seen.append(E.marks())                       # the party shows no goals
     E.wait(11)                                   # 10 s into the party the diorama opens
     E.take_cues()
     E.input("diorama.button_pressed")            # "free the spirits": refused
@@ -291,12 +313,16 @@ def sc_production(E):
     seen.append(E.state())
     E.wait(121 + 121)                            # victory, kickout
     seen.append(E.state())
-    burst(E, chan("red"))                        # all five were goals: it must still start
+    for _ in range(10):                          # the last goals still dealt: it must still start
+        E.pull(chan("red"))
+        E.wait(0.05)
+        if E.state() != "passive":
+            break
     seen.append(E.state())
     return seen
 
 SC_PRODUCTION = (None, sc_production,
-                 ["easy_round", "medium_round", "hard_round", "party",
+                 ["easy_round", True, "medium_round", "hard_round", "party", 0,
                   ["audio_once_spirits_denied", "video_once_janis_beg_button"],
                   "final", "victory2", "passive", "easy_round"])
 

@@ -255,7 +255,12 @@ struct __attribute__((packed)) MeshComponents {
     // that predates it stops at charge[]; the receiver fills this with
     // MESH_COLOR_UNKNOWN.
     uint8_t  color[MESH_COMPONENT_COUNT];
-};  // 27 bytes
+    // Appended: which components are goals right now, bit i = component i --
+    // set only while a round is on, so a display can mark the colours wanted
+    // (an extractor outlines its tank). A packet from an arbiter that predates
+    // it, or relayed by a node that does, stops short; the receiver reads 0.
+    uint8_t  goals;
+};  // 28 bytes
 static constexpr size_t  MESH_COMPONENTS_V1_SIZE = offsetof(MeshComponents, color);
 static constexpr uint8_t MESH_COLOR_UNKNOWN      = 0xFF;
 
@@ -660,6 +665,7 @@ static void onRecv(const uint8_t* /*mac*/, const uint8_t* data, int len) {
         if (ch != st.compTail) {
             MeshComponents& slot = st.compRx[st.compHead];
             memset(slot.color, MESH_COLOR_UNKNOWN, sizeof(slot.color));
+            slot.goals = 0;
             memcpy(&slot, data, len < (int)sizeof(MeshComponents) ? (size_t)len : sizeof(MeshComponents));
             st.compHead = ch;
         }
@@ -878,7 +884,7 @@ inline void mesh_on_components(MeshComponentsCb cb) { _mesh::S().componentsCb = 
 
 inline void mesh_send_components(const uint8_t charge[MESH_COMPONENT_COUNT],
                                  const uint8_t color[MESH_COMPONENT_COUNT],
-                                 uint16_t decay, bool urgent) {
+                                 uint16_t decay, bool urgent, uint8_t goals = 0) {
     MeshComponents c = {};
     c.magic0     = 'P';
     c.magic1     = 'M';
@@ -891,6 +897,7 @@ inline void mesh_send_components(const uint8_t charge[MESH_COMPONENT_COUNT],
     c.decay      = decay;
     memcpy(c.charge, charge, MESH_COMPONENT_COUNT);
     memcpy(c.color,  color,  MESH_COMPONENT_COUNT);
+    c.goals      = goals;
 
     _mesh::markSeen(_mesh::keyOf(c.originId, c.seq));   // don't relay our own echo
     _mesh::enqueueComponents(c, urgent ? 3 : 1, 80, 0);

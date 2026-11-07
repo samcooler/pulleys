@@ -34,6 +34,8 @@ static Component s_major[MAJOR_COUNT];
 static Component s_final[pulleys::CHANNEL_COUNT];   // by channel; only purple ones are used
 static uint8_t s_goalMask = 0; // major component bitset; zero until the first Simon cue
 
+static void publish(bool urgent);
+
 // Bring the charge up to `now`. Drains at whatever the rate is today, so a game
 // posted with a new rate takes over from the charge as it stands.
 static void settle(Component& c, uint32_t now) {
@@ -109,6 +111,7 @@ static void randomizeGoals(uint8_t count) {
     uint8_t poolCount = filteredCount ? filteredCount : choiceCount;
     s_goalMask = pool[(uint8_t)random(poolCount)];
     gamestate_note_goals(s_goalMask);
+    publish(true);   // the extractors' outlines move with the goals
 }
 
 void components_deal_goals(uint8_t count) {
@@ -156,8 +159,11 @@ static void publish(bool urgent) {
         bar++;
     }
     uint32_t decay = (uint32_t)(gamestate_decay_rate() * 1000.0f + 0.5f);   // thousandths of a percent per second
-    pulleys::mesh_send_components(charge, color, decay > 65535 ? 65535 : (uint16_t)decay, urgent);
+    uint8_t goals = gamestate_goals_visible() ? s_goalMask : 0;
+    pulleys::mesh_send_components(charge, color, decay > 65535 ? 65535 : (uint16_t)decay, urgent, goals);
 }
+
+void components_publish() { publish(true); }
 
 static void resetAll() {
     memset(s_major, 0, sizeof(s_major));

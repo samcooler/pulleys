@@ -9,9 +9,9 @@
 | **Station (WROOM)** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | hardware FPU, CH340 USB-serial |
 | **Bridge** | any ESP32-C3 (4MB, native USB) | none | USB to its Pi (or UART1, GPIO 21 TX / 20 RX, with `BRIDGE_PI_USB=0`); the Overlord's hosts the firmware AP |
 | **Component state display** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | a Screen running its `components` display: one bar per game component |
-| **Extractor** | D1 Mini ESP32-WROOM-32 | two 32×8 panels as a 64×8 ring + a hanging strip, one chain (GPIO 16) | a Screen running an `extractor_<colour>` display: that colour's score as liquid |
+| **Extractor** | D1 Mini ESP32-WROOM-32 | two 32×8 panels as a 64×8 ring + a hanging strip, one chain (GPIO 16) | a Screen running an `extractor_<colour>` display: that colour's score as liquid, filling up the strip into the tank; the ring's top and bottom rows outlined at half brightness while a round wants its colour |
 | **Party lights** | ESP32 DevKit, 30-pin (classic) | none: four outputs (GPIO 32/33/25/26) to the AC light switches | a Screen running its `party` display: the room's lights, on for the victories |
-| **Diorama** | D1 Mini ESP32-WROOM-32 | LED strip (GPIO 16), door-latch SSR (GPIO 26), door switch with pull-up (GPIO 27), "free the spirits" button to ground (GPIO 25) | a Screen running its `diorama` display: fluorescent tubes, the door latch and sensor, and the button, which flashes the tubes purple and tells the game |
+| **Diorama** | D1 Mini ESP32-WROOM-32 | LED strip (GPIO 16), door-latch SSR (GPIO 15, HIGH unlocks), door switch with pull-up (GPIO 27), "free the spirits" button to ground (GPIO 25) | a Screen running its `diorama` display: fluorescent tubes, the door latch and sensor, and the button, which flashes the tubes purple and tells the game |
 
 ## Build Environments
 
@@ -361,6 +361,14 @@ The score is the charge of the major component wearing that colour, as the
 arbiter publishes it for the component bars (pulls add to it, it drains at the
 game's rate). `c<bar> <percent>` on the console drives it on the bench.
 
+While a round wants the colour, the ring's top and bottom rows are outlined in
+it at half brightness: an empty tank waiting to be filled. The outline stays
+while the colour is a goal, full or not, since a full tank can drain. The
+arbiter sends the goals in the components packet (its `goals` byte), only
+while the state reacts to goal events. `g<mask>` on the console fakes them
+(bit i = component i). Until every board runs firmware with that byte, a
+relay through an older node drops it and the outline goes out.
+
 Built with `screen_extractor`; it runs only the extractor displays, and a plain
 8×32 screen refuses them. Pick the colour in `DISPLAY_ASSIGNMENT` with
 `SCREEN_EXTRACTOR_RED` .. `_ORANGE`; an unlisted extractor steps to the next
@@ -369,6 +377,23 @@ with `EXTRACTOR_STRIP_LEDS` (and `LED_COUNT` = 512 + it) in `platformio.ini`;
 flip `EXTRACTOR_REVERSE_Y` / `EXTRACTOR_STRIP_REVERSE` if either fills the wrong
 way. The liquid maths and wiring are `lib/pulleys_extractor`; the render is
 `renderExtractor` in `src/screen/main.cpp`.
+
+## Sensors and rough play
+
+A sensor counts a pull and then ignores its rope for the detector's 1.5 s
+cooldown (`pulleys_detect`), so one rope gives at most one pull every 1.7 s
+or so, however hard it is worked. Game balance (`charge_per_pull`) has to
+assume that pace.
+
+Rough handling makes a rope go dead for a moment. `RoughGuard` reads every IMU
+sample, cooldown included: spun faster than 1000 deg/s, or jerked more than
+2 g from gravity, the rope is overstimulated until it has been under both for
+2.5 s. Meanwhile a detection does not count (no event goes out, `✗ ROUGH` on
+the console) and the handle goes dark at once, idle candle included. The
+limits are guesses: the status line prints `[ROUGH]` with the peak rate and
+acceleration since the last line, `R<dps> <g>` on the console tries others
+until reboot, and `R0` turns the guard off. Put the ones that feel right into
+`RoughConfig`.
 
 ## Diorama
 

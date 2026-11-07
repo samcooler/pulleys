@@ -57,6 +57,7 @@ static uint32_t s_everyAt = 0;
 static const uint8_t MAX_AT = 16;
 static uint16_t s_atDone = 0;
 static uint32_t s_enters = 0;   // bumps on every state entry: "did that just move us?"
+static bool     s_goalsVisible = false;   // the current state reacts to a goal event
 
 static GameTrigger s_log[GAME_LOG_LEN];
 static uint8_t     s_logCount = 0;
@@ -575,6 +576,15 @@ static void enter(const char* name) {
     info("state=%s", s_state);
 
     JsonVariant state = s_doc["states"][name];
+    static const char* const GOAL_EVENTS[] = {
+        "goal_pull", "nongoal_pull", "goal_component_activated",
+        "first_goal_component_activated", "all_components_activated",
+    };
+    s_goalsVisible = false;
+    for (const char* e : GOAL_EVENTS)
+        if (hasKey(state["on"].as<JsonObject>(), e)) s_goalsVisible = true;
+    components_publish();   // the displays' goal marks follow the state at once
+
     JsonVariant after = state["after"];
     if (!after.isNull()) {
         uint32_t ms = DEFAULT_DELAY_MS;
@@ -772,6 +782,7 @@ uint8_t     gamestate_param_count()          { return s_paramCount; }
 const char* gamestate_param_name(uint8_t i)  { return i < s_paramCount ? s_params[i].name : ""; }
 float       gamestate_param_value(uint8_t i) { return i < s_paramCount ? s_params[i].value : 0.0f; }
 
+bool        gamestate_goals_visible() { return s_ready && s_goalsVisible; }
 bool        gamestate_ready()  { return s_ready; }
 const char* gamestate_game()   { return s_game; }
 const char* gamestate_state()  { return s_state; }

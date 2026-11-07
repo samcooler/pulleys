@@ -17,5 +17,5 @@ struct MeshConfigRow { uint16_t id; uint8_t channel; };
 
 bool mesh_send_cue(const char* name, uint8_t flags = 0);
 bool mesh_send_flood(uint8_t msgType, const void* body, uint8_t len, uint8_t copies = 6, uint16_t gapMs = 160);
-void mesh_send_components(const uint8_t* charge, const uint8_t* color, uint16_t decay, bool urgent);
+void mesh_send_components(const uint8_t* charge, const uint8_t* color, uint16_t decay, bool urgent, uint8_t goals = 0);
 }  // namespace pulleys

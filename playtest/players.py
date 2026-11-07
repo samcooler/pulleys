@@ -100,25 +100,26 @@ class Traits:
     stamina: float = 250.0       # pulls before their arm slows them to half
     social: float = 0.5          # how much of the group's lessons they take on
     reaction: float = 0.8        # seconds to act on something they noticed
+    rough: float = 0.05          # chance a yank is rough enough to trip the sensor's guard
 
 
 # ── Who comes in ──────────────────────────────────────────────────────────────
 # (weight, group size range, trait means). Each visitor's traits scatter
 # around their archetype's (lognormal for rates and times).
 ARCHETYPES = {
-    "passerby": (0.35, (1, 2), Traits("passerby", pull_rate=0.8, attention=0.5, curiosity=0.2,
+    "passerby": (0.35, (1, 2), Traits("passerby", rough=0.04, pull_rate=0.8, attention=0.5, curiosity=0.2,
                                       compliance=0.7, learn=0.3, interest0=0.45, boredom=0.006,
                                       budget=90, social=0.3)),
-    "family":   (0.25, (2, 5), Traits("family", pull_rate=1.5, attention=0.6, curiosity=0.5,
+    "family":   (0.25, (2, 5), Traits("family", rough=0.12, pull_rate=1.5, attention=0.6, curiosity=0.5,
                                       compliance=0.6, learn=0.35, interest0=0.8, boredom=0.004,
                                       budget=420, social=0.7)),
-    "solver":   (0.15, (1, 3), Traits("solver", pull_rate=1.0, attention=0.9, curiosity=0.6,
+    "solver":   (0.15, (1, 3), Traits("solver", rough=0.02, pull_rate=1.0, attention=0.9, curiosity=0.6,
                                       compliance=0.8, learn=0.6, interest0=0.9, boredom=0.0035,
                                       budget=600, social=0.6)),
-    "rebel":    (0.10, (2, 4), Traits("rebel", pull_rate=1.6, attention=0.7, curiosity=0.9,
+    "rebel":    (0.10, (2, 4), Traits("rebel", rough=0.2, pull_rate=1.6, attention=0.7, curiosity=0.9,
                                       compliance=0.1, learn=0.4, interest0=0.8, boredom=0.005,
                                       budget=360, social=0.5)),
-    "party":    (0.15, (4, 8), Traits("party", pull_rate=2.0, attention=0.4, curiosity=0.5,
+    "party":    (0.15, (4, 8), Traits("party", rough=0.25, pull_rate=2.0, attention=0.4, curiosity=0.5,
                                       compliance=0.4, learn=0.25, interest0=0.85, boredom=0.005,
                                       budget=300, social=0.8)),
 }
@@ -146,9 +147,10 @@ class Population:
         for name, sigma in _SPREAD.items():
             mean = getattr(base, name) * self.scale.get(name, 1.0)
             vals[name] = mean * math.exp(rng.gauss(0, sigma) - sigma * sigma / 2)
-        for name in ("attention", "curiosity", "compliance", "learn", "interest0", "social"):
+        for name in ("attention", "curiosity", "compliance", "learn", "interest0", "social", "rough"):
             mean = getattr(base, name) * self.scale.get(name, 1.0)
-            vals[name] = min(1.0, max(0.02, rng.gauss(mean, 0.12)))
+            spread = 0.05 if name == "rough" else 0.12
+            vals[name] = min(1.0, max(0.0 if name == "rough" else 0.02, rng.gauss(mean, spread)))
         return replace(base, **vals)
 
     def as_json(self):
@@ -200,7 +202,8 @@ class Visitor:
         m = self.seen_meaning.get(meaning, 0)
         impact = IMPACT.get(meaning, 0.0)
         if meaning == "scold":
-            impact = 0.22 * (0.5 - self.tr.compliance) * 2 if self.tr.compliance < 0.5 else -0.1
+            # Compliant people dislike being told off; rebels enjoy it.
+            impact = 0.44 * (0.5 - self.tr.compliance) if self.tr.compliance < 0.5 else -0.1
         impact *= (0.7 ** n) * (0.9 ** m) * scale
         if n == 0 and meaning not in ("agency", "ambient"):
             impact += 0.08                       # novelty: something they had not seen
@@ -219,7 +222,7 @@ class Visitor:
             meaning, family = p["meaning"], p["family"]
             self.feel(meaning, family, t)
             if meaning in ("praise", "progress", "celebrate"):
-                self._credit(t, +1)
+                self._credit(t)
             if meaning == "celebrate":
                 self.done_bias += 0.5
             if meaning == "nag":
@@ -277,7 +280,7 @@ class Visitor:
         self.belief[PURPLE] = max(self.belief[PURPLE], sure)
         self.feel("reveal", "twist", t)
 
-    def _credit(self, t, sign):
+    def _credit(self, t):
         """A praise lands: colours that lit just before are what was wanted."""
         for color, at in list(self.lit_at.items()):
             if t - at <= self.CREDIT_WINDOW:
@@ -321,15 +324,15 @@ class Visitor:
                 return
 
         self._watch(world)
-        if world.show_goals and self.rng.random() < self.tr.attention * 0.3 * dt:
-            self.goals_shown = world.visible_goals()   # a glance at the display
+        if world.goals_on_display and self.rng.random() < self.tr.attention * 0.5 * dt:
+            self.goals_shown = world.visible_goals()   # a glance at the extractors or the video
         want = self._want(world)
         # Pulling something that seems unwanted: look for another rope, sooner
         # the more curious they are (about every 5-20 s); at once if the game
         # is showing them what it wants.
         switch = 0.05 + 0.15 * self.tr.curiosity
         if self.goals_shown is not None:
-            switch = 0.3 * self.tr.compliance + 0.05
+            switch = 0.6 * self.tr.compliance + 0.1   # the display says this one is not wanted
         # Theirs is lit and wanted: go and light a wanted colour nobody is on.
         if (want > 0.6 and world.lit(self.rope) and world.charge(self.rope) > 60
                 and self.rng.random() < (0.1 + 0.4 * self.tr.attention) * dt):
@@ -341,7 +344,8 @@ class Visitor:
                 self.walk_until = t + self.rng.uniform(1.0, 2.5)
                 return
         if want < 0.35 and self.rng.random() < switch * dt:
-            new = world.pick_rope(self)
+            new = (world.rope_needing(self) if self.goals_shown is not None else None) \
+                or world.pick_rope(self)
             if new is not None and new != self.rope:
                 world.release(self.rope)
                 self.rope = new
@@ -360,8 +364,13 @@ class Visitor:
         rate = self.tr.pull_rate * fatigue * keen * spur * min(1.0, 0.4 + self.interest)
         if self.rng.random() < rate * dt:
             self.pulls += 1
-            world.pull(self)
-            self.feel("agency", "pull", t)
+            yank = self.rng.random() < self.tr.rough
+            if world.pull(self, rough=yank):
+                self.feel("agency", "pull", t)          # the handle lights: it counted
+            elif yank and self.notice():
+                # The handle went dark and nothing happened: ease off.
+                self.tr.rough *= 0.5
+                self.affect -= 0.03
 
     def _watch(self, world):
         """The display: did my colour (or one nearby) just light?"""

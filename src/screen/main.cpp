@@ -588,6 +588,7 @@ static void renderWave(float dt) {
 #define TRACK_LEVEL          10   // unlit part of a bar, 0..255 of its colour
 
 static pulleys::ComponentDisplayModel compModel;
+static uint8_t barGoals = 0;   // bit i = component i is a goal now (0 outside a round)
 
 // Each bar wears its component's colour, as the arbiter reports it with every
 // charge packet: a major's game1 colour, a final's purple. These stand in until
@@ -607,6 +608,7 @@ static void onComponents(const pulleys::MeshComponents& c, bool relayed) {
     // keep the defaults for it rather than blanking every bar.
     if (c.color[0] != pulleys::MESH_COLOR_UNKNOWN)
         memcpy(barColor, c.color, sizeof(barColor));
+    barGoals = c.goals;
     if (mode != pulleys::SCREEN_COMPONENTS && !pulleys::screen_is_extractor(mode)) return;
     Serial.printf("★ components%s (%.3f%%/s):", relayed ? " (relayed)" : "", c.decay / 1000.0f);
     for (uint8_t i = 0; i < pulleys::COMPONENT_DISPLAY_BARS; i++) Serial.printf(" %3u", c.charge[i]);
@@ -650,6 +652,12 @@ static void renderComponents(uint32_t now, float dt) {
 // arbiter publishes it for the component bars: pulls add to it, and it drains
 // at the game's rate. 'c<bar> <percent>' on serial drives it on the bench.
 //
+// While a round wants this colour, the ring's top and bottom rows are outlined
+// in it at half brightness: an empty tank waiting to be filled. The outline
+// stays for as long as the colour is a goal, full or not, since a full tank
+// can drain back below full. Colours not wanted get none. The arbiter sends
+// the goals with the charges, and only while a round is on.
+//
 // Which way the surface is mounted: ring row 0 is the bottom, and the strip's
 // first LED is its top (nearest the ring). Flip either if it fills the wrong way.
 #if SCREEN_EXTRACTOR_BUILD
@@ -675,6 +683,13 @@ static float extractorScore(uint8_t color, uint32_t now) {
     return 0.0f;
 }
 
+// Whether a round wants this colour now.
+static bool extractorWanted(uint8_t color) {
+    for (uint8_t bar = 0; bar < pulleys::COMPONENT_DISPLAY_BARS; bar++)
+        if (barColor[bar] == color && (barGoals & (1u << bar))) return true;
+    return false;
+}
+
 // The colour at `cover` of a pixel. Squared, so a half-covered edge looks half
 // as bright rather than nearly full.
 static inline CRGB liquidPixel(CRGB c, float cover) {
@@ -695,11 +710,17 @@ static void renderExtractor(uint32_t now, float dt) {
         leds[pulleys::extractor_strip_index(i, S, EXTRACTOR_STRIP_REVERSE)] =
             liquidPixel(full, pulleys::extractor_cover(s, i));
 
+    // The outline goes under the liquid: where the liquid is brighter it wins.
+    CRGB outline = full;
+    outline.nscale8(128);
+    bool wanted = extractorWanted(color);
     for (uint8_t x = 0; x < pulleys::EXTRACTOR_RING_W; x++) {
         float r = pulleys::extractor_ring_surface(liquid, S, x);
-        for (uint8_t y = 0; y < pulleys::EXTRACTOR_RING_H; y++)
-            leds[pulleys::extractor_ring_index(x, y, EXTRACTOR_REVERSE_Y)] =
-                liquidPixel(full, pulleys::extractor_cover(r, (float)(S + y)));
+        for (uint8_t y = 0; y < pulleys::EXTRACTOR_RING_H; y++) {
+            CRGB c = liquidPixel(full, pulleys::extractor_cover(r, (float)(S + y)));
+            if (wanted && (y == 0 || y == pulleys::EXTRACTOR_RING_H - 1)) c |= outline;
+            leds[pulleys::extractor_ring_index(x, y, EXTRACTOR_REVERSE_Y)] = c;
+        }
     }
 
     // Arbiter silent: blink the ring's top-left pixel a dim white -- not red,
@@ -743,7 +764,7 @@ static void renderExtractor(uint32_t now, float dt) {
 // with the door open: HIGH for a switch that closes to ground when it is shut.
 #if SCREEN_DIORAMA_BUILD
 #ifndef DIORAMA_LATCH_PIN
-  #define DIORAMA_LATCH_PIN    26
+  #define DIORAMA_LATCH_PIN    15      // D15. A strapping pin: it must not be held low at boot
 #endif
 #ifndef DIORAMA_DOOR_PIN
   #define DIORAMA_DOOR_PIN     27
@@ -1000,6 +1021,8 @@ static void partyPoll(uint32_t now) {
 //   e<ch>  simulate one detection on that channel
 //   c<bar> <percent>  set a component bar as if the arbiter had sent it
 //             ("c0 100" fills component 1, then it drains)
+//   g<mask>  the goals, as if the arbiter had sent them: bit i = component i
+//             ("g5" wants components 1 and 3; an extractor outlines its tank)
 //   r      reset all activity and the counter
 //   m      force the other display mode now (refused on a board built for one)
 //   w      flip the 14×2 panel's row direction, for matching the wiring
@@ -1044,6 +1067,9 @@ static void handleSerial() {
                     charge[bar] = (uint8_t)constrain(pct, 0, 100);
                     pulleys::component_display_update(compModel, charge, compModel.decay, millis());
                 }
+            } else if (buf[0] == 'g') {
+                barGoals = (uint8_t)atoi(buf + 1);   // until the arbiter's next packet
+                Serial.printf("  goals: 0x%02X\n", barGoals);
             } else if (buf[0] == 'r') {
                 for (uint8_t i = 0; i < NUM_CHANNELS; i++) chans[i] = ChannelState{};
                 totalCount = 0;

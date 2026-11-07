@@ -69,8 +69,8 @@ class Game:
     @property
     def timer_deadline(self):
         """Monotonic time the current `after` fires, or None."""
-        after = self.engine._after
-        return None if after is None or self._t0 is None else self._t0 + after[0]
+        due = self.engine.after_due
+        return None if due is None or self._t0 is None else self._t0 + due
 
     def on_record(self, fn):
         """fn(record) for everything the engine does (playtest/engine.py lists

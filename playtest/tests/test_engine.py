@@ -128,7 +128,7 @@ class ShippedGame(unittest.TestCase):
         # once listened only for a non-goal one there and could never restart.
         cfg = spec.load(os.path.join(ROOT, "game_state_machine", "state_config.yaml"))
         e, _ = run(cfg)
-        e._randomize_goals(5)
+        e.deal_goals(5)
         self.assertEqual(e.state, "passive")
         pulls(e, RED, 6, every=0.0)
         self.assertEqual(e.state, "easy_round")
@@ -178,7 +178,7 @@ class Counters(unittest.TestCase):
             e.advance(0.1)
         self.assertEqual(e.counters["hits"], 5)
         self.assertEqual([r["t"] for r in kinds(log, "cue")], [0.2])   # the third pull
-        e._act({"clear": ["hits"]})
+        e.react({"clear": ["hits"]})
         for _ in range(3):
             e.pull(RED)
         self.assertEqual(len(kinds(log, "cue")), 2)                     # climbing again counts again
@@ -237,7 +237,7 @@ class Colors(unittest.TestCase):
         for b, a in zip(before, e.palette):
             self.assertEqual(b == spec.PURPLE, a == spec.PURPLE)
         self.assertEqual(e.stored_palette, before)
-        e._act({"colors": "restore"})
+        e.react({"colors": "restore"})
         self.assertEqual(e.palette, before)
 
 

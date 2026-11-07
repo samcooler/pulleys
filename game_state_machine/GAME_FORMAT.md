@@ -412,9 +412,16 @@ milestones:                      # states that mean getting further, in order
   - win
 ```
 
-`show_goals` puts a band across the top of overlord's video while a state that
-reacts to goal events is running, with a block for each goal colour. A Simon
-round otherwise asks for colours nobody can see. The arbiter ignores it.
+Goals are shown whatever the game file says: while a state that reacts to a
+goal event is running (`goal_pull`, `nongoal_pull`, `goal_component_activated`,
+`first_goal_component_activated`, `all_components_activated`), the arbiter
+sends the goal colours to the displays with the charges, and each extractor
+outlines its tank -- the top and bottom rows of its ring, at half brightness --
+while its colour is wanted, full or not. Outside such a state, nothing is
+outlined.
+
+`show_goals` adds a band across the top of overlord's video at the same times,
+with a block for each goal colour. The arbiter ignores it.
 
 `milestones` tells the playtest tools how far a session got when the state
 graph does not say (bop-it's `game_over` is as far from the start as its

@@ -148,6 +148,8 @@ static_assert(LED_COUNT >= BAR_ORIGIN + pulleys::PANEL_14X2_LEDS,
 static CRGB leds[LED_COUNT];
 static pulleys::IMU      imu;
 static pulleys::Detector detector;
+static pulleys::RoughGuard rough;   // too rough: no events, no light (pulleys_detect)
+static uint32_t roughDropped = 0;    // detections that did not count
 
 // The sensor renders its own channel's pattern — the same one that channel's
 // block shows on a Screen, so a rope and its slot in the array visibly match.
@@ -452,6 +454,7 @@ static void onMeshEvent(const pulleys::MeshEvent& ev, bool relayed) {
 
 // ── Serial console — field config without a reflash ───────────────────────────
 //   c<ch> channel | m0/m1 mode | r<deg> threshold | t test event
+//   R<dps> <g>  rough-play limits (until reboot); R0 turns the guard off
 //   p       colour-order probe: cycles raw RED, GREEN, BLUE on both surfaces
 static void printConfig() {
     Serial.printf("  CONFIG  channel=%d %s (%s)  mode=%s (%s)  rotThreshold=%.0f deg\n",
@@ -507,6 +510,14 @@ static void handleSerial() {
                       " hardware channel.\n"
                     : "  probe off — back to the pattern (%s, %dms)\n",
                     STRINGIFY(LED_COLOR_ORDER), PROBE_STEP_MS);
+            } else if (buf[0] == 'R') {          // "R1000 2.0" → rough limits; "R0" off
+                float dps = 0, gl = rough.cfg.linLimitG;
+                sscanf(buf + 1, "%f %f", &dps, &gl);
+                rough.cfg.enabled = dps > 0;
+                if (dps > 0) { rough.cfg.rotLimitDps = dps; rough.cfg.linLimitG = gl; }
+                Serial.printf("  rough guard %s: %.0f dps / %.2f g, calm %lu ms (until reboot)\n",
+                              rough.cfg.enabled ? "on" : "OFF", rough.cfg.rotLimitDps,
+                              rough.cfg.linLimitG, (unsigned long)rough.cfg.calmMs);
             } else if (buf[0] == 't') {          // "t" → fire a test event
                 pulleys::mesh_send_event(myChannel, myMode, 90, 0);
                 localCount++;
@@ -604,14 +615,22 @@ void loop() {
         pulleys::IMU::Gyro g;
         if (imu.read6(a, g)) {
             uint8_t mag = 0;
+            bool tooRough = rough.update(a.x, a.y, a.z, g.x, g.y, g.z, now);
+            if (tooRough) { holdUntil = 0; ledEnv = 0.0f; }   // the handle goes dark at once, and stays dark
             if (detector.update(a.x, a.y, a.z, g.x, g.y, g.z, dt, mag)) {
-                localCount++;
-                holdUntil = now + LED_HOLD_MS;
-                pulleys::mesh_send_event(myChannel, myMode, mag, 0);
-                Serial.printf("★ DETECT ch%-2d %s mag=%d  (#%lu)\n",
-                              myChannel,
-                              myMode == pulleys::SENSOR_MODE_ROTATION ? "rot" : "lin",
-                              mag, localCount);
+                if (tooRough) {
+                    roughDropped++;
+                    Serial.printf("✗ ROUGH  ch%-2d mag=%d: not counted  (#%lu dropped)\n",
+                                  myChannel, mag, roughDropped);
+                } else {
+                    localCount++;
+                    holdUntil = now + LED_HOLD_MS;
+                    pulleys::mesh_send_event(myChannel, myMode, mag, 0);
+                    Serial.printf("★ DETECT ch%-2d %s mag=%d  (#%lu)\n",
+                                  myChannel,
+                                  myMode == pulleys::SENSOR_MODE_ROTATION ? "rot" : "lin",
+                                  mag, localCount);
+                }
             }
         }
     }
@@ -668,9 +687,10 @@ void loop() {
         // freshly flashed boards sorts itself into "set up" and "not set up" at
         // a glance, across a dark room, by someone who is doing three other
         // things. This overrides the pattern entirely.
-        if (ledEnv < 1.0f) {
+        if (ledEnv < 1.0f && !rough.rough(now)) {
             // Presence pixels cross-fade against the pattern, so the hand-off in
-            // both directions is smooth rather than a pop.
+            // both directions is smooth rather than a pop. Not while the rope
+            // is overstimulated: then it shows nothing at all.
             CRGB c = pulleys::channel_color(myChannel);
             float breath = IDLE_BRIGHTNESS * (1.0f - ledEnv) * idleBreath(now);
             if (SENSOR_IDLE_CANDLE && breath > 0.0f) {
@@ -719,6 +739,12 @@ void loop() {
         }
         Serial.printf("  [LED] env=%.3f breath=%.2f  bar=%u/%u ember=%u\n",
                       ledEnv, idleBreath(now), barBri, ACTIVE_BRIGHTNESS, barEmber);
+        float pw, pa;
+        rough.takePeaks(pw, pa);
+        Serial.printf("  [ROUGH] %s  peak %.0f dps / %.2f g  (limits %.0f / %.2f)  dropped=%lu episodes=%lu\n",
+                      rough.rough(now) ? "OVERSTIMULATED" : "ok", pw, pa,
+                      rough.cfg.rotLimitDps, rough.cfg.linLimitG,
+                      (unsigned long)roughDropped, (unsigned long)rough.episodes());
         Serial.printf("  [SYNC] clock=%s meshNow=%lums\n",
                       pulleys::mesh_clock_locked() ? "locked" : "free",
                       (unsigned long)pulleys::mesh_now());

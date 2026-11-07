@@ -48,6 +48,10 @@
 game: pulley-party
 start: passive
 
+# The goal colours on the video too, as a band across the top while a round is
+# on (overlord). The extractors outline their tanks for the same goals.
+show_goals: true
+
 # Which colour drives each major component. The position in the list is the
 # component's number, so the first entry is major component 1. The five majors
 # are game1's colours -- red, blue, green, yellow, orange, each once -- and a
@@ -93,9 +97,9 @@ devices:
 # a param is a named constant. Durations are like 20s or 2m.
 params:
   charge_per_pull:
-    value: 20
+    value: 40
     min: 10
-    max: 50
+    max: 60
     note: percent of full charge one pull adds
   decay_rate:
     value: 6.6667
@@ -113,16 +117,16 @@ params:
     max: 45s
     note: quiet time before Janis nags in a round
   easy_goals:
-    value: 2
+    value: 1
     min: 1
     max: 3
   medium_goals:
-    value: 3
-    min: 2
+    value: 2
+    min: 1
     max: 4
   hard_goals:
-    value: 5
-    min: 3
+    value: 3
+    min: 2
     max: 5
   party_time:
     value: 60s
@@ -144,8 +148,12 @@ default_decay_rate: $decay_rate
 
 # How much one pull adds to a component's charge, in percent of full. Below 100
 # so no single pull lights anything: it takes pulls coming faster than the
-# drain. At 20 against 6.6667, six quick pulls (two a second) fill one, and a
-# lone rope pulled once every three seconds only just holds its level.
+# drain. A rope's sensor counts at most one pull every 1.7 s or so (the pull,
+# then its 1.5 s cooldown), so a single rope adds at most charge_per_pull / 1.7
+# percent a second. At 40 that is 23 against the drain's 6.7: three counted
+# pulls, about five seconds of one person working one rope, fill it. At the old
+# 20 it was 12 against 6.7 -- some 20 s of steady pulling per colour -- and in
+# simulation almost nobody got past the first rounds.
 charge_per_pull: $charge_per_pull
 
 # Sounds overlord plays on its own, forever, whatever state the game is in.

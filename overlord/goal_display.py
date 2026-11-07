@@ -17,21 +17,18 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from playtest.spec import reactions  # noqa: E402
+from playtest.spec import goal_states  # noqa: E402
 from simulate import COLOR_RGB, RES_X, RES_Y, ass_rect, ass_text  # noqa: E402
 
 OVERLAY_ID = 8
-GOAL_EVENTS = ("goal_pull", "nongoal_pull", "goal_component_activated",
-               "first_goal_component_activated", "all_components_activated")
 BAND_H = 150
 
 
 class GoalDisplay:
     def __init__(self, cfg, video):
         self.video = video
-        # States in which goals mean something: they react to a goal event.
-        self.goal_states = {name for name, st in cfg["states"].items()
-                            if any(e in reactions(st or {}) for e in GOAL_EVENTS)}
+        # States in which goals mean something, as the arbiter decides it too.
+        self.goal_states = goal_states(cfg)
         self.goals = []
         self.state = None
 

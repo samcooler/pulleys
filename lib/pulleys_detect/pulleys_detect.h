@@ -168,4 +168,57 @@ private:
     }
 };
 
+// ── RoughGuard — a rope handled too roughly goes dead for a moment ───────────
+//
+// To discourage rough play: while a rope is moved faster than a person pulling
+// it means to -- spun past rotLimitDps, or jerked so its acceleration is more
+// than linLimitG away from gravity -- it is overstimulated, and stays so until
+// it has been under both limits for calmMs. While it is, a detection does not
+// count (no event goes out) and the handle stays dark. So yanking gets you
+// nothing, and a sensible pull straight after does.
+//
+// It reads every IMU sample, refractory included -- the Detector stops looking
+// while it cools down, and rough handling is exactly what happens then. The
+// limits are guesses until a rope has been tried on site: the sensor's status
+// line prints the peak of each since the last line, for setting them.
+struct RoughConfig {
+    float    rotLimitDps = 1000.0f;   // gyro rate magnitude
+    float    linLimitG   = 2.0f;      // | |accel| - 1 g |
+    uint32_t calmMs      = 2500;      // under both limits this long to count again
+    bool     enabled     = true;
+};
+
+class RoughGuard {
+public:
+    RoughConfig cfg;
+
+    // Feed every sample (accel in g, gyro in deg/s). True while overstimulated.
+    bool update(float axg, float ayg, float azg, float wx, float wy, float wz, uint32_t nowMs) {
+        float w = sqrtf(wx * wx + wy * wy + wz * wz);
+        float a = fabsf(sqrtf(axg * axg + ayg * ayg + azg * azg) - 1.0f);
+        if (w > _peakW) _peakW = w;
+        if (a > _peakA) _peakA = a;
+        if (cfg.enabled && (w > cfg.rotLimitDps || a > cfg.linLimitG)) {
+            if (!rough(nowMs)) _episodes++;
+            _roughUntil = nowMs + cfg.calmMs;
+            _active = true;
+        }
+        return rough(nowMs);
+    }
+
+    bool rough(uint32_t nowMs) const {
+        return _active && (int32_t)(_roughUntil - nowMs) > 0;
+    }
+
+    // The fastest seen since the last call, then reset: for the status line.
+    void takePeaks(float& dps, float& g) { dps = _peakW; g = _peakA; _peakW = _peakA = 0.0f; }
+    uint32_t episodes() const { return _episodes; }
+
+private:
+    bool     _active     = false;
+    uint32_t _roughUntil = 0;
+    uint32_t _episodes   = 0;
+    float    _peakW = 0.0f, _peakA = 0.0f;
+};
+
 }  // namespace pulleys

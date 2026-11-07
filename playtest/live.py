@@ -81,6 +81,7 @@ class Director:
             self._apply_prior(prior)
         self.choice = {n: p.default for n, p in self.params.items()}
         self.history = []
+        self.on_session = []     # fn(entry) for each session scored: its fun, its settings
         self.records = []        # since the last session closed, plus context
         self.state = None
         self.last_pull = None
@@ -174,6 +175,8 @@ class Director:
                              "pulls": m["pulls"], "progress": round(m["progress"], 2),
                              "wins": m["wins"], "fun": round(reward, 3), "params": dict(self.choice)})
         self.history = self.history[-500:]
+        for fn in self.on_session:
+            fn(self.history[-1])
         self.log(f"director: session {m['minutes']:.1f} min, {m['pulls']} pulls, "
                  f"progress {m['progress']:.2f} -> fun {reward:.2f}")
         # keep only the state the next session starts in
@@ -241,47 +244,20 @@ def simulate(cfg, hours=12.0, groups_per_hour=20.0, seed=0, prior=None, populati
              options=None, director=True, log=lambda m: None, **kw):
     """A simulated night with the director in the loop, as it would run on the
     Pi: it sees the play log as the night goes, and its settings reach the
-    game between sessions. Returns [(t, fun, settings)] per session it scored
-    -- or, with director=False, the same night's sessions on the defaults."""
+    game between sessions. Returns ([(t, fun, settings)] per session it scored,
+    the director) -- or, with director=False, the same night's sessions on the
+    defaults."""
     from .metrics import analyse
     from .world import World
 
     w = World(cfg, seed=seed, population=population, **(options or {}))
-    out = []
-    d = None
-    if director:
-        d = Director(cfg, send=lambda n, v: w.engine.set_param(n, v), seed=seed,
-                     prior=prior, log=log, **kw)
-        orig_close = d._close
-
-        def close(now):
-            before = len(d.history)
-            orig_close(now)
-            if len(d.history) > before:
-                h = d.history[-1]
-                out.append((now, h["fun"], dict(h["params"])))
-        d._close = close
-        w.engine.on_record(d.feed)
-
-    # run_night, with the director's clock ticking every simulated second
-    w.engine.start()
-    end = hours * 3600.0
-    rng = w.rng
-    next_arrival = rng.expovariate(groups_per_hour / 3600.0)
-    next_tick = 0.0
-    while w.t < end:
-        if w.t >= next_arrival:
-            w.arrive()
-            next_arrival = w.t + rng.expovariate(groups_per_hour / 3600.0)
-        if w.present():
-            w.step()
-        else:
-            nxt = w.engine.next_due()
-            target = min(next_arrival, end, next_tick, nxt if nxt is not None else end)
-            w.engine.advance_to(max(target, w.t + 0.01))
-        if d and w.t >= next_tick:
-            d.tick(w.t)
-            next_tick = w.t + 1.0
     if not director:
-        out = [(r["start"], r["fun"], {}) for r in analyse(w.trace, cfg)]
+        w.run_night(hours, groups_per_hour)
+        return [(r["start"], r["fun"], {}) for r in analyse(w.trace, cfg)], None
+    d = Director(cfg, send=lambda n, v: w.engine.set_param(n, v), seed=seed,
+                 prior=prior, log=log, **kw)
+    out = []
+    d.on_session.append(lambda h: out.append((w.t, h["fun"], dict(h["params"]))))
+    w.engine.on_record(d.feed)
+    w.run_night(hours, groups_per_hour, each_second=lambda: d.tick(w.t))
     return out, d

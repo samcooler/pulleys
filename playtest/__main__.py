@@ -10,6 +10,7 @@
 
 A variant is a game file, optionally with param values and options after a
 colon:  game_state_machine/state_config.yaml:round_time=90s,show_goals=1
+(marks=0 takes away the extractors' goal outlines, the room before them)
 """
 
 import argparse
@@ -52,6 +53,8 @@ def parse_variant(text):
         k, _, v = item.partition("=")
         if k == "show_goals":
             options["show_goals"] = v not in ("0", "false", "no")
+        elif k == "marks":
+            options["goal_marks"] = v not in ("0", "false", "no")
         elif k == "clip":
             options["clip_seconds"] = parse_value(v)
         else:

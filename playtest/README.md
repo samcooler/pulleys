@@ -28,8 +28,8 @@ python3 -m playtest sim                                   # the installation's g
 python3 -m playtest sim game_state_machine/games/chase.yaml
 python3 -m playtest compare \
     game_state_machine/state_config.yaml \
-    game_state_machine/state_config.yaml:show_goals=1 \
-    game_state_machine/state_config.yaml:charge_per_pull=40,round_time=3m
+    game_state_machine/state_config.yaml:marks=0,show_goals=0 \
+    game_state_machine/state_config.yaml:charge_per_pull=30,round_time=3m
 python3 -m playtest tune --out tune.json                 # search the knobs (a few minutes)
 python3 -m playtest validate                              # does the fun score track simulated enjoyment?
 python3 -m playtest live-sim --hours 24 --prior tune.json # the live director over a simulated day
@@ -39,7 +39,8 @@ python3 -m unittest discover -s playtest/tests -t .       # both engines' behavi
 ```
 
 A variant is a game file with param values or options after a colon:
-`state_config.yaml:round_time=90s,show_goals=1`. `--population
+`state_config.yaml:round_time=90s,show_goals=1`. `marks=0` takes away the
+extractors' goal outlines, to see the room without them. `--population
 population.json` runs any command with a calibrated crowd.
 
 ## Designing a game
@@ -115,6 +116,12 @@ Some press "free the spirits" once or several times; its purple flash is a
 hint an attentive presser may take. Once a visitor knows the twist, Janis
 panicking at purple stops being a reason to stop.
 
+Their pulls go through a model of the rope's sensor: it counts one pull,
+then ignores the rope for 1.7 s, so yanking faster gains nothing. Some yanks
+are rough. A rough yank trips the sensor's guard, so nothing counts and the
+handle stays dark until the rope has been calm for 2.5 s, and an attentive
+visitor who notices eases off. Party crowds and rebels yank roughest.
+
 Five kinds of visitor come in groups: passers-by, families, solvers, rebels
 (who pull purple because Janis says not to), and party crowds. Each kind has
 its own pull rate, attention, curiosity, compliance, patience and time
@@ -167,46 +174,56 @@ so it follows a crowd that changes over days.
 
 ## What simulation says about the installation's game
 
-These come from the simulated visitors above, so they are hypotheses. The
-first two are about how the game is built, and the visitor model has little
-to do with them.
+These come from the simulated visitors, so they are hypotheses, except where a
+finding is about how the game or the hardware is built.
 
-1. **The game could get stuck for good (fixed).** A hard round deals all
-   five colours as goals, and nothing clears goals. Back in `passive`, every
+1. **The game could get stuck for good (fixed).** A hard round dealt all five
+   colours as goals, and nothing clears goals. Back in `passive`, every
    activation counted as a goal activation, and `passive` only listened for
-   non-goal ones. After any session that reached the hard round, nothing
-   could start the game again until the arbiter rebooted. After a timed-out
-   easy round, two of the five colours could not start it. `passive` now
-   starts on either kind; a test guards it.
+   non-goal ones. After any session that reached the hard round, nothing could
+   start the game again until the arbiter rebooted. `passive` now starts on
+   either kind; a test guards it.
 
-2. **Hidden goals stall almost everyone in the easy round.** With goals only
-   implied by Janis's reactions, 86% of simulated visits start a round and 7%
-   win one. Nobody reaches the party. A round also needs every non-goal
-   colour dark, and in a group someone is always pulling one. Drawing the
-   goals on screen (`show_goals: true`) lets 76% win the easy round and 44%
-   reach the party, and raises simulated enjoyment about threefold.
+2. **Nothing used to show the goals (fixed).** The arbiter never told any
+   display which colours a round wanted, so the only clue was Janis praising
+   some activations and ignoring others. Now it sends them with the charges
+   while a round is on, each extractor outlines its tank (top and bottom rows
+   of the ring, half brightness) while its colour is wanted, and overlord draws
+   them over the video (`show_goals`).
 
-3. **The hard round needs at least three people.** Five goals lit at once,
-   each needing about six quick pulls and lasting 15 s, is out of reach for
-   one or two people however good they are. `hard_goals` is a param;
-   `tune` preferred 3 with goals hidden.
+3. **A rope counts a pull at most every 1.7 s.** That is the sensor's pull
+   plus its 1.5 s cooldown (`pulleys_detect`). At the old 20% a pull, one rope
+   added about 12% a second against a drain of about 7%: some 20 seconds of
+   steady pulling per colour. The game file's note assumed two pulls a second
+   from one rope. `charge_per_pull` is now 40, so three counted pulls fill a
+   colour.
 
-4. **Knobs matter less than structure.** With goals shown, the strongest
-   knobs are `charge_per_pull` (pulls needed to light a colour) and
-   `decay_rate` (how long it stays lit). Tuning both gained about 14% in
-   simulated single visits and little in overlapping play. `nag_delay`
-   made no measurable difference.
+4. **Small groups could not finish.** With five goals in the hard round, one
+   or two people could never hold them all lit. Goal counts are now 1, 2 and 3.
+
+   Simulated visits that reach the party / free the spirits:
+
+   | | Groups of 1-2 | Groups of 3+ |
+   | --- | --- | --- |
+   | Before: 2/3/5 goals, 20% a pull, no outlines | 0% / 0% | 0% / 0% |
+   | New values, no outlines | 0% / 0% | 0% / 0% |
+   | New values, outlines | 25% / 7% | 99% / 80% |
+
+   Neither change works without the other.
 
 5. **The final depends on the diorama.** The rounds punish purple, then the
    final asks for it. What turns people around is the diorama: it unlatches
    during the party, and inside are the spirits having their souls extracted,
    signage hinting that purple frees them, and a "free the spirits" button
    that flashes purple and is refused. Without the diorama in the model, 1%
-   of simulated visits won the final, with goals shown. With it, 34% did:
-   about three in four groups that reached the final. That rests on guesses
-   about how many people look inside and read the signage. The play log now
-   records `diorama.door_opened` and `diorama.button_pressed`, so real nights
-   will show how many groups find it, and whether those groups win the final.
+   of simulated visits won the final; with it, most groups that reach the
+   final win it. That rests on guesses about how many people look inside and
+   read the signage. The play log records `diorama.door_opened` and
+   `diorama.button_pressed`, so real nights will show it.
+
+6. **Knobs matter less than structure.** Tuning settings gains a few tenths
+   of the fun score; showing the goals and fitting the pace to the sensors
+   decided whether the game worked at all.
 
 ## Limits
 

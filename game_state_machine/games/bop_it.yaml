@@ -27,18 +27,20 @@ components:
     - orange
 
 # One pull lights a colour and it is dark again two seconds later: this game is
-# about speed, not effort, and the bars flash with every hit.
+# about speed, not effort, and the bars flash with every hit. A rope's sensor
+# counts one pull every 1.7 s or so, and a call often means crossing to another
+# rope, so the windows are generous.
 charge_per_pull: 100
 default_decay_rate: 50
 
 params:
   window:
-    value: 3s
+    value: 5s
     min: 1.5s
     max: 5s
     note: time to answer a call at the start
   fast_window:
-    value: 2s
+    value: 3.5s
     min: 1s
     max: 3.5s
     note: time to answer once a streak has sped things up
@@ -48,11 +50,11 @@ params:
     max: 10
     note: hits in a row before the calls get faster
   win_score:
-    value: 15
+    value: 10
     min: 8
     max: 30
   lives:
-    value: 3
+    value: 5
     min: 1
     max: 6
 

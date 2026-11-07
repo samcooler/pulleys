@@ -27,17 +27,17 @@ default_decay_rate: 10
 
 params:
   hop:
-    value: 6s
+    value: 8s
     min: 3s
     max: 12s
     note: how long the colour stays put before it moves
   target:
-    value: 40
+    value: 15
     min: 15
     max: 80
     note: pulls on the hunted colour that win
   chase_time:
-    value: 90s
+    value: 2m
     min: 45s
     max: 3m
   charge_per_pull:

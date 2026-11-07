@@ -80,6 +80,7 @@ class Engine:
         for dev, body in (cfg.get("devices") or {}).items():
             for prop, values in ((body or {}).get("set") or {}).items():
                 self.settings[f"{dev}.{prop}"] = values[0]
+        self.goal_states = spec.goal_states(cfg)
         self.state = None
         self.t = 0.0
         self.entered_at = 0.0
@@ -214,6 +215,31 @@ class Engine:
             return self.finals[ch].on
         idx = self.major_of_color.get(self.palette[ch])
         return idx is not None and self.majors[idx].on
+
+    def goals_visible(self):
+        """Whether the room shows the goals now (spec.goal_states)."""
+        return self.state in self.goal_states
+
+    def goal_marks(self):
+        """The goal mask the arbiter sends the displays: 0 outside a round."""
+        return self.goal_mask if self.goals_visible() else 0
+
+    @property
+    def after_due(self):
+        """When the state's `after` fires, in engine seconds, or None."""
+        return self._after[0] if self._after else None
+
+    def deal_goals(self, n):
+        """The `goals: n` action, by hand."""
+        self._randomize_goals(n)
+        self._check_simon()
+
+    def react(self, block):
+        """Run one reaction block by hand (set, clear, add, colors, goals, cue)."""
+        enters = self.enters
+        self._act(block)
+        if block.get("goto") and self.enters == enters:
+            self._enter(block["goto"])
 
     def goal_colors(self):
         return [COLORS[self.major_color[i]] for i in range(MAJOR_COUNT) if self.goal_mask & (1 << i)]

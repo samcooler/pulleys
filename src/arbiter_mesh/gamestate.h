@@ -61,6 +61,13 @@ float       gamestate_param_value(uint8_t i);
 void gamestate_note_goals(uint8_t goalMask);   // components.cpp, after dealing goals
 void gamestate_note_palette();                  // installcfg.cpp, when the palette changes
 
+// Whether the current state cares about goals: it reacts to a goal event
+// (goal_pull, nongoal_pull, goal_component_activated, first_goal_component_
+// activated, all_components_activated). Only then do displays show the goals,
+// so the last round's do not linger on the extractors through a party.
+// playtest/spec.py GOAL_EVENTS is the same list.
+bool        gamestate_goals_visible();
+
 uint32_t    gamestate_state_age_ms();      // time in the current state
 int32_t     gamestate_timer_left_ms();     // until `after` fires; -1 if none
 const char* gamestate_timer_target();      // the state `after` leads to

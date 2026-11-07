@@ -51,6 +51,18 @@ COMPONENT_EVENTS = (
 PULL_EVENTS = ("pull", "goal_pull", "nongoal_pull", "final_pull")
 KNOWN_EVENTS = frozenset(COMPONENT_EVENTS + PULL_EVENTS)
 
+# A state that reacts to any of these cares about goals, and only then does the
+# room show them: the extractors' outlines, overlord's band. Keep in step with
+# GOAL_EVENTS in src/arbiter_mesh/gamestate.cpp.
+GOAL_EVENTS = ("goal_pull", "nongoal_pull", "goal_component_activated",
+               "first_goal_component_activated", "all_components_activated")
+
+
+def goal_states(cfg):
+    """The states that show the goals."""
+    return {name for name, st in cfg["states"].items()
+            if any(e in reactions(st or {}) for e in GOAL_EVENTS)}
+
 # Limits the arbiter's fixed tables impose. Keep in step with gamestate.cpp.
 PARAMS_MAX = 16
 PARAM_NAME_MAX = 23

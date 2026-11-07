@@ -17,27 +17,34 @@ What the room shows people, and how faithfully:
     who misses it learns the wrong lesson.
   * The component display shows each colour's charge; a visitor sees their own
     rope's bar rise and fill.
-  * Goals are invisible unless the game's `show_goals` is true (overlord then
-    draws the wanted colours over the video).
+  * Goals are shown while a round is on: each extractor outlines its tank when
+    its colour is wanted (goal_marks), and overlord draws them over the video
+    with the game's `show_goals`. goal_marks=False is the room before either.
+  * A rope's sensor counts one pull, then cools down (SENSOR_COOLDOWN): yanking
+    faster gets no more. A rough yank trips its guard -- nothing counts and the
+    handle stays dark until the rope has been calm for ROUGH_CALM seconds.
 """
 
 import random
 
 from .engine import Engine
 from .players import Population, Visitor, meaning_of_cue, meaning_of_setting
-from .spec import COLORS, PURPLE, reactions
+from .spec import COLORS, PURPLE
 
 CLIP_SECONDS = 4.0   # a typical Janis clip
 
 
 class World:
     def __init__(self, cfg, *, seed=0, params=None, roped=None, palette=None,
-                 population=None, show_goals=None, clip_seconds=CLIP_SECONDS):
+                 population=None, show_goals=None, goal_marks=True, clip_seconds=CLIP_SECONDS):
         self.rng = random.Random(seed)
         self.engine = Engine(cfg, seed=self.rng.randrange(1 << 30), params=params,
                              roped=roped, palette=palette)
         self.population = population or Population()
         self.show_goals = bool(cfg.get("show_goals", False) if show_goals is None else show_goals)
+        self.goals_on_display = self.show_goals or goal_marks
+        self._counted = {}            # channel -> when its sensor last counted a pull
+        self._rough_until = {}        # channel -> when its guard calms down
         self.clip_seconds = clip_seconds
         self.clip_until = -1.0
         self.trace = []
@@ -48,10 +55,7 @@ class World:
         self._flash_until = -1.0
         self.here = []                # visitors still in the room
         self._open = set()            # groups not all gone yet
-        goal_events = ("goal_pull", "nongoal_pull", "goal_component_activated",
-                       "first_goal_component_activated", "all_components_activated")
-        self._goal_states = {n for n, st in cfg["states"].items()
-                             if any(e in reactions(st or {}) for e in goal_events)}
+
         self._next_id = 0
         self.engine.on_record(self._on_record)
 
@@ -69,8 +73,20 @@ class World:
     def charge(self, ch):
         return self.engine.charge_of_channel(ch)
 
-    def pull(self, visitor):
-        self.engine.pull(visitor.rope)
+    SENSOR_COOLDOWN = 1.7   # a pull's bout, then pulleys_detect's 1.5 s refractory
+    ROUGH_CALM = 2.5        # RoughConfig.calmMs
+
+    def pull(self, visitor, rough=False):
+        """A yank on visitor's rope, through its sensor. True if it counted."""
+        ch, t = visitor.rope, self.t
+        if rough:
+            self._rough_until[ch] = t + self.ROUGH_CALM
+            return False
+        if t < self._rough_until.get(ch, -1.0) or t - self._counted.get(ch, -9.0) < self.SENSOR_COOLDOWN:
+            return False
+        self._counted[ch] = t
+        self.engine.pull(ch)
+        return True
 
     def release(self, ch):
         self.occupied.pop(ch, None)
@@ -110,9 +126,9 @@ class World:
         return best
 
     def visible_goals(self):
-        """The goals overlord would be drawing now: only while the state cares
-        about goals (overlord/goal_display.py), and only with show_goals."""
-        if not self.show_goals or self.engine.state not in self._goal_states:
+        """The goals the room is showing now: only while the state cares about
+        goals, as the arbiter and overlord decide it (spec.goal_states)."""
+        if not self.goals_on_display or not self.engine.goals_visible():
             return None
         return set(self.engine.goal_colors()) or None
 
@@ -175,8 +191,9 @@ class World:
             return meaning and {"kind": "setting", "meaning": meaning, "key": rec["key"], "value": rec["value"]}
         if kind == "palette":
             return {"kind": "palette"}
-        if kind == "goals" and self.visible_goals() is not None:
-            return {"kind": "goals", "colors": rec["colors"]}
+        if kind in ("goals", "state") and self.visible_goals() is not None:
+            # new goals dealt, or a round begun: the outlines change
+            return {"kind": "goals", "colors": sorted(self.visible_goals())}
         return None
 
     # -- people come and go ----------------------------------------------------------
@@ -248,10 +265,14 @@ class World:
             self.engine.advance(Visitor.TICK)
         return outcome(self.groups[gid])
 
-    def run_night(self, hours=3.0, groups_per_hour=20.0):
+    def run_night(self, hours=3.0, groups_per_hour=20.0, each_second=None):
+        """Groups arrive at random for `hours`. each_second() is called once a
+        simulated second, for whatever watches the night as it goes (the live
+        director)."""
         self.engine.start()
         end = hours * 3600.0
         next_arrival = self.rng.expovariate(groups_per_hour / 3600.0)
+        next_tick = 0.0
         while self.t < end:
             if self.t >= next_arrival:
                 self.arrive()
@@ -261,8 +282,12 @@ class World:
             else:
                 # nobody in: jump to whichever comes first, the next group or a timer
                 nxt = self.engine.next_due()
-                target = min(next_arrival, end, nxt if nxt is not None else end)
+                target = min(next_arrival, end, nxt if nxt is not None else end,
+                             next_tick if each_second else end)
                 self.engine.advance_to(max(target, self.t + 0.01))
+            if each_second and self.t >= next_tick:
+                each_second()
+                next_tick = self.t + 1.0
         return [outcome(g) for g in self.groups.values()]
 
 

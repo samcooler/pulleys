@@ -31,6 +31,8 @@ bool components_on_cue(const char* cue);
 // The `goals: N` action: deal N goal colours (1-5), never the set just dealt.
 void components_deal_goals(uint8_t count);
 uint8_t components_goal_mask();   // bit i = major component i is a goal
+// Send every component's charge (and, while the state cares, the goals) now.
+void components_publish();
 void components_check_simon_complete();
 void components_on_mesh_event(const pulleys::MeshEvent& ev);   // every deduped sensor event
 void components_tick();                                        // every loop: wear-out
