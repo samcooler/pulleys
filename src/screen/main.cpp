@@ -757,6 +757,9 @@ static void renderExtractor(uint32_t now, float dt) {
 // signage, at what will actually free them. A press during the flash is not
 // another press. The button closes to ground (DIORAMA_BUTTON_PRESSED LOW).
 //
+// On boot the latch opens for DIORAMA_BOOT_OPEN_MS, so a power cycle lets
+// someone into the diorama, then shuts unless the game says otherwise.
+//
 // The latch is a solid-state relay on an output. DIORAMA_LATCH_UNLOCK is the
 // level that releases the door: HIGH for a fail-secure strike (power opens
 // it), LOW for a maglock (power holds it). It is driven to the locked level as
@@ -774,6 +777,9 @@ static void renderExtractor(uint32_t now, float dt) {
 #endif
 #ifndef DIORAMA_DOOR_OPEN
   #define DIORAMA_DOOR_OPEN    HIGH
+#endif
+#ifndef DIORAMA_BOOT_OPEN_MS
+  #define DIORAMA_BOOT_OPEN_MS 3000    // unlatched this long at boot, then the game decides
 #endif
 #ifndef DIORAMA_RAINBOW_MS
   #define DIORAMA_RAINBOW_MS   2000
@@ -798,6 +804,7 @@ static pulleys::DioramaLights diorama;
 static CRGB     dioramaTint     = CRGB(150, 255, 215);   // 't r,g,b' on serial to tune
 static bool     dioramaBench    = false;   // 'd': lit and open regardless of the game
 static bool     latchOpen       = false;
+static uint32_t bootOpenUntil   = 0;       // the boot unlatch; 0 once it is over
 static uint32_t rainbowUntil    = 0;       // 0 = not showing it
 static bool     doorOpen        = false;   // debounced
 static bool     doorRaw         = false;
@@ -831,6 +838,7 @@ static bool dioramaButtonPressed(uint32_t now) {
 
 static void dioramaInit() {
     pulleys::diorama_init(diorama, pulleys::diorama_tubes_for(DIORAMA_LEDS), esp_random());
+    bootOpenUntil = (millis() + DIORAMA_BOOT_OPEN_MS) | 1;
     pinMode(DIORAMA_DOOR_PIN, INPUT_PULLUP);
     doorRaw = doorOpen = digitalRead(DIORAMA_DOOR_PIN) == DIORAMA_DOOR_OPEN;
     doorRawSince = millis();
@@ -848,7 +856,8 @@ static void dioramaInit() {
 // all land here the same way.
 static void dioramaPoll(uint32_t now) {
     bool lit  = dioramaBench || pulleys::setting_is("diorama.lights", "creepy");
-    bool open = dioramaBench || pulleys::setting_is("diorama.latch", "open");
+    if (bootOpenUntil && (int32_t)(bootOpenUntil - now) <= 0) bootOpenUntil = 0;
+    bool open = dioramaBench || bootOpenUntil || pulleys::setting_is("diorama.latch", "open");
     if (lit != diorama.on) {
         pulleys::diorama_switch(diorama, lit);
         if (!lit) rainbowUntil = 0;
