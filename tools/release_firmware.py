@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ENVS = ("sensor", "screen", "component_state_display", "screen_extractor", "screen_diorama", "screen_party", "arbiter_mesh", "bridge")
+ENVS = ("sensor", "screen", "component_state_display", "screen_extractor", "screen_diorama", "screen_party", "arbiter_mesh", "bridge", "bridge_esp32")
 PIO = os.environ.get("PLATFORMIO_CMD") or shutil.which("pio") or str(Path.home() / ".platformio/penv/bin/pio")
 
 
@@ -91,7 +91,7 @@ def main():
         return
     run(["gh", "release", "create", tag,
          *[str(out / f"{env}-firmware.bin") for env in ENVS], str(manifest_path),
-         "--title", tag, "--notes", f"Pulleys firmware release {tag}"])
+         "--target", commit, "--title", tag, "--notes", f"Pulleys firmware release {tag}"])
     print(f"Published GitHub Release {tag}")
 
 

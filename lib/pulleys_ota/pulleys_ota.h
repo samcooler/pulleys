@@ -54,13 +54,16 @@ inline void onOffer(const MeshFwOffer& offer) {
 
 inline bool pullAndInstall(State& s) {
     WiFi.mode(WIFI_STA);
-    WiFi.begin("pulleys-fw"); // open bridge AP, fixed to the mesh channel
+    WiFi.disconnect(false);
+    WiFi.setSleep(false);
+    WiFi.begin("pulleys-fw", nullptr, MESH_WIFI_CHANNEL);
     uint32_t deadline = millis() + 20000;
     while (WiFi.status() != WL_CONNECTED && (int32_t)(millis() - deadline) < 0) {
         mesh_poll();
         delay(100);
     }
     if (WiFi.status() != WL_CONNECTED) {
+        Serial.printf("[FW] bridge WiFi connection failed status=%d\n", (int)WiFi.status());
         mesh_send_fw_status(FW_FAILED, s.env, s.buildHash, s.sha256, -1);
         return false;
     }
@@ -139,7 +142,14 @@ inline bool pullAndInstall(State& s) {
 }
 } // namespace _ota
 
-inline void ota_init() { mesh_on_fw_offer(_ota::onOffer); }
+inline void ota_init() {
+    mesh_on_fw_offer(_ota::onOffer);
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+        if (_ota::S().active && event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
+            Serial.printf("[FW] bridge WiFi disconnected reason=%u\n",
+                          info.wifi_sta_disconnected.reason);
+    }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+}
 inline bool ota_active() { return _ota::S().pending || _ota::S().active; }
 inline void ota_poll() {
     _ota::State& s = _ota::S();

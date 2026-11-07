@@ -95,13 +95,13 @@ static uint16_t fwTarget = 0;
 static bool fwOfferActive = false;
 static void drainQueue();
 
-static bool requestFirmwareChunk(uint32_t offset, uint8_t* out, size_t want, size_t& got) {
+static bool requestFirmwareChunkOnce(uint32_t offset, uint8_t* out, size_t want, size_t& got) {
     PI_LINK.printf("FW-READ sha256=%s offset=%lu length=%u\n", fwSha,
                    (unsigned long)offset, (unsigned)want);
     char line[640];
     uint32_t start = millis();
     size_t used = 0;
-    while (millis() - start < 15000) {
+    while (millis() - start < 5000) {
         while (PI_LINK.available()) {
             char c = (char)PI_LINK.read();
             if (c == '\n' || c == '\r') {
@@ -111,7 +111,13 @@ static bool requestFirmwareChunk(uint32_t offset, uint8_t* out, size_t want, siz
                     char* off = strstr(line, "offset=");
                     char* b64 = strstr(line, "b64=");
                     if (!off || !b64 || !strstr(line, fwSha) ||
-                        strtoul(off + 7, nullptr, 10) != offset) return false;
+                        strtoul(off + 7, nullptr, 10) != offset) {
+                        // A retry can leave a second response in flight. It
+                        // belongs to the old offset, not to another retry of
+                        // this chunk; keep waiting for our matching response.
+                        used = 0;
+                        continue;
+                    }
                     b64 += 4;
                     size_t decoded = 0;
                     int rc = mbedtls_base64_decode(out, want, &decoded,
@@ -127,6 +133,18 @@ static bool requestFirmwareChunk(uint32_t offset, uint8_t* out, size_t want, siz
         pulleys::mesh_poll();
         drainQueue();
         delay(1);
+    }
+    Serial.printf("[FW] chunk response timed out at offset=%lu partial=%u\n",
+                  (unsigned long)offset, (unsigned)used);
+    return false;
+}
+
+static bool requestFirmwareChunk(uint32_t offset, uint8_t* out, size_t want, size_t& got) {
+    // Chunks are addressed by offset, so requesting one again is safe. Recover
+    // from a lost USB control record before the node's HTTP read times out.
+    for (uint8_t attempt = 0; attempt < 3; ++attempt) {
+        got = 0;
+        if (requestFirmwareChunkOnce(offset, out, want, got) && got == want) return true;
     }
     return false;
 }
@@ -187,14 +205,14 @@ static void onLegacyOtaStatus(const pulleys::MeshOtaReady& status) {
 static void updateBridgeSelf(uint32_t size, const char* sha) {
     const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
     if (!size || strlen(sha) != 64 || !next || size > next->size) {
-        PI_LINK.printf("FW-STATUS id=%04X env=bridge state=failed err=bad_image\n",
+        PI_LINK.printf("FW-STATUS id=%04X env=" PULLEYS_ENV " state=failed err=bad_image\n",
                        pulleys::identity_id());
         return;
     }
     strlcpy(fwSha, sha, sizeof(fwSha));
     fwSize = size;
     if (!Update.begin(size, U_FLASH)) {
-        PI_LINK.printf("FW-STATUS id=%04X env=bridge state=failed err=%d\n",
+        PI_LINK.printf("FW-STATUS id=%04X env=" PULLEYS_ENV " state=failed err=%d\n",
                        pulleys::identity_id(), (int)Update.getError());
         return;
     }
@@ -213,7 +231,7 @@ static void updateBridgeSelf(uint32_t size, const char* sha) {
         mbedtls_sha256_update_ret(&hash, buf, got);
         off += got;
         if (off == size || off / 65536 != (off - got) / 65536)
-            PI_LINK.printf("FW-STATUS id=%04X env=bridge state=downloading offset=%lu\n",
+            PI_LINK.printf("FW-STATUS id=%04X env=" PULLEYS_ENV " state=downloading offset=%lu\n",
                            pulleys::identity_id(), (unsigned long)off);
     }
     uint8_t digest[32];
@@ -224,18 +242,18 @@ static void updateBridgeSelf(uint32_t size, const char* sha) {
     actual[64] = 0;
     if (!ok || off != size || strcmp(actual, sha) != 0) {
         Update.abort();
-        PI_LINK.printf("FW-STATUS id=%04X env=bridge state=failed err=hash\n",
+        PI_LINK.printf("FW-STATUS id=%04X env=" PULLEYS_ENV " state=failed err=hash\n",
                        pulleys::identity_id());
         return;
     }
     if (!Update.end(true)) {
-        PI_LINK.printf("FW-STATUS id=%04X env=bridge state=failed err=write\n",
+        PI_LINK.printf("FW-STATUS id=%04X env=" PULLEYS_ENV " state=failed err=write\n",
                        pulleys::identity_id());
         return;
     }
     Preferences prefs;
     if (prefs.begin("fw", false)) { prefs.putString("sha256", sha); prefs.end(); }
-    PI_LINK.printf("FW-STATUS id=%04X env=bridge state=ok sha256=%s\n",
+    PI_LINK.printf("FW-STATUS id=%04X env=" PULLEYS_ENV " state=ok sha256=%s\n",
                    pulleys::identity_id(), sha);
     Serial.flush();
     if (!PI_SHARES_CONSOLE) PI_LINK.flush();
@@ -335,14 +353,25 @@ static bool fwHosting = false;
 
 static void startFirmwareHost() {
     if (fwHosting) return;
+#if BRIDGE_PI_USB && CONFIG_IDF_TARGET_ESP32C3
+    // Firmware control records must arrive whole. The idle console drops output
+    // rather than waiting for a missing host, but a dropped FW-READ stalls the
+    // download. The Pi has now contacted us, so allow bounded USB backpressure.
+    Serial.setTxTimeoutMs(1000);
+#endif
+    if (!WiFi.mode(WIFI_AP_STA) ||
+        !WiFi.softAP("pulleys-fw", "", MESH_WIFI_CHANNEL, 0, 4)) {
+        Serial.println("[FW] firmware AP failed to start");
+        return;
+    }
     fwHosting = true;
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP("pulleys-fw", "", MESH_WIFI_CHANNEL, 0, 8);
     fwServer.on("/api/v1/health", HTTP_GET, []() {
         fwServer.send(200, "application/json",
                       String("{\"channel\":") + MESH_WIFI_CHANNEL +
                       ",\"busy\":" + (fwOfferActive ? "true" : "false") + "}");
     });
+    // Nodes on the retired OTA client request this path during migration.
+    fwServer.on("/firmware.bin", HTTP_GET, serveFirmware);
     fwServer.onNotFound([]() {
         if (fwServer.method() == HTTP_GET && fwServer.uri().startsWith("/api/v1/firmware/")) {
             serveFirmware();
@@ -369,7 +398,7 @@ static void handlePiLine(char* buf) {
     }
     if (strncmp(buf, "FW-", 3) == 0) startFirmwareHost();
     if (strncmp(buf, "FW-PING", 7) == 0) {
-        PI_LINK.printf("FW-BRIDGE id=%04X env=bridge sha256=%s\n",
+        PI_LINK.printf("FW-BRIDGE id=%04X env=" PULLEYS_ENV " sha256=%s\n",
                        pulleys::identity_id(), pulleys::whoami_firmware_hash());
     } else if (strncmp(buf, "FW-CENSUS", 9) == 0 ||
                strncmp(buf, "FW-QUERY", 8) == 0) {
@@ -400,11 +429,14 @@ static void handlePiLine(char* buf) {
             PI_LINK.println("FW-ERROR reason=bad_offer");
         }
     } else if (strncmp(buf, "FW-BRIDGE-UPDATE ", 17) == 0) {
+        char imageEnv[32] = {};
         char sha[65] = {};
         unsigned size = 0;
         char* shaAt = strstr(buf, "sha256=");
         char* sizeAt = strstr(buf, "size=");
-        if (shaAt && sizeAt && sscanf(shaAt, "sha256=%64s", sha) == 1 &&
+        if (sscanf(buf + 17, "env=%31s", imageEnv) == 1 &&
+            strcmp(imageEnv, PULLEYS_ENV) == 0 &&
+            shaAt && sizeAt && sscanf(shaAt, "sha256=%64s", sha) == 1 &&
             sscanf(sizeAt, "size=%u", &size) == 1)
             updateBridgeSelf(size, sha);
         else PI_LINK.println("FW-STATUS state=failed err=bad_command");
@@ -482,17 +514,19 @@ static void pollPi() {
 }
 
 void setup() {
-    Serial.begin(115200);
 #if BRIDGE_PI_USB
     // Firmware chunks arrive as ~600-character lines, more than the default
-    // buffer holds. And a Pi that is not reading (Overlord down, cable still
-    // in) must cost dropped lines, not a stalled loop and a deaf radio.
+    // buffer holds. HardwareSerial requires sizing it before begin().
     Serial.setRxBufferSize(1024);
+#if CONFIG_IDF_TARGET_ESP32C3
+    // Keep an idle native-USB console from stalling the radio without a host.
     Serial.setTxTimeoutMs(0);
+#endif
 #else
     Serial1.setRxBufferSize(1024);
     Serial1.begin(BRIDGE_BAUD, SERIAL_8N1, BRIDGE_RX_PIN, BRIDGE_TX_PIN);
 #endif
+    Serial.begin(115200);
     delay(1000);
 
     pulleys::identity_init(PULLEYS_TYPE_BRIDGE);
@@ -521,7 +555,7 @@ void setup() {
 
     pulleys::census_set_detail(BRIDGE_PI_USB ? "usb" : "uart1");
     pulleys::whoami_reply();
-    PI_LINK.printf("FW-BRIDGE id=%04X env=bridge sha256=%s\n",
+    PI_LINK.printf("FW-BRIDGE id=%04X env=" PULLEYS_ENV " sha256=%s\n",
                    pulleys::identity_id(), pulleys::whoami_firmware_hash());
     Serial.println("Bridge ready — forwarding mesh events to the Pi.\n");
 }

@@ -20,7 +20,8 @@
 | `traveler` | ESP32-S3 custom | default |
 | `station` | XIAO ESP32-C3 | default |
 | `station_wroom` | D1 Mini ESP32-WROOM-32 | hardware FPU, SSAA=3 |
-| `bridge` | ESP32-C3 (`seeed_xiao_esp32c3`) | mesh → Pi serial bridge, default env, always a C3 |
+| `bridge` | ESP32-C3 (`seeed_xiao_esp32c3`) | mesh → Pi over native USB, default env |
+| `bridge_esp32` | classic ESP32 (`esp32dev`), 4 MB | mesh → Pi over USB-UART; separate image to prevent cross-flashing a C3 binary |
 | `component_state_display` | D1 Mini ESP32-WROOM-32 | the screen image pinned to its COMPONENTS display, default env |
 | `screen_extractor` | D1 Mini ESP32-WROOM-32 | the screen image on the extractor surface (ring + strip), default env |
 | `screen_party` | ESP32 DevKit, 30-pin (`esp32dev`) | the screen image pinned to PARTY: four AC light switches, no LEDs, default env |
@@ -48,7 +49,7 @@ python3 tools/release_firmware.py
 ```
 
 This builds `sensor`, `screen`, `component_state_display`, `screen_extractor`,
-`screen_diorama`, `screen_party`, `arbiter_mesh`, and `bridge`, then creates the next minor GitHub Release with the images and
+`screen_diorama`, `screen_party`, `arbiter_mesh`, `bridge`, and `bridge_esp32`, then creates the next minor GitHub Release with the images and
 `manifest.json`. Use `--build-only` to create local assets only. `./flash_all.sh
 --ota` is retired; managed updates are initiated by restarting the Overlord.
 
@@ -61,6 +62,12 @@ pio run -e bridge -t upload --upload-port /dev/ttyACM0
 
 The new bridge retains the old mesh invitation and `/firmware.bin` route long
 enough to migrate nodes that still run the legacy OTA client.
+
+Firmware coordinator and chunk-protocol regression tests (Python plus a C++ compiler):
+
+```sh
+python3 -m unittest discover -s test -p 'test_firmware*.py'
+```
 
 ## Flashing & Monitoring
 
@@ -174,7 +181,7 @@ pio run -e bridge                                              # build
 pio run -e bridge -t upload --upload-port /dev/cu.usbmodemXXXX # flash
 ```
 
-The bridge is always an ESP32-C3. `flash_all.sh` maps `bridge` to the `c3`
+Use `bridge` for an ESP32-C3, or `bridge_esp32` for a classic ESP32 with a USB-UART adapter. Both share their USB console with the Pi protocol. `flash_all.sh` maps `bridge` to the `c3`
 hardware class, but its listing and converge pass skip C3 boards as "retired"
 unless an env is named, so flash a fresh board with the command above or
 `./flash_all.sh bridge -p <port>`. Once a board reports `env=bridge` it is kept.

@@ -12,6 +12,7 @@ import urllib.request
 from pathlib import Path
 
 ACTIVE_ENVS = {"sensor", "screen", "component_state_display", "arbiter_mesh", "bridge"}
+OPTIONAL_ENVS = {"screen_extractor", "screen_diorama", "screen_party", "bridge_esp32"}
 CACHE = Path(os.environ.get("OVERLORD_FIRMWARE_CACHE",
                             str(Path.home() / ".cache" / "overlord" / "firmware")))
 
@@ -115,7 +116,7 @@ class FirmwareUpdater:
             raise RuntimeError("release manifest is missing active firmware environments")
         CACHE.mkdir(parents=True, exist_ok=True)
         local = {}
-        for env in sorted(ACTIVE_ENVS):
+        for env in sorted(ACTIVE_ENVS | (OPTIONAL_ENVS & table.keys())):
             entry = table[env]
             name = entry.get("asset")
             if name not in assets:
@@ -183,6 +184,10 @@ class FirmwareUpdater:
 
         table = self._release["manifest"]
         nodes = list(self._inventory.items())
+        print(f"firmware: release {self._release['tag']} inventory: {len(nodes)} nodes", flush=True)
+        for node_id, node in nodes:
+            print(f"firmware: node {node_id} env={node.get('env', '?')} "
+                  f"build_hash={node.get('sha256', 'unknown')}", flush=True)
         # Preserve the requested first/last priorities; all middle entries are
         # intentionally unordered.
         own = self._bridge_id
@@ -196,7 +201,7 @@ class FirmwareUpdater:
             expected_build = table[env]["build_hash"]
             if node.get("sha256") == expected_build:
                 continue
-            is_own_bridge = env == "bridge" and node_id == own
+            is_own_bridge = node_id == own
             if is_own_bridge:
                 command = (f"FW-BRIDGE-UPDATE env={env} build_hash={expected_build} "
                            f"sha256={expected} size={table[env]['size']}")
@@ -209,7 +214,10 @@ class FirmwareUpdater:
                 if not self.serial.write_line(command):
                     break
                 print(f"firmware: {env} {node_id} attempt {attempt}/3", flush=True)
-                status = self._wait_status(node_id, 180)
+                # USB-UART bridges carry Base64 records at 115200 baud. Budget
+                # for their wire overhead and chunk round trips as images grow.
+                timeout = max(180, table[env]["size"] / 4000 + 60)
+                status = self._wait_status(node_id, timeout)
                 if status and status.get("state") == "ok":
                     # Require a newly requested census report with the expected
                     # hash rather than accepting the install ACK alone.
