@@ -764,7 +764,7 @@ static void renderExtractor(uint32_t now, float dt) {
 // with the door open: HIGH for a switch that closes to ground when it is shut.
 #if SCREEN_DIORAMA_BUILD
 #ifndef DIORAMA_LATCH_PIN
-  #define DIORAMA_LATCH_PIN    15      // D15. A strapping pin: it must not be held low at boot
+  #define DIORAMA_LATCH_PIN    18      // D18: no boot role, so it stays low until set
 #endif
 #ifndef DIORAMA_DOOR_PIN
   #define DIORAMA_DOOR_PIN     27
