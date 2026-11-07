@@ -7,6 +7,9 @@
 
 static const uint32_t REPEAT_MS = 1000;   // the table goes out at least this often
 static const uint8_t  MAX_INPUTS = 32;
+// A device reports every 20 s (SETTINGS_REPORT_MS); this long without one and
+// it counts as gone quiet.
+static const uint32_t QUIET_MS = 3 * pulleys::SETTINGS_REPORT_MS;
 
 struct Setting {
     char       key[48];       // "diorama.lights"
@@ -244,6 +247,32 @@ void devices_print() {
                       s.key, want, is, strcmp(want, is) ? "!!" : "ok",
                       (unsigned long)((millis() - s.isAt) / 1000), s.isFrom);
     }
+}
+
+bool devices_summary(char* out, size_t n) {
+    out[0] = 0;
+    if (!s_setCount) return true;
+    uint8_t ok = 0, bad = 0;
+    char first[64] = "";
+    for (uint8_t i = 0; i < s_setCount; i++) {
+        const Setting& s = s_set[i];
+        const char* want = s.values[s.want].as<const char*>();
+        const char* problem = nullptr;
+        char line[64];
+        if (!s.isAt || millis() - s.isAt > QUIET_MS) {
+            snprintf(line, sizeof(line), "%s silent", s.key);
+            problem = line;
+        } else if (strcmp(want, nameOfValue(s, s.isHash)) != 0) {
+            snprintf(line, sizeof(line), "%s wants %s, is %s", s.key, want, nameOfValue(s, s.isHash));
+            problem = line;
+        }
+        if (!problem) { ok++; continue; }
+        if (!bad++) strlcpy(first, problem, sizeof(first));
+    }
+    if (!bad) snprintf(out, n, "devices: %u/%u as set", ok, s_setCount);
+    else if (bad == 1) snprintf(out, n, "devices: %s", first);
+    else snprintf(out, n, "devices: %s (+%u more)", first, bad - 1);
+    return bad == 0;
 }
 
 String devices_json() {

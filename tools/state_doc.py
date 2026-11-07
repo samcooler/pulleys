@@ -157,6 +157,19 @@ class Doc:
         line = f' <span class="line">“{esc(self.lines[cue])}”</span>' if cue in self.lines and not self.is_placeholder(cue) else ""
         return f'<div class="cue k-{kind}"><span class="tag">{label}</span><code>{name}</code>{line}{self.ph(cue)}</div>'
 
+    def sets_html(self, sets):
+        """Device settings a block changes; they change before its cues fire."""
+        return "".join(f'<div class="cue k-set"><span class="tag">set</span>'
+                       f'<code>{esc(k)} = {esc(v)}</code></div>' for k, v in (sets or {}).items())
+
+    def block_html(self, block, enter=False):
+        """A reaction: its device settings, then its cues."""
+        block = block or {}
+        if not block.get("set"):
+            return self.cues_html(block.get("cue"), enter)
+        return self.sets_html(block.get("set")) + (self.cues_html(block.get("cue"), enter)
+                                                    if block.get("cue") else "")
+
     def cues_html(self, cues, enter=False):
         if not cues:
             return '<span class="none">nothing</span>'
@@ -173,7 +186,7 @@ class Doc:
     def state_html(self, i, name):
         st = self.states[name] or {}
         on = reactions(st)
-        enter = (on.get("enter") or {}).get("cue") or []
+        enter = on.get("enter") or {}
         rows = []
         for event, action in on.items():
             if event == "enter":
@@ -184,15 +197,20 @@ class Doc:
                     if action.get("goto") else "")
             rows.append(f'<tr{cls}><td class="ev"><code>{esc(event)}</code>'
                         f'<div class="evd">{esc(EVENTS.get(event, ""))}</div></td>'
-                        f'<td class="do">{self.cues_html(action.get("cue"))}{goto}</td></tr>')
+                        f'<td class="do">{self.block_html(action)}{goto}</td></tr>')
         table = (f'<table class="react"><thead><tr><th>When</th><th>Janis and the panel</th></tr></thead>'
                  f'<tbody>{"".join(rows)}</tbody></table>' if rows else
                  '<p class="none">No pull does anything here.</p>')
         idle = st.get("idle")
         idle_html = (f'<div class="timer"><span class="tag t-idle">idle</span>'
                      f'<span>after {self.delay_html(name, "idle", idle["delay"])} without a pull, then every {esc(idle["delay"])}</span>'
-                     f'<div class="timer-cues">{self.cues_html(idle.get("cue"))}</div></div>'
+                     f'<div class="timer-cues">{self.block_html(idle)}</div></div>'
                      if idle else "")
+        at = st.get("at") or {}
+        at_html = "".join(f'<div class="timer"><span class="tag t-at">at</span>'
+                          f'<span>{esc(delay)} into this state</span>'
+                          f'<div class="timer-cues">{self.block_html(step)}</div></div>'
+                          for delay, step in at.items())
         after = st.get("after")
         after_html = (f'<div class="timer"><span class="tag t-after">timeout</span>'
                       f'<span>after {self.delay_html(name, "after", after.get("delay", "2m"))} in this state, '
@@ -204,13 +222,13 @@ class Doc:
   <header><span class="num">{i}</span><h2>{esc(name)}{start}</h2></header>
   <div class="block">
     <h3>On entry <span class="hint">these clips cut off whatever is playing</span></h3>
-    <div class="cues">{self.cues_html(enter, enter=True)}</div>
+    <div class="cues">{self.block_html(enter, enter=True)}</div>
   </div>
   <div class="block">
     <h3>Reactions <span class="hint">a clip here waits its turn: dropped if one is playing</span></h3>
     {table}
   </div>
-  {f'<div class="block timers">{idle_html}{after_html}</div>' if idle or after else ""}
+  {f'<div class="block timers">{at_html}{idle_html}{after_html}</div>' if idle or after or at else ""}
 </section>'''
 
     def strip_html(self):
@@ -240,6 +258,7 @@ class Doc:
   --video: #1f4fb8; --video-bg: #e9eefb; --audio: #0e7a52; --audio-bg: #e6f4ec;
   --game: #7a5a11; --game-bg: #f7efd9; --purple: #6b32b5; --purple-bg: #f1eafb;
   --idle: #9a4f0a; --after: #4b5563; --warn: #c8102e; --warn-bg: #fde8eb;
+  --device: #a3195b; --device-bg: #fbe7f0; --at: #7a3fb0;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }}
@@ -248,13 +267,15 @@ class Doc:
   --accent: #3fb8b3; --accent-ink: #0d1413;
   --video: #8fb0ff; --video-bg: #22304f; --audio: #6fd3a3; --audio-bg: #1c3a2c;
   --game: #e3bd5c; --game-bg: #3b3119; --purple: #c39cff; --purple-bg: #30234a;
-  --idle: #f0a55a; --after: #b2b7c0; --warn: #ff6b7a; --warn-bg: #4a1f26; color-scheme: dark }} }}
+  --idle: #f0a55a; --after: #b2b7c0; --warn: #ff6b7a; --warn-bg: #4a1f26;
+  --device: #f48fbf; --device-bg: #45182f; --at: #c9a2f5; color-scheme: dark }} }}
 :root[data-theme="dark"] {{
   --bg: #16181c; --paper: #1f2227; --fg: #e8e6df; --muted: #9a9ea6; --rule: #343840;
   --accent: #3fb8b3; --accent-ink: #0d1413;
   --video: #8fb0ff; --video-bg: #22304f; --audio: #6fd3a3; --audio-bg: #1c3a2c;
   --game: #e3bd5c; --game-bg: #3b3119; --purple: #c39cff; --purple-bg: #30234a;
-  --idle: #f0a55a; --after: #b2b7c0; --warn: #ff6b7a; --warn-bg: #4a1f26; color-scheme: dark }}
+  --idle: #f0a55a; --after: #b2b7c0; --warn: #ff6b7a; --warn-bg: #4a1f26;
+  --device: #f48fbf; --device-bg: #45182f; --at: #c9a2f5; color-scheme: dark }}
 body {{ background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans); margin: 0;
   padding-block: 32px 64px;
   padding-left: max(16px, env(safe-area-inset-left, 0px));
@@ -290,6 +311,7 @@ h3 {{ margin: 0 0 8px; font-size: 12px; font-weight: 600; text-transform: upperc
 .k-video_once .tag, .k-video_loop .tag {{ color: var(--video); background: var(--video-bg); }}
 .k-audio_once .tag, .k-audio_loop .tag {{ color: var(--audio); background: var(--audio-bg); }}
 .k-game .tag, .k-other .tag {{ color: var(--game); background: var(--game-bg); }}
+.k-set .tag {{ color: var(--device); background: var(--device-bg); }}
 .line {{ color: var(--muted); font-style: italic; }}
 .takes {{ margin: 6px 0 2px; padding-left: 18px; display: grid; gap: 2px; font-size: 14px; }}
 .choose {{ border-left: 2px solid var(--rule); padding-left: 10px; display: grid; gap: 4px; }}
@@ -309,6 +331,7 @@ tr.purple .ev code {{ color: var(--purple); background: var(--purple-bg); paddin
 .timer-cues {{ grid-column: 2; }}
 .t-idle {{ color: var(--idle); border: 1px solid currentColor; }}
 .t-after {{ color: var(--after); border: 1px solid currentColor; }}
+.t-at {{ color: var(--at); border: 1px solid currentColor; }}
 .ph {{ font: 500 10.5px var(--sans); text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 4px;
   color: var(--warn); background: var(--warn-bg); margin-left: 4px; }}
 .ph-b {{ color: var(--warn); font-weight: 600; }}

@@ -7,7 +7,8 @@ Reads game_state_machine/state_config.yaml by default and writes the image
 next to it. Needs the graphviz `dot` binary (brew install graphviz) and the
 python packages `graphviz` and `pyyaml`.
 
-Each state is a card listing every cue it fires: on entry, and per event.
+Each state is a card listing every cue it fires and every device setting it
+changes (⚙): on entry, per event, while idle, and at each `at` step.
 Arrows between states are labelled with the event, or `after <delay>` for a
 timer. An event that fires cues without leaving the state is a loop arrow back
 onto that state.
@@ -40,6 +41,7 @@ LOOP_COLOR = "#7c3aed"
 VIDEO_COLOR = "#1d4ed8"
 AUDIO_COLOR = "#047857"
 BAND_FILL = "#f3f4f6"
+DEVICE_COLOR = "#be185d"
 
 
 def esc(text):
@@ -59,9 +61,12 @@ def cue_cell(cue):
             f'<FONT POINT-SIZE="11" COLOR="{color}">{mark}  {esc(cue)}</FONT></TD>')
 
 
-def section_rows(title, cues):
+def section_rows(title, cues, sets=None):
     rows = [f'<TR><TD ALIGN="LEFT" BGCOLOR="{BAND_FILL}" BORDER="0" CELLPADDING="3">'
             f'<FONT POINT-SIZE="10" COLOR="{MUTED}"><B>{esc(title)}</B></FONT></TD></TR>']
+    for key, value in (sets or {}).items():   # device settings change before the cues fire
+        rows.append(f'<TR><TD ALIGN="LEFT" BORDER="0" CELLPADDING="2">'
+                    f'<FONT POINT-SIZE="11" COLOR="{DEVICE_COLOR}">⚙  {esc(key)} = {esc(value)}</FONT></TD></TR>')
     for c in cues:
         if isinstance(c, dict):   # choose_one: one of several, shown as a | b
             c = " | ".join(c["choose_one"])
@@ -78,12 +83,15 @@ def state_label(name, state, is_start):
     if state.get("on_enter_cue"):
         rows += section_rows("ON ENTER", state["on_enter_cue"])
     for event, action in reactions(state).items():
-        cues = (action or {}).get("cue") or []
-        if cues:
-            rows += section_rows(f"ON {event}", cues)
+        action = action or {}
+        if action.get("cue") or action.get("set"):
+            rows += section_rows(f"ON {event}", action.get("cue") or [], action.get("set"))
     idle = state.get("idle")
-    if idle and idle.get("cue"):
-        rows += section_rows(f"IDLE every {idle['delay']}", idle["cue"])
+    if idle and (idle.get("cue") or idle.get("set")):
+        rows += section_rows(f"IDLE every {idle['delay']}", idle.get("cue") or [], idle.get("set"))
+    for delay, step in (state.get("at") or {}).items():
+        step = step or {}
+        rows += section_rows(f"AT {delay}", step.get("cue") or [], step.get("set"))
     return ('<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" '
             f'COLOR="{CARD_BORDER}" BGCOLOR="{CARD_FILL}" STYLE="ROUNDED">'
             + "".join(rows) + "</TABLE>>")
@@ -98,6 +106,7 @@ def legend_label():
         row("■  audio cue", AUDIO_COLOR),
         row("↻  loops until changed", MUTED),
         row("▸  plays once", MUTED),
+        row("⚙  device setting", DEVICE_COLOR),
         row("──▶  event", EVENT_COLOR),
         row("- - ▶  timer", TIMER_COLOR),
         row("↺  event, stays in state", LOOP_COLOR),

@@ -413,7 +413,9 @@ which happens once, a setting holds until the game changes it.
   otherwise -- not every second, because every node relays every packet and
   per-second reports from every device would cost the mesh the square of its
   size. On the arbiter's console `V` lists each setting, wanted against
-  reported; `/state` includes the same under `devices`.
+  reported; `/state` includes the same under `devices`; and the game panel's
+  bottom-right line reads "devices: 3/3 as set", or names the first that is
+  not (amber), including one not heard from in 60 s.
 - **On the air** a name or value is a 16-bit hash (`lib/pulleys_settings`, and
   `name_hash` in `tools/game_to_json.py`, which refuses collisions).
 - **Relay.** Message types `0xA0` and up share one header and every node

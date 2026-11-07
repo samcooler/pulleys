@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "monitor.h"
 #include "gamestate.h"
+#include "devices.h"
 #include "installcfg.h"
 #include <lvgl.h>
 #include <Arduino.h>
@@ -72,6 +73,7 @@ static lv_obj_t* s_gameTimer;
 static lv_obj_t* s_flashBar;
 static lv_obj_t* s_flashLbl;
 static lv_obj_t* s_gameLog;
+static lv_obj_t* s_gameDev;    // one line: are the devices doing what the game set?
 static uint32_t  s_seenSeq = 0;
 static uint32_t  s_flashAt = 0;
 static uint32_t  s_flashCol = COL_FLASH;
@@ -198,6 +200,11 @@ void ui_init() {
     lv_obj_set_style_text_font(s_gameLog, &lv_font_unscii_8, 0);
     lv_obj_set_style_text_line_space(s_gameLog, 2, 0);
     lv_obj_align(s_gameLog, LV_ALIGN_TOP_LEFT, 270, 32);
+
+    s_gameDev = lv_label_create(s_gamePanel);
+    lv_label_set_text(s_gameDev, "");
+    lv_obj_set_style_text_font(s_gameDev, &lv_font_unscii_8, 0);
+    lv_obj_align(s_gameDev, LV_ALIGN_TOP_LEFT, 270, 74);   // under the log's four lines
 }
 
 // Health colour from how long a node has been quiet.
@@ -424,6 +431,11 @@ static void refreshGame() {
                         age, log[i].kind, log[i].text);
     }
     setTextIfChanged(s_gameLog, s_buf);
+
+    char dev[80];
+    bool fine = devices_summary(dev, sizeof(dev));
+    setTextIfChanged(s_gameDev, dev);
+    lv_obj_set_style_text_color(s_gameDev, lv_color_hex(fine ? COL_DIM : COL_WARN), 0);
 }
 
 // A trigger lights the bar at full strength and lets it fade back to the

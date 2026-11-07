@@ -394,7 +394,7 @@ else
     rc=0
     for i in {1..${#prov_ports[@]}}; do
       echo "  → ${prov_ports[$i]} ← ${prov_envs[$i]}"
-      "$0" "${prov_envs[$i]}" -p "${prov_ports[$i]}" 2>&1 | tail -1 || rc=1
+      PULLEYS_FLASH_PREBUILT=1 "$0" "${prov_envs[$i]}" -p "${prov_ports[$i]}" 2>&1 | tail -1 || rc=1
     done
 
     # 4. second pass for boards that could not identify themselves before. They
@@ -424,7 +424,7 @@ else
         if "$PIO" run "${late_build[@]}" >/dev/null 2>&1; then
           for i in {1..${#late_ports[@]}}; do
             echo "  → ${late_ports[$i]} ← ${late_envs[$i]} (re-flash with its assignment)"
-            "$0" "${late_envs[$i]}" -p "${late_ports[$i]}" 2>&1 | tail -1 || rc=1
+            PULLEYS_FLASH_PREBUILT=1 "$0" "${late_envs[$i]}" -p "${late_ports[$i]}" 2>&1 | tail -1 || rc=1
           done
         else
           echo "  Build FAILED on the second pass — those boards keep their fallback."
@@ -493,12 +493,23 @@ else
     if [[ "$RESET_ONLY" == true ]]; then
       echo "\nResetting ${#auto_ports[@]} board(s):"
     else
+      # Build every env in play first: the per-board calls below do not.
+      typeset -A auto_seen
+      typeset -a auto_build
+      for e in "${auto_envs[@]}"; do
+        if [[ -z "${auto_seen[$e]:-}" ]]; then auto_seen[$e]=1; auto_build+=("-e" "$e"); fi
+      done
+      echo "\nBuilding: ${(k)auto_seen}"
+      if ! "$PIO" run "${auto_build[@]}" >/dev/null 2>&1; then
+        echo "Build FAILED — not flashing. Run 'pio run ${auto_build[*]}' to see why."
+        exit 1
+      fi
       echo "\nReflashing ${#auto_ports[@]} board(s) with their own env:"
     fi
     rc=0
     for i in {1..${#auto_ports[@]}}; do
       echo "  → ${auto_ports[$i]} ← ${auto_envs[$i]}"
-      "$0" "${auto_envs[$i]}" -p "${auto_ports[$i]}" "${pass_flags[@]}" 2>&1 | tail -1 || rc=1
+      PULLEYS_FLASH_PREBUILT=1 "$0" "${auto_envs[$i]}" -p "${auto_ports[$i]}" "${pass_flags[@]}" 2>&1 | tail -1 || rc=1
     done
     exit $rc
   fi
@@ -540,9 +551,10 @@ BUILD=".pio/build/$ENV"
 # invisible at the panel: the board comes up fine, just running yesterday's
 # code, and the next hour goes into debugging firmware that was never on it.
 #
-# Recursive calls pass -p (one per board, from the passes above) and have
-# already been built by their caller, so only a top-level run builds.
-if [[ "$RESET_ONLY" == false && ${#ONLY_PORTS[@]} -eq 0 ]]; then
+# The passes above call this script again per board, after building every env
+# themselves, and say so with PULLEYS_FLASH_PREBUILT. Not -p: that is also how
+# a person names a port by hand, and that run must build like any other.
+if [[ "$RESET_ONLY" == false && -z "${PULLEYS_FLASH_PREBUILT:-}" ]]; then
   echo "Building $ENV…"
   if ! "$PIO" run -e "$ENV" >/dev/null 2>&1; then
     echo "Build FAILED — not flashing. Run 'pio run -e $ENV' to see why."

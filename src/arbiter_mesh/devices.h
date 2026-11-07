@@ -31,3 +31,7 @@ void devices_set(const char* key, const char* value);   // validated on load
 void devices_tick();                       // every loop: the once-a-second repeat
 void devices_print();                      // console: wanted vs reported, per setting
 String devices_json();                     // {"diorama.lights":{"want":"creepy","is":"creepy","ageS":3}, ...}
+// One line for the panel: "devices: 3/3 as set", or the first that is not
+// (told one thing, reporting another; or not heard from). Empty with no
+// devices. True if all is well.
+bool devices_summary(char* out, size_t n);
