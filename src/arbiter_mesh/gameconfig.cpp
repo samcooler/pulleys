@@ -1,5 +1,6 @@
 #include "gameconfig.h"
 #include "gamestate.h"
+#include "devices.h"
 
 #include <WiFi.h>
 #include <WebServer.h>
@@ -68,21 +69,24 @@ static void handleEvent() {
     String name = s_server->hasArg("name") ? s_server->arg("name") : s_server->arg("plain");
     name.trim();
     GameEvent e;
-    if (!gameevent_from_name(name.c_str(), e)) {
+    if (gameevent_from_name(name.c_str(), e)) {
+        gamestate_event(e);
+    } else if (name.indexOf('.') > 0) {
+        gamestate_input(name.c_str());   // a device's input, "diorama.door_opened"
+    } else {
         s_server->send(400, "text/plain", "unknown event '" + name + "'");
         return;
     }
-    gamestate_event(e);
     s_server->send(200, "text/plain", String("ok ") + gamestate_state());
 }
 
 static void handleState() {
     char out[192];
     snprintf(out, sizeof(out),
-             "{\"game\":\"%s\",\"state\":\"%s\",\"ageMs\":%lu,\"timerLeftMs\":%ld,\"decayRate\":%.4f}",
+             "{\"game\":\"%s\",\"state\":\"%s\",\"ageMs\":%lu,\"timerLeftMs\":%ld,\"decayRate\":%.4f,\"devices\":",
              gamestate_game(), gamestate_state(), (unsigned long)gamestate_state_age_ms(),
              (long)gamestate_timer_left_ms(), gamestate_decay_rate());
-    s_server->send(200, "application/json", out);
+    s_server->send(200, "application/json", String(out) + devices_json() + "}");
 }
 
 void gameconfig_init() {

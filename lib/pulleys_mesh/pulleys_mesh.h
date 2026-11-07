@@ -49,6 +49,10 @@ enum : uint8_t {
     MESH_MSG_FW_OFFER     = 0x80,   // bridge: targeted firmware update offer
     MESH_MSG_FW_STATUS    = 0x81,   // node: update progress/result
     MESH_MSG_CONFIG       = 0x90,   // arbiter: sensor -> channel map, channel -> colour
+    // 0xA0 and up: flooded packets with the common header below, relayed by
+    // every node whether or not it knows the type (see "Flood" further down).
+    MESH_MSG_STATE        = 0xA0,   // arbiter: every device setting (pulleys_settings)
+    MESH_MSG_DEVICE       = 0xA1,   // device: an input event, or what it is doing
 };
 
 // Clock sync: every node beacons its own mesh clock, and each listener pulls a
@@ -310,6 +314,36 @@ typedef void (*MeshConfigCb)(const MeshConfig& c, bool relayed);
 typedef void (*MeshFwOfferCb)(const MeshFwOffer& offer);
 typedef void (*MeshFwStatusCb)(const MeshFwStatus& status);
 
+// ── Flood ────────────────────────────────────────────────────────────────────
+// Every message type from MESH_MSG_FLOOD_FIRST up has this header and nothing
+// else in common, and every node relays it -- deduped on (originId, seq), TTL
+// down by one, bytes untouched -- whether or not it knows the type. That is the
+// whole point: a new message type reaches every corner of the mesh as soon as
+// its sender and its receivers are updated, without first reflashing every
+// sensor in between. The types below 0xA0 predate this; each has its own path.
+//
+// A node that understands a type registers for it with mesh_on_flood().
+static constexpr uint8_t MESH_MSG_FLOOD_FIRST = 0xA0;
+
+struct __attribute__((packed)) MeshFloodHeader {
+    uint8_t  magic0;      // 'P'
+    uint8_t  magic1;      // 'M'
+    uint8_t  msgType;     // >= MESH_MSG_FLOOD_FIRST
+    uint8_t  originType;  // MESH_ORIGIN_*
+    uint16_t originId;
+    uint16_t seq;         // shares the origin's counter with its events
+    uint8_t  ttl;         // remaining flood hops
+};  // 9 bytes, then the body
+static constexpr uint8_t MESH_FLOOD_MAX_BODY = 250 - sizeof(MeshFloodHeader);
+
+struct MeshFlood {
+    MeshFloodHeader h;
+    uint8_t         body[MESH_FLOOD_MAX_BODY];
+    uint8_t         len;   // body bytes; 1.. MESH_FLOOD_MAX_BODY (at least one, so a flood is never mistaken for short garbage)
+};
+typedef void (*MeshFloodCb)(const MeshFlood& f, bool relayed);
+static constexpr uint8_t MESH_FLOOD_HANDLERS = 4;
+
 // ── Internal state ──────────────────────────────────────────────────────────
 namespace _mesh {
 
@@ -354,6 +388,14 @@ struct ConfigSlot {
     bool       used;
 };
 
+struct FloodSlot {
+    MeshFlood pkt;
+    uint32_t  dueMs;
+    uint16_t  gapMs;
+    uint8_t   left;
+    bool      used;
+};
+
 struct State {
     uint8_t     originType = 0;
     uint16_t    originId   = 0;
@@ -378,6 +420,14 @@ struct State {
     CueSlot cueOut[8]   = {};
     ComponentsSlot compOut[4] = {};
     ConfigSlot     cfgOut[2]  = {};
+    FloodSlot      floodOut[8] = {};
+
+    // Flood RX ring, and who wants which type.
+    MeshFlood        floodRx[4] = {};
+    volatile uint8_t floodHead  = 0;
+    volatile uint8_t floodTail  = 0;
+    uint8_t          floodType[MESH_FLOOD_HANDLERS] = {};
+    MeshFloodCb      floodCb[MESH_FLOOD_HANDLERS]   = {};
 
     // Cue RX ring, same single-producer/single-consumer shape as the events'.
     MeshCue          cueRx[4] = {};
@@ -498,6 +548,19 @@ inline void enqueueConfig(const MeshConfig& c, uint8_t count, uint16_t gap, uint
         s.cfgOut[i].gapMs = gap;
         s.cfgOut[i].dueMs = millis() + firstDelay;
         s.cfgOut[i].used  = true;
+        return;
+    }
+}
+
+inline void enqueueFlood(const MeshFlood& f, uint8_t count, uint16_t gap, uint16_t firstDelay) {
+    State& s = S();
+    for (uint8_t i = 0; i < 8; i++) {
+        if (s.floodOut[i].used) continue;
+        s.floodOut[i].pkt   = f;
+        s.floodOut[i].left  = count;
+        s.floodOut[i].gapMs = gap;
+        s.floodOut[i].dueMs = millis() + firstDelay;
+        s.floodOut[i].used  = true;
         return;
     }
 }
@@ -628,6 +691,19 @@ static void onRecv(const uint8_t* /*mac*/, const uint8_t* data, int len) {
         return;
     }
 
+    if (data[2] >= MESH_MSG_FLOOD_FIRST) {
+        int body = len - (int)sizeof(MeshFloodHeader);
+        if (body < 1 || body > MESH_FLOOD_MAX_BODY) { st.statBadMagic++; return; }
+        uint8_t ch = (st.floodHead + 1) & 3;
+        if (ch == st.floodTail) { st.statRingFull++; return; }
+        MeshFlood& slot = st.floodRx[st.floodHead];
+        memcpy(&slot.h, data, sizeof(MeshFloodHeader));
+        memcpy(slot.body, data + sizeof(MeshFloodHeader), (size_t)body);
+        slot.len = (uint8_t)body;
+        st.floodHead = ch;
+        return;
+    }
+
     if (len < (int)sizeof(MeshEvent)) { st.statBadMagic++; return; }
     const MeshEvent* p = (const MeshEvent*)data;
     if (p->msgType != MESH_MSG_EVENT) { st.statBadMagic++; return; }
@@ -695,6 +771,23 @@ inline void handleConfig(const MeshConfig& c) {
         MeshConfig r = c;
         r.ttl--;
         enqueueConfig(r, 1, 0, (uint16_t)random(3, 28));
+    }
+}
+
+inline void handleFlood(const MeshFlood& f) {
+    uint32_t key = keyOf(f.h.originId, f.h.seq);
+    if (wasSeen(key)) return;
+    markSeen(key);
+
+    bool relayed = f.h.ttl < MESH_TTL_START;
+    State& s = S();
+    for (uint8_t i = 0; i < MESH_FLOOD_HANDLERS; i++)
+        if (s.floodCb[i] && s.floodType[i] == f.h.msgType) s.floodCb[i](f, relayed);
+
+    if (s.relayOn && f.h.ttl > 0) {
+        MeshFlood r = f;
+        r.h.ttl--;
+        enqueueFlood(r, 1, 0, (uint16_t)random(3, 28));
     }
 }
 
@@ -794,6 +887,42 @@ inline void mesh_send_components(const uint8_t charge[MESH_COMPONENT_COUNT],
 
     _mesh::markSeen(_mesh::keyOf(c.originId, c.seq));   // don't relay our own echo
     _mesh::enqueueComponents(c, urgent ? 3 : 1, 80, 0);
+}
+
+// Flood. Hear one message type (>= MESH_MSG_FLOOD_FIRST); false if all
+// MESH_FLOOD_HANDLERS slots are taken. Every node relays every flood type
+// whether it registers or not.
+inline bool mesh_on_flood(uint8_t msgType, MeshFloodCb cb) {
+    _mesh::State& st = _mesh::S();
+    for (uint8_t i = 0; i < MESH_FLOOD_HANDLERS; i++) {
+        if (st.floodCb[i] && st.floodType[i] != msgType) continue;
+        st.floodType[i] = msgType;
+        st.floodCb[i]   = cb;
+        return true;
+    }
+    return false;
+}
+
+// Send `len` body bytes as a flood of `msgType`, `copies` times `gapMs` apart:
+// a burst for something that must arrive, one copy for a periodic repeat.
+inline bool mesh_send_flood(uint8_t msgType, const void* body, uint8_t len,
+                            uint8_t copies = MESH_BURST, uint16_t gapMs = MESH_BURST_GAP) {
+    if (msgType < MESH_MSG_FLOOD_FIRST || len == 0 || len > MESH_FLOOD_MAX_BODY) return false;
+    MeshFlood f = {};
+    f.h.magic0     = 'P';
+    f.h.magic1     = 'M';
+    f.h.msgType    = msgType;
+    _mesh::State& st = _mesh::S();
+    f.h.originType = st.originType;
+    f.h.originId   = st.originId;
+    f.h.seq        = ++st.seqCounter;
+    f.h.ttl        = MESH_TTL_START;
+    memcpy(f.body, body, len);
+    f.len = len;
+
+    _mesh::markSeen(_mesh::keyOf(f.h.originId, f.h.seq));   // don't relay our own echo
+    _mesh::enqueueFlood(f, copies ? copies : 1, gapMs, 0);
+    return true;
 }
 
 // Config. Sensors and Screens subscribe; the arbiter sends. Every role relays it.
@@ -1038,6 +1167,12 @@ inline void mesh_poll() {
         _mesh::handleComponents(c);
     }
 
+    while (st.floodTail != st.floodHead) {
+        MeshFlood f = st.floodRx[st.floodTail];
+        st.floodTail = (st.floodTail + 1) & 3;
+        _mesh::handleFlood(f);
+    }
+
     while (st.cfgTail != st.cfgHead) {
         _mesh::handleConfig(st.cfgRx[st.cfgTail]);
         st.cfgTail = (st.cfgTail + 1) & 1;
@@ -1073,6 +1208,18 @@ inline void mesh_poll() {
         _mesh::ConfigSlot& s = st.cfgOut[i];
         if (!s.used || now < s.dueMs) continue;
         esp_err_t e = esp_now_send(_mesh::BCAST, (const uint8_t*)&s.pkt, mesh_config_wire_size(s.pkt));
+        st.statSent++;
+        if (e != ESP_OK) st.statSendErr++;
+        if (--s.left == 0) s.used = false;
+        else s.dueMs = now + s.gapMs;
+    }
+    for (uint8_t i = 0; i < 8; i++) {
+        _mesh::FloodSlot& s = st.floodOut[i];
+        if (!s.used || now < s.dueMs) continue;
+        uint8_t wire[250];
+        memcpy(wire, &s.pkt.h, sizeof(MeshFloodHeader));
+        memcpy(wire + sizeof(MeshFloodHeader), s.pkt.body, s.pkt.len);
+        esp_err_t e = esp_now_send(_mesh::BCAST, wire, sizeof(MeshFloodHeader) + s.pkt.len);
         st.statSent++;
         if (e != ESP_OK) st.statSendErr++;
         if (--s.left == 0) s.used = false;

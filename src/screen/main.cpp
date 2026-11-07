@@ -15,6 +15,7 @@
 #include <pulleys_component_display.h>
 #include <pulleys_extractor.h>
 #include <pulleys_diorama.h>
+#include <pulleys_settings.h>
 #include "font5x7.h"
 
 // ── Screen — activity display for the sensor mesh ─────────────────────────────
@@ -712,21 +713,26 @@ static void renderExtractor(uint32_t now, float dt) {
 // ── Display: diorama ──────────────────────────────────────────────────────────
 // A strip of fluorescent tubes in a cold, painful blue-green white: 8 pixels
 // lit, 3 dark, over and over (pulleys_diorama has the tubes and their
-// flicker). Dark for most of the game. The arbiter's game fires
-// game_diorama_on when game 1 is won; DIORAMA_ON_DELAY_MS later the tubes
-// strike up and the door unlatches. game_diorama_off -- game 2 won, or the game
-// back at its start -- puts them out and latches the door again.
+// flicker), a latch on the diorama's door, and a switch that says whether the
+// door is open. The game drives it through two settings (pulleys_settings):
 //
-// The door has a switch on an input with a pull-up. While the lights are on,
-// opening the door turns every tube to a running rainbow for
-// DIORAMA_RAINBOW_MS, then the room jolts back to its flicker.
+//   diorama.lights  dark | creepy     the tubes off, or striking up and flickering
+//   diorama.latch   locked | open     the door held, or released
+//
+// and hears two inputs back, diorama.door_opened and diorama.door_closed. When
+// the game changes them is the game file's business (state_config.yaml), not
+// this board's. Unset -- no game, or the arbiter silent past the lease -- is
+// dark and locked.
+//
+// Opening the door while the tubes are lit also turns them to a running
+// rainbow for DIORAMA_RAINBOW_MS, here on the board, so it is instant; the
+// room then jolts back to its flicker. The game hears the door all the same.
 //
 // The latch is a solid-state relay on an output. DIORAMA_LATCH_UNLOCK is the
 // level that releases the door: HIGH for a fail-secure strike (power opens
 // it), LOW for a maglock (power holds it). It is driven to the locked level as
-// the very first thing on boot, and held unlocked for as long as the lights
-// are on. DIORAMA_DOOR_OPEN is the level the input reads with the door open:
-// HIGH for a switch that closes to ground when the door is shut.
+// the very first thing on boot. DIORAMA_DOOR_OPEN is the level the input reads
+// with the door open: HIGH for a switch that closes to ground when it is shut.
 #if SCREEN_DIORAMA_BUILD
 #ifndef DIORAMA_LATCH_PIN
   #define DIORAMA_LATCH_PIN    26
@@ -740,9 +746,6 @@ static void renderExtractor(uint32_t now, float dt) {
 #ifndef DIORAMA_DOOR_OPEN
   #define DIORAMA_DOOR_OPEN    HIGH
 #endif
-#ifndef DIORAMA_ON_DELAY_MS
-  #define DIORAMA_ON_DELAY_MS  10000   // after game 1 is won
-#endif
 #ifndef DIORAMA_RAINBOW_MS
   #define DIORAMA_RAINBOW_MS   2000
 #endif
@@ -755,50 +758,20 @@ static void renderExtractor(uint32_t now, float dt) {
 
 static pulleys::DioramaLights diorama;
 static CRGB     dioramaTint     = CRGB(150, 255, 215);   // 't r,g,b' on serial to tune
-static bool     dioramaPending  = false;   // heard "on", waiting out the delay
-static uint32_t dioramaOnAt     = 0;
+static bool     dioramaBench    = false;   // 'd': lit and open regardless of the game
+static bool     latchOpen       = false;
 static uint32_t rainbowUntil    = 0;       // 0 = not showing it
 static bool     doorOpen        = false;   // debounced
 static bool     doorRaw         = false;
 static uint32_t doorRawSince    = 0;
 
-static void dioramaLatch(bool unlocked) {
-    digitalWrite(DIORAMA_LATCH_PIN, unlocked ? DIORAMA_LATCH_UNLOCK : DIORAMA_LATCH_LOCK);
-}
-
-static void dioramaOn() {
-    dioramaPending = false;
-    if (diorama.on) return;
-    pulleys::diorama_switch(diorama, true);
-    dioramaLatch(true);
-    Serial.println("  [DIORAMA] ON: lights striking, door unlatched");
-}
-
-static void dioramaOff() {
-    bool was = diorama.on || dioramaPending;
-    dioramaPending = false;
-    rainbowUntil   = 0;
-    pulleys::diorama_switch(diorama, false);
-    dioramaLatch(false);
-    if (was) Serial.println("  [DIORAMA] OFF: lights out, door latched");
-}
-
-// Repeats of a cue (the burst, relays) are deduped by the mesh, and a second
-// "on" while already on or waiting changes nothing.
-static void onMeshCue(const pulleys::MeshCue& c, bool /*relayed*/) {
-    if (strcmp(c.name, "game_diorama_on") == 0) {
-        if (diorama.on || dioramaPending) return;
-        dioramaPending = true;
-        dioramaOnAt    = millis() + DIORAMA_ON_DELAY_MS;
-        Serial.printf("  [DIORAMA] on in %lus\n", (unsigned long)(DIORAMA_ON_DELAY_MS / 1000));
-    } else if (strcmp(c.name, "game_diorama_off") == 0) {
-        dioramaOff();
-    }
+static void dioramaLatch(bool open) {
+    latchOpen = open;
+    digitalWrite(DIORAMA_LATCH_PIN, open ? DIORAMA_LATCH_UNLOCK : DIORAMA_LATCH_LOCK);
 }
 
 static void dioramaDoorOpened(uint32_t now) {
-    if (!diorama.on) return;   // latched: nobody should be in there
-    rainbowUntil = (now + DIORAMA_RAINBOW_MS) | 1;
+    if (diorama.on) rainbowUntil = (now + DIORAMA_RAINBOW_MS) | 1;
 }
 
 static void dioramaInit() {
@@ -806,23 +779,39 @@ static void dioramaInit() {
     pinMode(DIORAMA_DOOR_PIN, INPUT_PULLUP);
     doorRaw = doorOpen = digitalRead(DIORAMA_DOOR_PIN) == DIORAMA_DOOR_OPEN;
     doorRawSince = millis();
-    pulleys::mesh_on_cue(onMeshCue);
+    pulleys::settings_init();
     Serial.printf("  [DIORAMA] %u tubes on %u LEDs; latch GPIO %d, door GPIO %d (%s)\n",
                   diorama.tubes, DIORAMA_LEDS, DIORAMA_LATCH_PIN, DIORAMA_DOOR_PIN,
                   doorOpen ? "open" : "shut");
 }
 
-// Every loop, not every frame: the door and the delay should not wait on the LEDs.
+// Every loop, not every frame: the door should not wait on the LEDs. The
+// settings are read fresh each time, so a change, a reboot and a lapsed lease
+// all land here the same way.
 static void dioramaPoll(uint32_t now) {
-    if (dioramaPending && (int32_t)(now - dioramaOnAt) >= 0) dioramaOn();
+    bool lit  = dioramaBench || pulleys::setting_is("diorama.lights", "creepy");
+    bool open = dioramaBench || pulleys::setting_is("diorama.latch", "open");
+    if (lit != diorama.on) {
+        pulleys::diorama_switch(diorama, lit);
+        if (!lit) rainbowUntil = 0;
+        Serial.printf("  [DIORAMA] lights %s\n", lit ? "on: striking" : "out");
+    }
+    if (open != latchOpen) {
+        dioramaLatch(open);
+        Serial.printf("  [DIORAMA] door %s\n", open ? "unlatched" : "latched");
+    }
+    pulleys::device_report("diorama.lights", lit ? "creepy" : "dark");
+    pulleys::device_report("diorama.latch",  open ? "open" : "locked");
 
     bool raw = digitalRead(DIORAMA_DOOR_PIN) == DIORAMA_DOOR_OPEN;
     if (raw != doorRaw) { doorRaw = raw; doorRawSince = now; }
     if (doorRaw != doorOpen && now - doorRawSince >= DIORAMA_DEBOUNCE_MS) {
         doorOpen = doorRaw;
         Serial.printf("  [DIORAMA] door %s\n", doorOpen ? "opened" : "shut");
+        pulleys::device_emit(doorOpen ? "diorama.door_opened" : "diorama.door_closed");
         if (doorOpen) dioramaDoorOpened(now);
     }
+    pulleys::settings_poll();
 }
 
 static void renderDiorama(uint32_t now, float dt) {
@@ -857,11 +846,10 @@ static void renderDiorama(uint32_t now, float dt) {
 
 // ── Display: party ────────────────────────────────────────────────────────────
 // Not a display at all: four outputs, each powering a switch for a string of
-// the room's AC lights. The game fires game_party_lights_on as it enters a
-// victory (party, after game 1; victory2) and game_party_lights_off as it
-// leaves one (final, kickout) or lands back at its start (passive). The four
-// come on PARTY_STAGGER_MS apart, so they do not all draw their inrush at once,
-// and go off together.
+// the room's AC lights. The game drives them with one setting
+// (pulleys_settings), party.lights: dark | lit. Unset -- no game, or the
+// arbiter silent past the lease -- is dark. The four come on PARTY_STAGGER_MS
+// apart, so they do not all draw their inrush at once, and go off together.
 //
 // PARTY_ON is the level that switches a light on: HIGH for an SSR or a relay
 // module driven high, LOW for the common active-low relay boards. Every output
@@ -883,6 +871,7 @@ static void renderDiorama(uint32_t now, float dt) {
 static const uint8_t PARTY_PIN[] = { PARTY_PINS };
 static constexpr uint8_t PARTY_COUNT = sizeof(PARTY_PIN) / sizeof(PARTY_PIN[0]);
 
+static bool     partyBench = false;  // 'p': lit regardless of the game
 static bool     partyOn    = false;
 static uint32_t partyOnAt  = 0;
 static uint8_t  partyLit   = 0;      // how many of the outputs are on so far
@@ -907,30 +896,26 @@ static void partySwitch(bool on) {
         partyLit = 0;
     }
     digitalWrite(PARTY_STATUS_PIN, on ? HIGH : LOW);
-    pulleys::census_set_detail(on ? "party on" : "party off");
+    pulleys::census_set_detail(on ? "party lit" : "party dark");
     Serial.printf("  [PARTY] lights %s\n", on ? "ON" : "OFF");
 }
 
-// Repeats of a cue are deduped by the mesh, and a repeat of the state it is
-// already in changes nothing.
-static void onPartyCue(const pulleys::MeshCue& c, bool /*relayed*/) {
-    if      (strcmp(c.name, "game_party_lights_on")  == 0) partySwitch(true);
-    else if (strcmp(c.name, "game_party_lights_off") == 0) partySwitch(false);
-}
-
 static void partyInit() {
-    pulleys::mesh_on_cue(onPartyCue);
+    pulleys::settings_init();
     Serial.printf("  [PARTY] %u outputs, on = %s:", PARTY_COUNT, PARTY_ON == HIGH ? "HIGH" : "LOW");
     for (uint8_t i = 0; i < PARTY_COUNT; i++) Serial.printf(" GPIO%u", PARTY_PIN[i]);
     Serial.println();
 }
 
 static void partyPoll(uint32_t now) {
+    partySwitch(partyBench || pulleys::setting_is("party.lights", "lit"));
     while (partyOn && partyLit < PARTY_COUNT &&
            now - partyOnAt >= (uint32_t)partyLit * PARTY_STAGGER_MS) {
         digitalWrite(PARTY_PIN[partyLit], PARTY_ON);
         partyLit++;
     }
+    pulleys::device_report("party.lights", partyOn ? "lit" : "dark");
+    pulleys::settings_poll();
 }
 #endif
 
@@ -943,10 +928,12 @@ static void partyPoll(uint32_t now) {
 //   w      flip the 14×2 panel's row direction, for matching the wiring
 //   h<c>,<s>  set the wave's centre hue and its swing (0-255), for finding the
 //             arc on the bench before writing it into WaveParams
-//   d      diorama: lights on (at once, no delay) / off, as the game's cues do
-//   o      diorama: act as if the door had just been opened
+//   d      diorama: bench override on / off -- lit and unlatched whatever the game says
+//   o      diorama: act as if the door had just been opened (and tell the game)
 //   t<r>,<g>,<b>  diorama: set the tubes' tint, for finding it on the bench
-//   p      party: lights on / off, as the game's cues do
+//   p      party: bench override on / off -- lit whatever the game says
+//   S<key>=<value>  diorama/party: as if the arbiter had set it ("S party.lights=lit");
+//             it lapses with the lease, like anything heard
 static void handleSerial() {
     static char buf[96];
     static uint8_t len = 0;
@@ -998,10 +985,11 @@ static void handleSerial() {
                               waveCfg.centerHue, waveCfg.hueSwing);
 #if SCREEN_DIORAMA_BUILD
             } else if (buf[0] == 'd') {
-                if (diorama.on || dioramaPending) dioramaOff(); else dioramaOn();
+                dioramaBench = !dioramaBench;
+                Serial.printf("  [DIORAMA] bench override %s\n", dioramaBench ? "ON" : "off: the game decides");
             } else if (buf[0] == 'o') {
-                if (diorama.on) dioramaDoorOpened(millis());
-                else Serial.println("  [DIORAMA] lights are off: the door does nothing ('d' first)");
+                pulleys::device_emit("diorama.door_opened");
+                dioramaDoorOpened(millis());
             } else if (buf[0] == 't') {
                 int r, g, b;
                 if (sscanf(buf + 1, "%d,%d,%d", &r, &g, &b) == 3)
@@ -1009,9 +997,20 @@ static void handleSerial() {
                 Serial.printf("  diorama tint: %u,%u,%u (put one you like in dioramaTint)\n",
                               dioramaTint.r, dioramaTint.g, dioramaTint.b);
 #endif
+#if SCREEN_DIORAMA_BUILD || SCREEN_PARTY_BUILD
+            } else if (buf[0] == 'S' && strchr(buf, '=')) {
+                char* eq = strchr(buf, '=');
+                *eq = 0;
+                const char* key = buf + 1;
+                while (*key == ' ') key++;
+                pulleys::settings_pretend(key, eq + 1);
+                Serial.printf("  [SETTINGS] %s=%s (for %lus, unless the arbiter says otherwise)\n",
+                              key, eq + 1, (unsigned long)(pulleys::SETTINGS_LEASE_MS / 1000));
+#endif
 #if SCREEN_PARTY_BUILD
             } else if (buf[0] == 'p') {
-                partySwitch(!partyOn);
+                partyBench = !partyBench;
+                Serial.printf("  [PARTY] bench override %s\n", partyBench ? "ON" : "off: the game decides");
 #endif
             } else if (buf[0] == 'w') {
                 wavePanel.serpentine = !wavePanel.serpentine;

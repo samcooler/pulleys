@@ -1,5 +1,6 @@
 #include "gamestate.h"
 #include "components.h"
+#include "devices.h"
 #include <ArduinoJson.h>
 #include <pulleys_mesh.h>
 #include <pulleys_channel.h>
@@ -40,6 +41,12 @@ static char     s_timerGoto[32] = "";
 static bool     s_idleOn = false;
 static uint32_t s_idleMs = 0;
 static uint32_t s_idleAt = 0;
+
+// The state's `at` block: timed steps, each run once, `delay` after entry.
+// Bit i is entry i of the block, in file order.
+static const uint8_t MAX_AT = 16;
+static uint16_t s_atDone = 0;
+static uint32_t s_enters = 0;   // bumps on every state entry: "did that just move us?"
 
 static GameTrigger s_log[GAME_LOG_LEN];
 static uint8_t     s_logCount = 0;
@@ -155,6 +162,8 @@ static bool validate(JsonDocument& doc, String& why) {
         }
     }
 
+    if (!devices_validate(doc, why)) return false;
+
     if (states[doc["start"].as<const char*>()].isNull()) {
         why = String("start '") + doc["start"].as<const char*>() + "' is not a state";
         return false;
@@ -199,10 +208,16 @@ static bool validate(JsonDocument& doc, String& why) {
         for (JsonPair ev : state["on"].as<JsonObject>()) {
             String where = name + ".on." + ev.key().c_str();
             if (!ev.value().isNull() && !ev.value().is<JsonObject>()) {
-                why = where + ": must be a map with cue and/or goto";
+                why = where + ": must be a map with cue, set and/or goto";
+                return false;
+            }
+            // A dotted event is a device's input, which the device has to declare.
+            if (strchr(ev.key().c_str(), '.') && !devices_is_input(doc, ev.key().c_str())) {
+                why = where + ": not an input any device emits (devices.<device>.emits)";
                 return false;
             }
             if (badCues(where, ev.value()["cue"])) return false;
+            if (!devices_check_set(doc, ev.value()["set"], where, why)) return false;
             if (!ev.value()["goto"].isNull() &&
                 badGoto(where, ev.value()["goto"].as<const char*>())) return false;
         }
@@ -214,6 +229,23 @@ static bool validate(JsonDocument& doc, String& why) {
                 return false;
             }
             if (badCues(name + ".idle", idle["cue"])) return false;
+            if (!devices_check_set(doc, idle["set"], name + ".idle", why)) return false;
+        }
+        JsonVariant at = state["at"];
+        if (!at.isNull()) {
+            if (!at.is<JsonObject>() || at.size() > MAX_AT) {
+                why = name + ".at: must be a map of up to " + MAX_AT + " delays (10s: {set, cue})";
+                return false;
+            }
+            for (JsonPair step : at.as<JsonObject>()) {
+                String where = name + ".at." + step.key().c_str();
+                uint32_t ms;
+                if (!parseDelay(step.key().c_str(), ms)) { why = where + ": must look like 10s or 2m"; return false; }
+                if (!step.value().is<JsonObject>()) { why = where + ": must be a map with cue and/or set"; return false; }
+                if (!step.value()["goto"].isNull()) { why = where + ": no goto here; use after"; return false; }
+                if (badCues(where, step.value()["cue"])) return false;
+                if (!devices_check_set(doc, step.value()["set"], where, why)) return false;
+            }
         }
         JsonVariant after = state["after"];
         if (!after.isNull()) {
@@ -248,6 +280,16 @@ static void fire(JsonVariant cues, bool enter = false) {
     if (randomizedGoals) components_check_simon_complete();
 }
 
+// One reaction's actions: its settings first, then its cues. Settings first so
+// a device and a clip triggered together see the room already changed.
+static void act(JsonVariant block, bool enter = false) {
+    for (JsonPair kv : block["set"].as<JsonObject>()) {
+        devices_set(kv.key().c_str(), kv.value().as<const char*>());
+        record('C', "set %s=%s", kv.key().c_str(), kv.value().as<const char*>());
+    }
+    fire(block["cue"], enter);
+}
+
 static void enter(const char* name) {
     char from[32];
     strlcpy(from, s_state[0] ? s_state : "-", sizeof(from));
@@ -255,6 +297,8 @@ static void enter(const char* name) {
     s_enteredAt = millis();
     s_timerOn = false;
     s_idleOn  = false;
+    s_atDone  = 0;
+    s_enters++;
 
     if (from[0] == '-') record('S', "start: %s", s_state);
     else record('S', "%s -> %s", from, s_state);
@@ -278,7 +322,7 @@ static void enter(const char* name) {
     // State entry is represented in the YAML like other reactions, under
     // `on: enter:`. Set its timer first: an entry cue may complete Simon's
     // current goal set and synchronously move the state machine again.
-    fire(state["on"]["enter"]["cue"], true);
+    act(state["on"]["enter"], true);
 }
 
 bool gamestate_load(const String& json, String& why) {
@@ -304,14 +348,16 @@ bool gamestate_load(const String& json, String& why) {
     s_state[0] = 0;
     s_timerOn = false;
     s_idleOn  = false;
+    devices_load(s_doc);
     Serial.printf(GAME_PREFIX " loaded '%s'\n", s_game);
     enter(s_doc["start"].as<const char*>());
     return true;
 }
 
-void gamestate_event(GameEvent e) {
+void gamestate_event(GameEvent e) { gamestate_input(gameevent_name(e)); }
+
+void gamestate_input(const char* name) {
     if (!s_ready) return;
-    const char* name = gameevent_name(e);
     if (s_idleOn) s_idleAt = millis() + s_idleMs;   // any event is activity
     JsonVariant state = s_doc["states"][s_state];
     JsonObject on = state["on"].as<JsonObject>();
@@ -322,7 +368,7 @@ void gamestate_event(GameEvent e) {
     }
     record('E', "%s", name);
     JsonVariant action = on[name];
-    fire(action["cue"]);
+    act(action);
     if (!action["goto"].isNull()) enter(action["goto"].as<const char*>());
 }
 
@@ -338,7 +384,21 @@ void gamestate_tick() {
     if (s_idleOn && (int32_t)(millis() - s_idleAt) >= 0) {
         s_idleAt = millis() + s_idleMs;   // before fire: a cue may change state
         record('T', "idle in %s", s_state);
-        fire(s_doc["states"][s_state]["idle"]["cue"]);
+        uint32_t enters = s_enters;
+        act(s_doc["states"][s_state]["idle"]);
+        if (s_enters != enters) return;
+    }
+    uint8_t i = 0;
+    uint32_t age = millis() - s_enteredAt;
+    for (JsonPair step : s_doc["states"][s_state]["at"].as<JsonObject>()) {
+        uint16_t bit = (uint16_t)1 << i++;
+        uint32_t ms;
+        if ((s_atDone & bit) || !parseDelay(step.key().c_str(), ms) || age < ms) continue;
+        s_atDone |= bit;
+        record('T', "at %s in %s", step.key().c_str(), s_state);
+        uint32_t enters = s_enters;
+        act(step.value());
+        if (s_enters != enters) return;   // that step's cue moved the machine on
     }
 }
 

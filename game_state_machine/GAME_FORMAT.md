@@ -17,6 +17,7 @@ strings overlord already accepts (`video_once_test1`, `audio_once_chime`,
 | `ambient_sounds` | Sounds overlord repeats on a schedule (optional)    |
 | `audio_gain` | Loudness multiplier per audio cue (optional)        |
 | `players` | Satellite Pis a cue may be addressed to (optional)  |
+| `devices` | Devices the game sets and hears from: lights, latches, switches (optional) |
 | `cues`   | Every cue the game may use, grouped by type                |
 | `states` | The state machine                                    |
 
@@ -168,6 +169,42 @@ on top of the volume setting; a cue not listed plays at 1. Keys are
 clip a clip that is already loud. Overlord reads the file at startup, so a
 change needs a restart; the arbiter ignores it.
 
+## Devices
+
+```yaml
+devices:
+  diorama:
+    set:
+      lights: [dark, creepy]       # the first value is where it starts
+      latch: [locked, open]
+    emits: [door_opened, door_closed]
+  party:
+    set:
+      lights: [dark, lit]
+```
+
+Things in the room the game drives directly, rather than through media: the
+diorama's lights and door latch, the party lights. Each device lists the
+settings it takes and the values each may hold, and the inputs it can send
+back.
+
+A state changes a setting with `set:` (below), and the setting **holds** until
+another `set:` changes it -- unlike a cue, which happens once. The arbiter keeps
+the whole table and broadcasts it on every change and once a second, so a
+device that reboots or misses a packet is right again within a second.
+
+A device that hears nothing from the arbiter for 12 seconds falls back to its
+own safe state -- lights out, door locked -- so losing the arbiter never leaves
+the room stuck. That fallback lives in the device's firmware, not here.
+
+An input arrives as an event named `device.input`, which a state reacts to like
+any other: `on: diorama.door_opened:`.
+
+Names are lowercase words, and so are values. YAML reads a bare `on`, `off`,
+`yes` or `no` as true/false, so pick other words (`lit`/`dark`) or quote them.
+Names cross the air as short hashes; the validator refuses two that collide,
+and a setting with values that collide.
+
 ## States
 
 ```yaml
@@ -187,7 +224,30 @@ states:
       delay: 20s
       cue:
         - some_cue
+    at:                          # optional; timed steps, each once
+      10s:
+        set: { diorama.lights: creepy }
+        cue:
+          - some_cue
 ```
+
+Anywhere `cue:` goes -- `on: enter:`, an event, `idle`, an `at` step -- a
+`set:` may go too, with device settings to change:
+
+```yaml
+    on:
+      enter:
+        set:
+          party.lights: lit
+          diorama.latch: locked
+```
+
+The settings change first, then the cues fire, so a clip starts in a room that
+has already changed. Setting a value a setting already has does nothing.
+
+`at` runs each step once, its delay after the state is entered; leaving the
+state cancels the steps still to come, and re-entering starts them again. A
+step has `set` and/or `cue` and no `goto` -- `after` is for leaving.
 
 Anywhere a list of cues goes, an entry may be `choose_one:` with cues under
 it; one of those is picked at random each time the list fires:
@@ -221,6 +281,8 @@ leaving cancels it. `after` runs alongside and is unaffected.
   components and every final (purple) channel and immediately publishes zero charge to the displays. It emits no
   component-deactivation events. Put it before the round's goal-randomization
   cue when a fresh round should start with every component dark.
+- A device's input is an event too, named `device.input` (see Devices), and
+  only exists if the device lists it under `emits`.
 - An event with no entry in the current state is ignored.
 - `after` is cancelled when the state is left and restarts on re-entry.
   Durations are whole seconds or minutes: `10s`, `2m`. Seconds are the finest

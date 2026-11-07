@@ -63,6 +63,27 @@ components:
     - yellow
     - orange
 
+# The devices the game drives besides the media: what each can be set to, and
+# what each can tell the game. A state changes a setting with `set:`, and it
+# holds until another `set:` changes it -- the arbiter keeps broadcasting the
+# whole table, so a device that reboots or misses a packet catches up within a
+# second. The first value listed is where a setting starts. A device that hears
+# nothing from the arbiter for 12 s falls back on its own to safe: lights out,
+# door locked. Values are words; YAML reads a bare on/off/yes/no as true/false,
+# so those would need quoting -- easier to pick other words.
+#
+# An input a device emits is an event like any other, named device.input:
+# `on: diorama.door_opened:` in a state reacts to it.
+devices:
+  diorama:                          # the diorama's tubes, its door latch and door switch
+    set:
+      lights: [dark, creepy]
+      latch: [locked, open]
+    emits: [door_opened, door_closed]
+  party:                            # the four AC light switches
+    set:
+      lights: [dark, lit]
+
 # How fast a component's charge drains, in percent of full per second. Pulls
 # fill it (charge_per_pull below); it lights at 100 and goes dark at 0, so
 # once full and left alone it stays lit 100 / rate seconds: 6.6667 is 15
@@ -118,10 +139,6 @@ cues:
     - game_randomize_simon_3_goals
     - game_randomize_simon_4_goals
     - game_randomize_simon_5_goals
-    - game_diorama_on               # the diorama lights up 10 s later and unlatches its door
-    - game_diorama_off              # lights out, door latched
-    - game_party_lights_on          # the room's AC lights, for a victory
-    - game_party_lights_off
   audio_loop:
     - audio_loop_idle
     - audio_loop_off
@@ -244,9 +261,11 @@ states:
   passive:
     on:
       enter:
+        set:                          # the game is back at its start
+          diorama.lights: dark
+          diorama.latch: locked
+          party.lights: dark
         cue:
-          - game_diorama_off          # the game is back at its start
-          - game_party_lights_off
           - audio_loop_idle
           - video_loop_idle
       nongoal_component_activated:
@@ -353,13 +372,18 @@ states:
   party:
     on:
       enter:
+        set:
+          party.lights: lit
         cue:
-          - game_diorama_on           # game 1 won: the diorama comes on 10 s from now
-          - game_party_lights_on
           - choose_one:
               - video_once_janis_progress_confirmation_congrats_1
               - video_once_janis_progress_confirmation_congrats_2
               - video_once_janis_progress_confirmation_congrats_3
+    at:
+      10s:                          # the diorama comes on 10 s into the celebration
+        set:
+          diorama.lights: creepy
+          diorama.latch: open
     idle:
       delay: 12s                    # placeholder
       cue:
@@ -377,8 +401,9 @@ states:
   final:
     on:
       enter:
+        set:
+          party.lights: dark          # the victory is over
         cue:
-          - game_party_lights_off     # the victory is over
           - game_reset_components
           - video_once_janis_threatening_*
       final_component_activated:
@@ -397,9 +422,11 @@ states:
   victory2:
     on:
       enter:
+        set:
+          diorama.lights: dark
+          diorama.latch: locked
+          party.lights: lit
         cue:
-          - game_diorama_off
-          - game_party_lights_on
           - video_once_test2        # placeholder
     after:
       delay: 2m                    # placeholder
@@ -408,8 +435,9 @@ states:
   kickout:
     on:
       enter:
+        set:
+          party.lights: dark
         cue:
-          - game_party_lights_off
           - audio_loop_off
     after:
       delay: 2m                    # placeholder

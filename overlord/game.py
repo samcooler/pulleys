@@ -3,6 +3,10 @@
 Game events come in (from serial, the socket, or the simulator), the current
 state reacts by firing cues through overlord's dispatch and maybe moving to
 another state. Format: game_state_machine/GAME_FORMAT.md.
+
+`set:` blocks change device settings, which only the arbiter can deliver;
+here they are tracked and logged, so a dry run shows what the room would do.
+`at:` steps run on their own timers, as on the arbiter.
 """
 
 import random
@@ -68,6 +72,11 @@ class Game:
         self._lock = threading.RLock()
         self._timer = None
         self._idle_timer = None
+        self._at_timers = []
+        self.settings = {}   # "device.setting" -> value, as the arbiter would hold it
+        for dev, body in (config.get("devices") or {}).items():
+            for prop, values in ((body or {}).get("set") or {}).items():
+                self.settings[f"{dev}.{prop}"] = values[0]
         self.state = None
         self.timer_deadline = None  # monotonic time the current `after` fires, or None
 
@@ -111,7 +120,7 @@ class Game:
                 return
             action = listed[event_name] or {}
             print(f"game: {event_name} in {self.state}", flush=True)
-            self._fire(action.get("cue"))
+            self._act(action)
             if action.get("goto"):
                 self._enter(action["goto"])
 
@@ -119,14 +128,21 @@ class Game:
         with self._lock:
             self._cancel_timer()
             self._cancel_idle()
+            self._cancel_at()
 
     def _enter(self, name):
         self._cancel_timer()
+        self._cancel_at()
         print(f"game: {self.state or '-'} -> {name}", flush=True)
         self.state = name
         state = self.states[name]
         enter = reactions(state).get("enter") or {}
-        self._fire(enter.get("cue"), enter=True)
+        self._act(enter, enter=True)
+        for delay, step in (state.get("at") or {}).items():
+            timer = threading.Timer(parse_duration(delay), self._at, (delay, step))
+            timer.daemon = True
+            self._at_timers.append(timer)
+            timer.start()
         after = state.get("after")
         if after:
             seconds = parse_duration(after["delay"])
@@ -170,12 +186,35 @@ class Game:
                 return
             print(f"game: idle in {self.state}", flush=True)
             self._arm_idle()   # before firing: a cue may change state
-            self._fire(idle.get("cue"))
+            self._act(idle)
 
     def _cancel_idle(self):
         if self._idle_timer:
             self._idle_timer.cancel()
         self._idle_timer = None
+
+    # `at`: each step once, its delay after entering the state.
+    def _at(self, delay, step):
+        with self._lock:
+            # A step cancelled just as it fired must not run in a state it no longer belongs to.
+            if threading.current_thread() not in self._at_timers:
+                return
+            print(f"game: at {delay} in {self.state}", flush=True)
+            self._act(step)
+
+    def _cancel_at(self):
+        for timer in self._at_timers:
+            timer.cancel()
+        self._at_timers = []
+
+    def _act(self, block, enter=False):
+        """One reaction: its settings first, then its cues (as the arbiter does)."""
+        block = block or {}
+        for key, value in (block.get("set") or {}).items():
+            if self.settings.get(key) != value:
+                self.settings[key] = value
+                print(f"game: set {key}={value}", flush=True)
+        self._fire(block.get("cue"), enter=enter)
 
     def _fire(self, cues, enter=False):
         for cue in cues or []:

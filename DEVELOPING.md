@@ -358,37 +358,71 @@ now and then; one is the bad tube and flickers far more. The tube model is
 `lib/pulleys_diorama`; the board side is the DIORAMA section of
 `src/screen/main.cpp`.
 
-The game drives it with two cues (`state_config.yaml`, group `game`):
+The game drives it through device settings (see Device settings below):
+`diorama.lights` (`dark` | `creepy`) and `diorama.latch` (`locked` | `open`).
+Today's game turns both on 10 s into `party` (game 1 won), with an `at:` step,
+and back off on entering `victory2` (game 2 won) or `passive` (back at the
+start). It hears `diorama.door_opened` and `diorama.door_closed` back.
 
-- `game_diorama_on`, fired on entering `party` (game 1 won). The diorama waits
-  `DIORAMA_ON_DELAY_MS` (10 s), then the tubes come on and the door unlatches.
-- `game_diorama_off`, fired on entering `victory2` (game 2 won) and `passive`
-  (the game back at its start, including a reboot or a newly posted game).
-  Lights out, door latched.
-
-Opening the door while the lights are on turns the tubes to a running rainbow
-for 2 s, then they shudder back to their flicker. The latch is driven locked
-from the first line of `setup()` and stays unlocked for as long as the lights
-are on.
+Opening the door while the lights are on also turns the tubes to a running
+rainbow for 2 s, on the board so it is instant, then they shudder back to
+their flicker. The latch is driven locked from the first line of `setup()`.
 
 Wiring and polarity are build flags in `[env:screen_diorama]`: `DIORAMA_LEDS`
 (and `LED_COUNT`), `DIORAMA_LATCH_PIN` / `DIORAMA_DOOR_PIN`,
 `DIORAMA_LATCH_UNLOCK` (HIGH: power opens it, a strike; LOW: power holds it, a
 maglock) and `DIORAMA_DOOR_OPEN` (HIGH: the switch closes to ground when the
-door is shut). On the console, `d` switches the lights on (no delay) or off, `o`
-acts as if the door opened, and `t r,g,b` tunes the tint live.
+door is shut). On the console, `d` toggles a bench override (lit and unlatched
+whatever the game says), `o` acts as if the door opened, `t r,g,b` tunes the
+tint live, and `S diorama.lights=creepy` behaves as if the arbiter had set it.
 
 ## Party lights
 
 One board, a classic 30-pin ESP32 DevKit built as `screen_party`, with no LEDs:
 four outputs (GPIO 32, 33, 25, 26), each driving a switch for a string of the
-room's AC lights. On while the game is in a victory, off otherwise:
-
-- `game_party_lights_on`, fired on entering `party` (game 1 won) and
-  `victory2` (game 2 won). The four come on 200 ms apart, to spread the inrush.
-- `game_party_lights_off`, fired on entering `final`, `kickout` and `passive`.
+room's AC lights, driven by one device setting, `party.lights` (`dark` |
+`lit`). Today's game lights them on entering `party` (game 1 won) and
+`victory2` (game 2 won), and darkens them on entering `final`, `kickout` and
+`passive`. The four come on 200 ms apart, to spread the inrush.
 
 Every output is driven off as the first thing on boot, and the DevKit's blue
 LED (GPIO 2) shows whether the lights are on. For an active-low relay board,
 build with `-D PARTY_ON=LOW`; the pins are `PARTY_PINS` in
-`[env:screen_party]`. On the console, `p` switches the lights on or off.
+`[env:screen_party]`. On the console, `p` toggles a bench override (lit
+whatever the game says) and `S party.lights=lit` behaves as if the arbiter had
+set it.
+
+## Device settings
+
+How the game drives things in the room that are not media -- lights, latches --
+and hears back from their switches. The game file declares each device under
+`devices:` and changes settings with `set:` (GAME_FORMAT.md). Unlike a cue,
+which happens once, a setting holds until the game changes it.
+
+- **Arbiter → devices.** `src/arbiter_mesh/devices.cpp` keeps the table and
+  broadcasts all of it (`MESH_MSG_STATE`) on every change, as a short burst, and
+  once a second. A device that missed a packet or rebooted is right within a
+  second.
+- **The lease.** A device that has heard no table for 12 s
+  (`SETTINGS_LEASE_MS`) treats every setting as unset and falls back to its own
+  safe state. Losing the arbiter turns the lights out and locks the door; it
+  never leaves the room stuck.
+- **Devices → arbiter** (`MESH_MSG_DEVICE`). An input (the diorama's door) goes
+  out as a burst and reaches the game as an event, `diorama.door_opened`. A
+  device also reports what it is actually doing: on change, and every 20 s
+  otherwise -- not every second, because every node relays every packet and
+  per-second reports from every device would cost the mesh the square of its
+  size. On the arbiter's console `V` lists each setting, wanted against
+  reported; `/state` includes the same under `devices`.
+- **On the air** a name or value is a 16-bit hash (`lib/pulleys_settings`, and
+  `name_hash` in `tools/game_to_json.py`, which refuses collisions).
+- **Relay.** Message types `0xA0` and up share one header and every node
+  relays them unread (`pulleys_mesh.h`, "Flood"), so a new type needs only its
+  sender and receivers updated -- after this release. Boards running firmware
+  from before it drop these packets, so update every board once.
+
+A new device: declare it under `devices:` in the game file, and in its firmware
+call `pulleys::settings_init()` after `mesh_init()`, read
+`pulleys::setting_is("dev.setting", "value")` every loop (unset means safe),
+`device_report()` what it is doing, `device_emit()` its inputs, and
+`settings_poll()` every loop.

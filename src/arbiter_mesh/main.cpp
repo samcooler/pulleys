@@ -23,6 +23,7 @@
 #include "gameconfig.h"
 #include "gamestate.h"
 #include "components.h"
+#include "devices.h"
 #include "installcfg.h"
 #include "installui.h"
 #include "ui.h"
@@ -157,7 +158,9 @@ static bool           s_touchDebug = false;
 
 // Serial console: T<YYYYMMDDHHMMSS> sets the clock. Fixed width so there is no
 // ambiguity about field order, and local wall time rather than epoch because
-// time-of-day is the question the log exists to answer.
+// time-of-day is the question the log exists to answer. V lists every device
+// setting, wanted against reported; "g diorama.door_opened" injects a device's
+// input the way "g <event>" injects a game event.
 static void handleSerial() {
     static char buf[96];
     static uint8_t len = 0;
@@ -210,7 +213,10 @@ static void handleSerial() {
                 // "g goal_component_activated" -> inject a game event by name
                 GameEvent e;
                 if (gameevent_from_name(buf + 2, e)) gamestate_event(e);
+                else if (strchr(buf + 2, '.'))       gamestate_input(buf + 2);   // a device's input
                 else Serial.println("  [GAME] unknown event name");
+            } else if (buf[0] == 'V') {
+                devices_print();
             } else if (buf[0] == 'D') {
                 eventlog_dump();
             } else if (buf[0] == 'L') {
@@ -429,6 +435,7 @@ void setup() {
     clockui_init(&s_rtc);
     installui_init();
     // Last, so the game's opening cues go out onto a mesh that is up.
+    devices_init();
     components_init();
     gameconfig_init();
     Serial.printf("Arbiter (mesh monitor) ready — %s\n", pulleys::identity_name());
@@ -444,6 +451,7 @@ void loop() {
     pulleys::census_poll();
     gameconfig_poll();
     gamestate_tick();
+    devices_tick();
     components_tick();
     installcfg_tick();
     handleSerial();

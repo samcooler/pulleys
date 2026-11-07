@@ -12,7 +12,9 @@
 // the Pi.
 //
 // A cue it fires leaves as a MeshCue (pulleys_mesh.h), its name as ASCII, for
-// the bridge to hand to the Pi. A config is adopted whole: loading one restarts the game at its
+// the bridge to hand to the Pi. A `set:` changes a device setting, which
+// devices.cpp holds and keeps broadcasting; an `at:` step runs once, a given
+// time into a state. A config is adopted whole: loading one restarts the game at its
 // `start` state with no timers carried over, and nothing is remembered across
 // a reboot -- the machine always begins at `start`.
 //
@@ -24,6 +26,8 @@
 bool gamestate_load(const String& json, String& why);
 
 void gamestate_event(GameEvent e);
+// An event by name: a device's input ("diorama.door_opened"), or any of the above.
+void gamestate_input(const char* name);
 void gamestate_tick();                 // every loop: the `after` timer
 
 bool        gamestate_ready();         // a config is loaded

@@ -95,6 +95,80 @@ PLAYER_KINDS = ("audio_once_", "audio_loop_", "video_once_", "video_loop_", "ima
 PLAYER_WORDS = ("audio_loop_off", "image_off")
 
 
+# Device settings and inputs cross the air as 16-bit hashes of their names
+# (lib/pulleys_settings): FNV-1a, folded to 16 bits, never 0. Keep in step with
+# settings_hash() there.
+def name_hash(text):
+    h = 2166136261
+    for b in text.encode():
+        h = ((h ^ b) * 16777619) & 0xFFFFFFFF
+    folded = (h >> 16) ^ (h & 0xFFFF)
+    return folded or 1
+
+
+DEVICE_WORD = re.compile(r"[a-z0-9_]+")
+SETTINGS_MAX = 48   # pulleys_settings SETTINGS_MAX: one frame's worth
+INPUTS_MAX = 32     # devices.cpp MAX_INPUTS
+AT_MAX = 16         # gamestate.cpp MAX_AT
+YAML_BOOL_HINT = "quote on/off/yes/no: YAML reads them as true/false"
+
+
+def check_devices(cfg, errors):
+    """The devices section. Returns {"dev.setting": [values]} and {"dev.input"}."""
+    settings, inputs = {}, set()
+    devs = cfg.get("devices")
+    if devs is None:
+        return settings, inputs
+    if not isinstance(devs, dict):
+        errors.append("devices: must be a map of device names")
+        return settings, inputs
+    on_air = {}
+    def unique(name):
+        h = name_hash(name)
+        if h in on_air:
+            errors.append(f"devices: '{name}' and '{on_air[h]}' are the same on the air; rename one")
+        on_air[h] = name
+    for dev, body in devs.items():
+        if not isinstance(dev, str) or not DEVICE_WORD.fullmatch(dev):
+            errors.append(f"devices.{dev}: a device name is lowercase letters, digits and _")
+            continue
+        if not isinstance(body, dict):
+            errors.append(f"devices.{dev}: must be a map with set and/or emits")
+            continue
+        for key in set(body) - {"set", "emits"}:
+            errors.append(f"devices.{dev}: unknown key '{key}'; use set, emits")
+        for prop, values in (body.get("set") or {}).items():
+            key = f"{dev}.{prop}"
+            if not isinstance(prop, str) or not DEVICE_WORD.fullmatch(prop):
+                errors.append(f"devices.{key}: a setting name is lowercase letters, digits and _")
+                continue
+            if not isinstance(values, list) or not values:
+                errors.append(f"devices.{key}: list the values it may take")
+                continue
+            if not all(isinstance(v, str) and DEVICE_WORD.fullmatch(v) for v in values):
+                errors.append(f"devices.{key}: values are words ({YAML_BOOL_HINT})")
+                continue
+            if len({name_hash(v) for v in values}) != len(values):
+                errors.append(f"devices.{key}: two values are the same on the air; rename one")
+            unique(key)
+            settings[key] = values
+        emits = body.get("emits") or []
+        if not isinstance(emits, list):
+            errors.append(f"devices.{dev}.emits: must be a list")
+            continue
+        for e in emits:
+            if not isinstance(e, str) or not DEVICE_WORD.fullmatch(e):
+                errors.append(f"devices.{dev}.emits: '{e}' must be a lowercase word")
+                continue
+            unique(f"{dev}.{e}")
+            inputs.add(f"{dev}.{e}")
+    if len(settings) > SETTINGS_MAX:
+        errors.append(f"devices: {len(settings)} settings, at most {SETTINGS_MAX}")
+    if len(inputs) > INPUTS_MAX:
+        errors.append(f"devices: {len(inputs)} inputs, at most {INPUTS_MAX}")
+    return settings, inputs
+
+
 def for_arbiter(cfg):
     return {k: v for k, v in cfg.items() if k not in OVERLORD_ONLY}
 
@@ -169,6 +243,22 @@ def validate(cfg):
         if target not in states:
             errors.append(f"{where}: goto '{target}' is not a state")
 
+    settings, inputs = check_devices(cfg, errors)
+
+    # set: {device.setting: value}, persisting until something sets it again
+    def check_set(where, block):
+        if block is None:
+            return
+        if not isinstance(block, dict):
+            errors.append(f"{where}.set: must be a map of device.setting: value")
+            return
+        for key, value in block.items():
+            if key not in settings:
+                errors.append(f"{where}.set: '{key}' is not a setting under devices")
+            elif value not in settings[key]:
+                errors.append(f"{where}.set: {key} cannot be {value!r} "
+                              f"(one of {', '.join(settings[key])}; {YAML_BOOL_HINT})")
+
     # components: majors are game1 colours; finals are the purple channels and
     # are not configured (GAME_FORMAT.md)
     comps = cfg.get("components")
@@ -235,13 +325,15 @@ def validate(cfg):
         for event, action in (state.get("on") or {}).items():
             # `enter` is a lifecycle trigger handled by both the Overlord and
             # arbiter state machines; it is not emitted by a sensor event.
-            if event != "enter" and event not in KNOWN_EVENTS:
+            # A dotted event is a device's input (devices.<device>.emits).
+            if event != "enter" and event not in KNOWN_EVENTS and event not in inputs:
                 errors.append(f"{name}.on.{event}: not an event anything sends")
             if action is not None and not isinstance(action, dict):
-                errors.append(f"{name}.on.{event}: must be a map with cue and/or goto")
+                errors.append(f"{name}.on.{event}: must be a map with cue, set and/or goto")
                 continue
             action = action or {}
             check_cues(f"{name}.on.{event}", action.get("cue"))
+            check_set(f"{name}.on.{event}", action.get("set"))
             if "goto" in action:
                 check_goto(f"{name}.on.{event}", action["goto"])
         after = state.get("after")
@@ -256,6 +348,23 @@ def validate(cfg):
                 errors.append(f"{name}.idle: needs delay like 20s or 1m, above 0, and cue")
             else:
                 check_cues(f"{name}.idle", idle.get("cue"))
+                check_set(f"{name}.idle", idle.get("set"))
+        at = state.get("at")
+        if at is not None:
+            if not isinstance(at, dict) or len(at) > AT_MAX:
+                errors.append(f"{name}.at: must be a map of up to {AT_MAX} delays (10s: {{set, cue}})")
+                continue
+            for delay, step in at.items():
+                where = f"{name}.at.{delay}"
+                if not re.fullmatch(r"\d+[sm]", str(delay)):
+                    errors.append(f"{where}: must look like 10s or 2m")
+                if not isinstance(step, dict):
+                    errors.append(f"{where}: must be a map with cue and/or set")
+                    continue
+                if "goto" in step:
+                    errors.append(f"{where}: no goto here; use after")
+                check_cues(where, step.get("cue"))
+                check_set(where, step.get("set"))
     return errors
 
 
