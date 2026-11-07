@@ -1,0 +1,182 @@
+# Bop-it: the game calls a colour, someone pulls a rope of that colour before
+# the window closes. Hits score, a run of hits makes the calls faster, and too
+# many misses end it. Format: ../GAME_FORMAT.md.
+#
+# The call has to be seen, so show_goals puts the called colour on the video
+# (overlord draws it); audio_once_bop_call is a placeholder for a voice
+# saying the colour. A pull on any other rope is ignored rather than punished,
+# so a crowd fidgeting with the ropes cannot lose the game for whoever is
+# playing it.
+
+game: bop-it
+start: waiting
+show_goals: true
+
+# For the playtest tools: the states that mean players are getting somewhere.
+milestones:
+  - call
+  - fast_call
+  - win
+
+components:
+  major:
+    - red
+    - blue
+    - green
+    - yellow
+    - orange
+
+# One pull lights a colour and it is dark again two seconds later: this game is
+# about speed, not effort, and the bars flash with every hit.
+charge_per_pull: 100
+default_decay_rate: 50
+
+params:
+  window:
+    value: 3s
+    min: 1.5s
+    max: 5s
+    note: time to answer a call at the start
+  fast_window:
+    value: 2s
+    min: 1s
+    max: 3.5s
+    note: time to answer once a streak has sped things up
+  speedup_at:
+    value: 5
+    min: 3
+    max: 10
+    note: hits in a row before the calls get faster
+  win_score:
+    value: 15
+    min: 8
+    max: 30
+  lives:
+    value: 3
+    min: 1
+    max: 6
+
+counters:
+  score:
+    reach: $win_score
+  streak:
+    reach: $speedup_at
+  misses:
+    reach: $lives
+
+cues:
+  audio_loop:
+    - audio_loop_idle
+  video_loop:
+    - video_loop_idle
+    - video_loop_game1
+  audio_once:
+    - audio_once_bop_call              # placeholder: a voice calling the colour
+    - audio_once_component_powerup
+    - audio_once_component_powerdown
+    - audio_once_victory_fanfare
+  video_once:
+    - video_once_janis_encouragement_*
+    - video_once_janis_nag_*
+    - video_once_janis_anger_*
+    - video_once_janis_progress_confirmation_congrats_1
+
+states:
+
+  waiting:
+    on:
+      enter:
+        clear:
+          - score
+          - streak
+          - misses
+        cue:
+          - audio_loop_idle
+          - video_loop_idle
+      pull:                             # any pull starts a game
+        goto: call
+
+  call:
+    on:
+      enter:
+        goals: 1                        # a fresh colour, never the one just called
+        cue:
+          - video_loop_game1
+          - audio_once_bop_call
+      goal_pull:
+        add:
+          score: 1
+          streak: 1
+        cue:
+          - audio_once_component_powerup
+        goto: call
+      streak_reached:
+        cue:
+          - video_once_janis_encouragement_*
+        goto: fast_call
+      score_reached:
+        goto: win
+    after:
+      delay: $window
+      goto: miss
+
+  fast_call:
+    on:
+      enter:
+        goals: 1
+        cue:
+          - audio_once_bop_call
+      goal_pull:
+        add:
+          score: 1
+        cue:
+          - audio_once_component_powerup
+        goto: fast_call
+      score_reached:
+        goto: win
+    after:
+      delay: $fast_window
+      goto: miss
+
+  miss:
+    on:
+      enter:
+        clear:
+          - streak
+        add:
+          misses: 1
+        cue:
+          - audio_once_component_powerdown
+      misses_reached:
+        goto: game_over
+    after:
+      delay: 1s
+      goto: call
+
+  win:
+    on:
+      enter:
+        set:
+          party.lights: lit
+        cue:
+          - audio_once_victory_fanfare
+          - video_once_janis_progress_confirmation_congrats_1
+    after:
+      delay: 30s
+      goto: waiting
+
+  game_over:
+    on:
+      enter:
+        cue:
+          - video_once_janis_anger_*
+    after:
+      delay: 8s
+      goto: waiting
+
+devices:
+  party:
+    set:
+      lights:
+        - dark
+        - lit

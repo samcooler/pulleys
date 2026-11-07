@@ -19,6 +19,12 @@
 //                    body `goal_component_activated` or
 //                    `name=goal_component_activated`.
 //   GET    /state    one line of JSON: game, state, time in state, timer left.
+//   GET    /params   every param and its value now.
+//   POST   /params   set one live, body `round_time=90` (durations in seconds);
+//                    clamped to its range. 404 if it has no range.
+//
+// The mesh carries the same, MESH_MSG_GAME_PARAM: the Overlord's live
+// director (playtest/live.py) sends it through its bridge.
 //
 // The endpoints live on a SoftAP raised on MESH_WIFI_CHANNEL, so ESP-NOW keeps
 // working underneath it (the same trick lib/pulleys_ota plays). Join

@@ -84,19 +84,69 @@ devices:
     set:
       lights: [dark, lit]
 
+# The values the game is tuned by. A state uses one as $name wherever a delay or
+# a count goes. One with a min and a max is a knob: the playtest tuner and the
+# live director (playtest/README.md) may move it inside that range, and the
+# arbiter takes a new value without a restart -- from overlord over the bridge,
+# or `PARAM name value` on its serial port. It applies the next time it is read:
+# a round already under way keeps the deadline it started with. Without a range
+# a param is a named constant. Durations are like 20s or 2m.
+params:
+  charge_per_pull:
+    value: 20
+    min: 10
+    max: 50
+    note: percent of full charge one pull adds
+  decay_rate:
+    value: 6.6667
+    min: 3
+    max: 12
+    note: percent of full charge lost per second (6.6667 lasts 15 s from full)
+  round_time:
+    value: 2m
+    min: 1m
+    max: 4m
+    note: how long a Simon round lasts before it gives up and goes back to passive
+  nag_delay:
+    value: 20s
+    min: 10s
+    max: 45s
+    note: quiet time before Janis nags in a round
+  easy_goals:
+    value: 2
+    min: 1
+    max: 3
+  medium_goals:
+    value: 3
+    min: 2
+    max: 4
+  hard_goals:
+    value: 5
+    min: 3
+    max: 5
+  party_time:
+    value: 60s
+    min: 30s
+    max: 90s
+  final_time:
+    value: 2m
+    min: 1m
+    max: 3m
+    note: how long the purple phase lasts before the kickout
+
 # How fast a component's charge drains, in percent of full per second. Pulls
 # fill it (charge_per_pull below); it lights at 100 and goes dark at 0, so
 # once full and left alone it stays lit 100 / rate seconds: 6.6667 is 15
 # seconds. The arbiter owns this, and publishes it to the component state
 # displays along with each component's charge. It applies to every component
 # (hence "default").
-default_decay_rate: 6.6667
+default_decay_rate: $decay_rate
 
 # How much one pull adds to a component's charge, in percent of full. Below 100
 # so no single pull lights anything: it takes pulls coming faster than the
 # drain. At 20 against 6.6667, six quick pulls (two a second) fill one, and a
 # lone rope pulled once every three seconds only just holds its level.
-charge_per_pull: 20
+charge_per_pull: $charge_per_pull
 
 # Sounds overlord plays on its own, forever, whatever state the game is in.
 # Only overlord reads this; the arbiter never sees it. Each entry plays its
@@ -273,13 +323,22 @@ states:
           - audio_once_component_powerup
           - video_once_janis_encouragement_*
         goto: easy_round
+      # The last round's goals are still dealt when the game comes back here
+      # (nothing clears them), so a colour lit now may count as a goal -- after
+      # a hard round, all five do. Either way it starts the game; without this
+      # the game could never leave passive again (found by playtest's night sim).
+      goal_component_activated:
+        cue:
+          - audio_once_component_powerup
+          - video_once_janis_encouragement_*
+        goto: easy_round
 
   easy_round:
     on:
       enter:
+        goals: $easy_goals            # deal this many goal colours
         cue:
           - game_reset_components
-          - game_randomize_simon_2_goals
           - video_loop_game1
       goal_component_activated:
         cue:
@@ -294,19 +353,19 @@ states:
       all_components_activated:
         goto: medium_round
     idle:
-      delay: 20s                    # placeholder
+      delay: $nag_delay
       cue:
         - video_once_janis_nag_*
     after:
-      delay: 2m                     # placeholder
+      delay: $round_time
       goto: passive
 
   medium_round:
     on:
       enter:
+        goals: $medium_goals
         cue:
           - game_reset_components
-          - game_randomize_simon_3_goals
           - video_loop_game1
           - choose_one:               # the round just won; on enter so it cuts
               - video_once_janis_progress_confirmation_yes        # off the last
@@ -326,19 +385,19 @@ states:
       all_components_activated:
         goto: hard_round
     idle:
-      delay: 20s                    # placeholder
+      delay: $nag_delay
       cue:
         - video_once_janis_nag_*
     after:
-      delay: 2m                     # placeholder
+      delay: $round_time
       goto: passive
 
   hard_round:
     on:
       enter:
+        goals: $hard_goals
         cue:
           - game_reset_components
-          - game_randomize_simon_5_goals
           - video_loop_game1
           - choose_one:               # the round just won; on enter so it cuts
               - video_once_janis_progress_confirmation_yes        # off the last
@@ -358,11 +417,11 @@ states:
       all_components_activated:
         goto: party
     idle:
-      delay: 20s                    # placeholder
+      delay: $nag_delay
       cue:
         - video_once_janis_nag_*
     after:
-      delay: 2m                     # placeholder
+      delay: $round_time
       goto: passive
 
   # The celebration between the rounds and the final phase. Entry plays one
@@ -393,7 +452,7 @@ states:
             - video_once_janis_progress_confirmation_pizza_1
             - video_once_janis_progress_confirmation_pizza_2
     after:
-      delay: 60s                    # placeholder
+      delay: $party_time
       goto: final
 
   # Only purple matters now. The majors are not listed, so a pull on one does
@@ -416,7 +475,7 @@ states:
       cue:
         - video_once_janis_threatening_*
     after:
-      delay: 2m                     # placeholder
+      delay: $final_time
       goto: kickout
 
   victory2:

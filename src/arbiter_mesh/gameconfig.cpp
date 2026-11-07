@@ -3,6 +3,7 @@
 #include "devices.h"
 
 #include <WiFi.h>
+#include <pulleys_mesh.h>
 #include <WebServer.h>
 #include <LittleFS.h>
 #include <esp_wifi.h>
@@ -68,16 +69,63 @@ static void handleDelete() {
 static void handleEvent() {
     String name = s_server->hasArg("name") ? s_server->arg("name") : s_server->arg("plain");
     name.trim();
-    GameEvent e;
-    if (gameevent_from_name(name.c_str(), e)) {
-        gamestate_event(e);
-    } else if (name.indexOf('.') > 0) {
-        gamestate_input(name.c_str());   // a device's input, "diorama.door_opened"
-    } else {
-        s_server->send(400, "text/plain", "unknown event '" + name + "'");
+    if (name.isEmpty()) {
+        s_server->send(400, "text/plain", "no event name");
         return;
     }
+    // A game event, a device's input ("diorama.door_opened"), or a counter's
+    // <name>_reached: the state decides whether it means anything.
+    gamestate_input(name.c_str());
     s_server->send(200, "text/plain", String("ok ") + gamestate_state());
+}
+
+// GET /params: every param and its value now. POST /params: set one live,
+// body "round_time=90" (or form field name/value). Durations are seconds.
+static void handleParamsGet() {
+    String out = "{";
+    for (uint8_t i = 0; i < gamestate_param_count(); i++) {
+        if (i) out += ",";
+        out += String("\"") + gamestate_param_name(i) + "\":" + String(gamestate_param_value(i), 4);
+    }
+    s_server->send(200, "application/json", out + "}");
+}
+
+static void handleParamsPost() {
+    String name, value;
+    if (s_server->hasArg("name")) {
+        name  = s_server->arg("name");
+        value = s_server->arg("value");
+    } else {
+        String body = s_server->arg("plain");
+        body.trim();
+        int eq = body.indexOf('=');
+        if (eq < 0) eq = body.indexOf(' ');
+        if (eq > 0) { name = body.substring(0, eq); value = body.substring(eq + 1); }
+    }
+    name.trim();
+    value.trim();
+    if (name.isEmpty() || value.isEmpty()) {
+        s_server->send(400, "text/plain", "body: name=value");
+        return;
+    }
+    if (!gamestate_set_param(name.c_str(), value.toFloat())) {
+        s_server->send(404, "text/plain", "no tunable param '" + name + "' (one needs a min and a max)");
+        return;
+    }
+    handleParamsGet();
+}
+
+// The Overlord's director, through its bridge: MESH_MSG_GAME_PARAM, "<name> <value>".
+static void onGameParam(const pulleys::MeshFlood& f, bool /*relayed*/) {
+    char body[64];
+    uint8_t n = f.len < sizeof(body) - 1 ? f.len : sizeof(body) - 1;
+    memcpy(body, f.body, n);
+    body[n] = 0;
+    char* sp = strchr(body, ' ');
+    if (!sp) return;
+    *sp = 0;
+    if (!gamestate_set_param(body, strtof(sp + 1, nullptr)))
+        Serial.printf(GAMECFG_PREFIX " param %s from 0x%04X: not a tunable param\n", body, f.h.originId);
 }
 
 static void handleState() {
@@ -105,6 +153,7 @@ void gameconfig_init() {
         if (!running) Serial.printf(GAMECFG_PREFIX " stored game is invalid: %s\n", why.c_str());
     }
     if (!running) loadDefault();
+    pulleys::mesh_on_flood(pulleys::MESH_MSG_GAME_PARAM, onGameParam);
 
     // AP_STA, not AP: the mesh has to keep running underneath this.
     WiFi.mode(WIFI_AP_STA);
@@ -126,6 +175,8 @@ void gameconfig_init() {
     s_server->on("/config", HTTP_DELETE, handleDelete);
     s_server->on("/event", HTTP_POST, handleEvent);
     s_server->on("/state", HTTP_GET, handleState);
+    s_server->on("/params", HTTP_GET, handleParamsGet);
+    s_server->on("/params", HTTP_POST, handleParamsPost);
     s_server->begin();
     Serial.printf(GAMECFG_PREFIX " http://%s:%u  (ssid=%s ch=%d)\n",
                   WiFi.softAPIP().toString().c_str(), GAMECFG_PORT, GAMECFG_SSID, ch);

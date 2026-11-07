@@ -89,22 +89,25 @@ On start you should see `starting audio loop: idle.wav` and
 ## Game
 
 `--game` runs a state machine from `../game_state_machine/` (format in
-`GAME_FORMAT.md` there; draw it with `python3 ../tools/state_chart.py`). Game
-events coming in over serial or the test socket (`component_activated`,
-`final_component_activated`, ...) go to the game, which fires cues; anything
-else is still played as a cue directly. State changes are printed as
-`game: passive -> game1`.
+`GAME_FORMAT.md` there; draw it with `python3 ../tools/state_chart.py`) on
+overlord itself, with no arbiter. The engine is `../playtest/engine.py`, the
+same one the playtest simulator runs and a copy of the arbiter's
+(`src/arbiter_mesh/gamestate.cpp`), driven here by the wall clock. Game events
+coming in over serial or the test socket (`goal_component_activated`, ...) go
+to the game, which fires cues; anything else is still played as a cue
+directly. State changes are printed as `game: passive -> easy_round`.
 
-The arbiter can also run the game itself (`src/arbiter_mesh/gamestate.cpp`). It
-sends each cue it fires through the bridge as a line `cue <name>`, for example
-`cue audio_once_chime` (`cue <name> enter` for a cue fired on entering a state), and overlord plays it. Run overlord **without** `--game`
-in that setup, or both state machines fire cues. The bridge's `EV ...` sensor
-lines are ignored.
+The arbiter normally runs the game itself. It sends each cue it fires through
+the bridge as a line `cue <name>`, for example `cue audio_once_chime` (`cue
+<name> enter` for a cue fired on entering a state), and overlord plays it. Run
+overlord **without** `--game` in that setup, or both state machines fire cues.
+The bridge's `EV ...` pull lines and `GI ...` game telemetry go to the play log
+(below), and are not played.
 
 ```sh
 python3 overlord.py --test --windowed --game                  # state_config.yaml
-python3 overlord.py --test --windowed --game path/to/other.yaml
-./send.sh component_activated                                 # drive it by hand
+python3 overlord.py --test --windowed --game ../game_state_machine/games/chase.yaml
+./send.sh goal_component_activated                            # drive it by hand
 ```
 
 The game file is read once at startup; restart overlord after editing it.
@@ -128,66 +131,41 @@ window has focus. Drop `--windowed` to run it fullscreen, and add
 
 ### Keys
 
-| Key   | Component        | Colour                           |
-| ----- | ---------------- | -------------------------------- |
-| `1-5` | major components | red, orange, hot pink, green, blue |
-| `6-8` | final components | purple                           |
+| Key   | Rope                                              |
+| ----- | ------------------------------------------------- |
+| `1-5` | one rope of each major colour, in the game's `components.major` order (red, blue, green, yellow, orange) |
+| `6-8` | three purple ropes                                |
 
-- A key is one pull: it adds `charge_per_pull` to its component (20% in the
-  example game), and the charge drains at `default_decay_rate` -- the same as
-  the arbiter's rule. Press fast enough to fill it and the component lights;
-  it stays lit until it drains to 0 (15 s from full in the example game).
-- Pressing a lit key tops it up.
-- `game2` shows bars 6-8 (it is the state that reacts to the final
-  components). Every other state shows bars 1-5.
+- A key is one pull on that rope's channel, handed to the engine. It sends the
+  pull events (`pull`, `goal_pull`, ...), then adds `charge_per_pull` to the
+  rope's component, which drains at `default_decay_rate` -- the arbiter's rule.
+  Press fast enough to fill it and the component lights; it stays lit until it
+  drains to 0 (15 s from full with the default game).
+- States that react to the final components show bars 6-8; every other state
+  shows bars 1-5.
 
 ### The overlay
 
-The bottom half of the screen shows the current state name and one bar per
-component, labelled with its key. Each press raises a bar, and it drains right
-to left the whole time.
+The bottom half of the screen shows the current state, the goal colours the
+game has dealt, and one bar per key's component. Each press raises a bar, and
+it drains right to left the whole time.
 
 ### Play through the game
 
-1. **passive**: press any of `1-5` to start; the game moves to `game1`.
-2. **game1**: light all of `1-5` at once (fill each with a burst of presses;
-   a full one lasts 15 s with the example game's decay rate, so fill them all
-   within that time). The game moves to `victory1`.
-3. **victory1**, then **reveal**: these play on their own timers and move to
-   `game2`.
-4. **game2**: light all of `6-8` at once to win; the game moves to `victory2`.
-5. **victory2**, then **kickout**: these run on timers and return to `passive`.
+1. **passive**: fill any of `1-5` to start; the game moves to `easy_round`.
+2. **easy_round**, **medium_round**, **hard_round**: light exactly the goal
+   colours shown in the overlay title, with every other major dark. Each round
+   won moves to the next.
+3. **party**, then **final**: light all of `6-8` at once to win (`victory2`).
+4. **kickout**: back to `passive` on its timer.
 
-If you don't win, `game1` and `game2` time out (back to `passive` and on to
-`kickout`). Timings come from the game file.
-
-### Faster timers for testing
-
-The game file uses minute-long timers in places. To step through the whole
-flow quickly, run a copy with short delays:
+A round left alone times out back to `passive`. Timings come from the game's
+params; set them low to step through quickly:
 
 ```sh
-sed -E 's/delay: [0-9]+[sm]/delay: 3s/' ../game_state_machine/state_config.yaml > /tmp/fast.yaml
-python3 overlord.py --test --windowed --game /tmp/fast.yaml --simulate
+python3 overlord.py --test --windowed --game --simulate &
+curl -X POST localhost:8080/param/round_time/1m
 ```
-
-### What it sends
-
-The simulator sends the same game events the real hardware will:
-
-| When                                | Event                                 |
-| ----------------------------------- | ------------------------------------- |
-| one of `1-5` lights                 | `component_activated`                 |
-| the last of `1-5` lights            | then `all_components_activated`       |
-| one of `1-5` wears out              | `component_deactivated`               |
-| the last lit one of `1-5` wears out | then `all_components_deactivated`     |
-| one of `6-8` lights                 | `final_component_activated`           |
-| the last of `6-8` lights            | then `all_final_components_activated` |
-| one of `6-8` wears out              | `final_component_deactivated`         |
-
-Each is logged in the terminal (`simulate: component 3 lit`, then
-`game: component_activated in game1`, or `... ignored in <state>` when the
-current state does not react to it).
 
 ### Troubleshooting
 
@@ -197,7 +175,7 @@ current state does not react to it).
 - **`cue not played: ...`**: the cue's media file doesn't exist yet
   (placeholder). The game still moves on.
 - **Bars never show 6-8**: only states that react to final components show
-  them; you need to reach `game2`.
+  them; you need to reach `final`.
 
 ## Deploying on a mini PC or Raspberry Pi
 
@@ -498,7 +476,14 @@ curl localhost:8080/volume                     # {"volume": 70}
 curl -X POST localhost:8080/volume/80          # set it
 curl -X POST localhost:8080/volume/+10         # nudge it (also /volume/-10)
 curl -X POST localhost:8080/cue/audio_once_chime   # play a cue now
+curl -X POST localhost:8080/param/round_time/90s   # turn one of the game's knobs, live
+curl localhost:8080/playtest                   # the play log, and what the director has learnt
+curl -X POST localhost:8080/playtest/freeze    # director: stop changing things (/thaw resumes)
 ```
+
+A param goes to the arbiter through the bridge (`GAME-PARAM <name> <value>`),
+which clamps it to the range the game file gives; with `--game` it goes to
+overlord's own engine. Only params with a `min` and `max` can be set.
 
 Volume is 0-100, applied live and remembered across restarts like the menu's.
 Answers are JSON; an error comes back as `{"error": ...}` with a 4xx status. The
@@ -507,6 +492,27 @@ another machine anyway, pass `--control-bind 0.0.0.0` (in `OVERLORD_ARGS` in
 `/etc/overlord.env`) and keep it off networks you don't trust. `--control-port N`
 moves it and `--control-port 0` turns it off. If the port is taken overlord logs
 that and carries on without the API.
+
+## Play log and the live director
+
+Every pull and everything the game does is kept, a JSON line each, in
+`play-YYYY-MM-DD.jsonl` under `$OVERLORD_PLAYLOG`, else
+`/var/lib/overlord/playlog` (else `overlord/playlog/`). It is what the game
+gets tuned on: `python3 -m playtest analyse <log>` from the repo root splits
+it into sessions and scores each (`../playtest/README.md`). `--no-playlog`
+turns it off.
+
+With `--director` (or `OVERLORD_DIRECTOR=1` in `/etc/overlord.env`) overlord
+also runs the live director: each time a session of play ends it scores it,
+learns which values of the game's knobs people enjoyed more, and sets the next
+session's through the bridge. It only touches params with a range, only
+between sessions, and keeps what it has learnt in `director.json` next to the
+logs, so a restart carries on. Start it from a simulator prior with
+`--director-prior tune.json` (`OVERLORD_DIRECTOR_PRIOR`), the output of
+`python3 -m playtest tune --out tune.json`. `GET /playtest` shows its state.
+
+A game with `show_goals: true` also gets the goal colours drawn across the
+top of the video while a round is on.
 
 ## Satellite players
 
@@ -595,8 +601,10 @@ remote needs the same folder names.
 - `serial_reader.py` - line-based event source: serial port (auto-reconnects) or, with `--test`, the Unix socket.
 - `send.sh` - sends trigger events to the test socket.
 - `control.py` - the REST control API server; the routes themselves are `control()` in `overlord.py`.
-- `game.py` - `--game`: loads a state machine YAML, runs its timers, fires cues through `dispatch`.
-- `simulate.py` - `--simulate`: keys 1-8 as stand-in components, plus the charge overlay (mpv `osd-overlay`). Imported only when enabled.
+- `game.py` - `--game`: runs a state machine YAML on `../playtest/engine.py` against the wall clock; fires cues through `dispatch`.
+- `simulate.py` - `--simulate`: keys 1-8 as pulls on stand-in ropes, plus the charge overlay (mpv `osd-overlay`). Imported only when enabled.
+- `playlog.py` - the play log: pulls (`EV`), cues and the arbiter's game telemetry (`GI`) as JSON lines.
+- `goal_display.py` - the goal colours over the video, for a game with `show_goals: true`.
 
 ## Design notes / gotchas
 

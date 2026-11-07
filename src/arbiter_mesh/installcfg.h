@@ -38,6 +38,14 @@ void installcfg_reset_rgb();   // every colour back to its factory RGB
 // so ropes that shared a colour still share one and the game's split holds.
 void installcfg_shuffle_game1();
 
+// The game's own colour moves (`colors: shuffle` / `colors: restore` in a game
+// file). A shuffle permutes game1's colours like SHUFFLE and is broadcast the
+// same way, but never saved: the stored palette stays the day's, and restore
+// -- or a reboot, or any edit from the COLOURS screen or serial -- brings it
+// back first.
+void installcfg_game_shuffle();
+void installcfg_game_restore();
+
 uint8_t                       installcfg_row_count();
 const pulleys::MeshConfigRow* installcfg_rows();
 

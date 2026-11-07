@@ -1,4 +1,5 @@
 #include "installcfg.h"
+#include "gamestate.h"
 #include <Arduino.h>
 #include <Preferences.h>
 #include <pulleys_channel.h>
@@ -18,13 +19,28 @@ static_assert(pulleys::MESH_COLOR_COUNT == pulleys::COLOR_COUNT,
 
 static pulleys::MeshConfigRow s_rows[pulleys::MESH_CONFIG_MAX_ROWS];
 static uint8_t  s_count     = 0;
-static bool     s_dirty     = false;   // changed since the last send: save + burst
+static bool     s_dirty     = false;   // changed since the last send: burst (and save)
+static bool     s_save      = false;   // ... and the change is the operator's, to keep
 static uint32_t s_changedAt = 0;
 static uint32_t s_lastSend  = 0;
 
-static void markDirty() {
+// While the game has the colours shuffled, the day's palette waits here.
+static bool    s_gameShuffled = false;
+static uint8_t s_dayColors[pulleys::CHANNEL_COUNT];
+
+static void markDirty(bool save = true) {
     s_dirty     = true;
+    s_save      = s_save || save;
     s_changedAt = millis();
+}
+
+// An operator's edit starts from the day's palette, not the game's shuffle of
+// it, so what gets saved is what they meant.
+static void dayColorsBack() {
+    if (!s_gameShuffled) return;
+    pulleys::palette_set(s_dayColors);
+    s_gameShuffled = false;
+    markDirty(false);
 }
 
 static void send(bool urgent) {
@@ -32,6 +48,7 @@ static void send(bool urgent) {
     pulleys::colors_get_rgb(rgb);
     pulleys::mesh_send_config(pulleys::palette_get(), rgb, s_rows, s_count, urgent);
     s_lastSend = millis();
+    if (urgent) gamestate_note_palette();
 }
 
 static void saveMap() {
@@ -80,10 +97,13 @@ void installcfg_init() {
 void installcfg_tick() {
     uint32_t now = millis();
     if (s_dirty && now - s_changedAt >= SETTLE_MS) {
-        saveMap();
-        pulleys::palette_save();
+        if (s_save) {
+            saveMap();
+            pulleys::palette_save();
+        }
         send(/*urgent=*/true);
         s_dirty = false;
+        s_save  = false;
     } else if (!s_dirty && now - s_lastSend >= REPEAT_MS) {
         send(/*urgent=*/false);
     }
@@ -120,6 +140,7 @@ bool installcfg_unmap(uint16_t id) {
 }
 
 bool installcfg_set_color(uint8_t channel, uint8_t color) {
+    dayColorsBack();
     if (!pulleys::channel_set_color(channel, color)) return false;
     markDirty();
     Serial.printf("  [INSTALL] ch%d -> %s\n", channel, pulleys::color_name(color));
@@ -127,12 +148,14 @@ bool installcfg_set_color(uint8_t channel, uint8_t color) {
 }
 
 bool installcfg_set_rgb(uint8_t color, uint8_t r, uint8_t g, uint8_t b) {
+    dayColorsBack();
     if (!pulleys::color_set_rgb(color, CRGB(r, g, b))) return false;
     markDirty();
     return true;
 }
 
 void installcfg_reset_rgb() {
+    dayColorsBack();
     bool changed = false;
     for (uint8_t c = 0; c < pulleys::COLOR_COUNT; c++)
         changed |= pulleys::color_set_rgb(c, pulleys::color_default_rgb(c));
@@ -140,7 +163,50 @@ void installcfg_reset_rgb() {
     Serial.println("  [INSTALL] colours back to their defaults");
 }
 
+// game1's colours permuted among themselves, redrawn until one moves.
+static void shuffled(uint8_t next[pulleys::CHANNEL_COUNT]) {
+    const uint8_t N = pulleys::COLOR_GAME1_COUNT;
+    uint8_t perm[N];
+    bool moved = false;
+    while (!moved) {
+        for (uint8_t i = 0; i < N; i++) perm[i] = i;
+        for (uint8_t i = N - 1; i > 0; i--) {
+            uint8_t j = (uint8_t)random(i + 1);
+            uint8_t t = perm[i]; perm[i] = perm[j]; perm[j] = t;
+        }
+        for (uint8_t i = 0; i < N; i++) if (perm[i] != i) moved = true;
+    }
+    memcpy(next, pulleys::palette_get(), pulleys::CHANNEL_COUNT);
+    for (uint8_t ch = 0; ch < pulleys::CHANNEL_COUNT; ch++)
+        if (next[ch] < N) next[ch] = perm[next[ch]];
+}
+
+void installcfg_game_shuffle() {
+    if (s_save) {
+        // An operator's edit is still waiting to be saved: save it as it is,
+        // before the game's shuffle lands on top of it.
+        saveMap();
+        pulleys::palette_save();
+        s_save = false;
+    }
+    if (!s_gameShuffled) {
+        memcpy(s_dayColors, pulleys::palette_get(), sizeof(s_dayColors));
+        s_gameShuffled = true;
+    }
+    uint8_t next[pulleys::CHANNEL_COUNT];
+    shuffled(next);
+    if (pulleys::palette_set(next)) markDirty(false);
+}
+
+void installcfg_game_restore() {
+    if (!s_gameShuffled) return;
+    pulleys::palette_set(s_dayColors);
+    s_gameShuffled = false;
+    markDirty(false);
+}
+
 void installcfg_shuffle_game1() {
+    dayColorsBack();
     const uint8_t N = pulleys::COLOR_GAME1_COUNT;
     uint8_t perm[N];
     // Fisher-Yates, redrawn until something actually moves: a shuffle that

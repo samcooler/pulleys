@@ -28,7 +28,7 @@ bool gamestate_load(const String& json, String& why);
 void gamestate_event(GameEvent e);
 // An event by name: a device's input ("diorama.door_opened"), or any of the above.
 void gamestate_input(const char* name);
-void gamestate_tick();                 // every loop: the `after` timer
+void gamestate_tick();                 // every loop: timers, then send the loop's telemetry
 
 bool        gamestate_ready();         // a config is loaded
 const char* gamestate_game();          // its `game` field
@@ -44,6 +44,22 @@ int         gamestate_major_for_channel(uint8_t channel);
 // The colour (pulleys_channel COLOR_*) of major component 0-4.
 // MESH_COLOR_UNKNOWN before a game is loaded.
 uint8_t     gamestate_major_color(uint8_t major);
+
+// Params: the game's named values (GAME_FORMAT.md, "Params"). Setting one is
+// live: it is clamped to the game's range and applies the next time it is read
+// (a running timer keeps the deadline it was given). False if the game has no
+// param of that name. From serial (PARAM), POST /params, or the mesh
+// (MESH_MSG_GAME_PARAM, which the Overlord's director sends through its bridge).
+bool        gamestate_set_param(const char* name, float value);
+uint8_t     gamestate_param_count();
+const char* gamestate_param_name(uint8_t i);
+float       gamestate_param_value(uint8_t i);
+
+// Telemetry for the play log on the Pi: what the game does goes out as
+// MESH_MSG_GAME_INFO, batched -- everything from one pass of the loop in one
+// packet, sent by gamestate_tick().
+void gamestate_note_goals(uint8_t goalMask);   // components.cpp, after dealing goals
+void gamestate_note_palette();                  // installcfg.cpp, when the palette changes
 
 uint32_t    gamestate_state_age_ms();      // time in the current state
 int32_t     gamestate_timer_left_ms();     // until `after` fires; -1 if none

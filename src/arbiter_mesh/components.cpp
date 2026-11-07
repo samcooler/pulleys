@@ -108,7 +108,16 @@ static void randomizeGoals(uint8_t count) {
     const uint8_t* pool = filteredCount ? filtered : choices;
     uint8_t poolCount = filteredCount ? filteredCount : choiceCount;
     s_goalMask = pool[(uint8_t)random(poolCount)];
+    gamestate_note_goals(s_goalMask);
 }
+
+void components_deal_goals(uint8_t count) {
+    if (count < 1) count = 1;
+    if (count > MAJOR_COUNT) count = MAJOR_COUNT;
+    randomizeGoals(count);
+}
+
+uint8_t components_goal_mask() { return s_goalMask; }
 
 static void checkSimonComplete(uint32_t now) {
     if (goalsComplete(now)) gamestate_event(GE_ALL_COMPONENTS_ACTIVATED);
@@ -197,6 +206,23 @@ static bool pull(Component& c, uint32_t now) {
 
 void components_on_mesh_event(const pulleys::MeshEvent& ev) {
     if (!gamestate_ready() || ev.channel >= pulleys::CHANNEL_COUNT) return;
+
+    // The pull itself first, so a state can react before the charge goes in:
+    // a pull that starts a round lands its charge in the new round, after the
+    // round's reset rather than before it.
+    if (isFinalChannel(ev.channel)) {
+        gamestate_event(GE_PULL);
+        gamestate_event(GE_FINAL_PULL);
+    } else {
+        int idx = gamestate_major_for_channel(ev.channel);
+        if (idx < 0) return;
+        bool goal = (s_goalMask & (1u << idx)) != 0;
+        gamestate_event(GE_PULL);
+        gamestate_event(goal ? GE_GOAL_PULL : GE_NONGOAL_PULL);
+    }
+
+    // Then the charge, where things stand now: a reaction may have recoloured
+    // the ropes or dealt new goals.
     uint32_t now = millis();
 
     if (isFinalChannel(ev.channel)) {

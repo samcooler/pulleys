@@ -1,0 +1,137 @@
+# Shifting ropes: Simon, but every so often the ropes swap colours among
+# themselves. The goal colours stay the same; which ropes wear them does not,
+# so whoever found the right rope has to find it again. Format: ../GAME_FORMAT.md.
+#
+# `colors: shuffle` permutes the five game1 colours across the ropes for the
+# game only -- the arbiter's stored palette is untouched -- and `colors:
+# restore` puts the day's colours back. Purple ropes never move.
+
+game: shifting-ropes
+start: passive
+
+# For the playtest tools: the states that mean players are getting somewhere.
+milestones:
+  - round
+  - win
+
+components:
+  major:
+    - red
+    - blue
+    - green
+    - yellow
+    - orange
+
+charge_per_pull: $charge_per_pull
+default_decay_rate: 6.6667
+
+params:
+  shift_every:
+    value: 30s
+    min: 10s
+    max: 60s
+    note: how often the ropes swap colours
+  goals:
+    value: 2
+    min: 1
+    max: 4
+  round_time:
+    value: 2m
+    min: 1m
+    max: 4m
+  charge_per_pull:
+    value: 25
+    min: 10
+    max: 50
+
+counters:
+  rounds:
+    reach: 3
+
+cues:
+  game:
+    - game_reset_components
+  audio_loop:
+    - audio_loop_idle
+  video_loop:
+    - video_loop_idle
+    - video_loop_game1
+  audio_once:
+    - audio_once_steam                  # the machinery shifting
+    - audio_once_component_powerup
+    - audio_once_component_powerdown
+    - audio_once_victory_fanfare
+  video_once:
+    - video_once_janis_encouragement_*
+    - video_once_janis_nag_*
+    - video_once_janis_progress_confirmation_yes
+    - video_once_janis_progress_confirmation_congrats_1
+
+states:
+
+  passive:
+    on:
+      enter:
+        clear:
+          - rounds
+        colors: restore
+        cue:
+          - audio_loop_idle
+          - video_loop_idle
+      pull:
+        goto: round
+
+  round:
+    on:
+      enter:
+        goals: $goals
+        cue:
+          - game_reset_components
+          - video_loop_game1
+      goal_component_activated:
+        cue:
+          - audio_once_component_powerup
+          - video_once_janis_encouragement_*
+      component_deactivated:
+        cue:
+          - audio_once_component_powerdown
+      all_components_activated:
+        add:
+          rounds: 1
+        cue:
+          - video_once_janis_progress_confirmation_yes
+        goto: round
+      rounds_reached:
+        goto: win
+    every:
+      delay: $shift_every
+      colors: shuffle
+      cue:
+        - audio_once_steam
+    idle:
+      delay: 20s
+      cue:
+        - video_once_janis_nag_*
+    after:
+      delay: $round_time
+      goto: passive
+
+  win:
+    on:
+      enter:
+        colors: restore
+        set:
+          party.lights: lit
+        cue:
+          - audio_once_victory_fanfare
+          - video_once_janis_progress_confirmation_congrats_1
+    after:
+      delay: 45s
+      goto: passive
+
+devices:
+  party:
+    set:
+      lights:
+        - dark
+        - lit

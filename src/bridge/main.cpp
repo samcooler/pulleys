@@ -42,6 +42,14 @@
 // no list of cues and checks nothing about the name, it passes on whatever it
 // was given.
 //
+// What the game does, for the Pi's play log (MESH_MSG_GAME_INFO), goes out as
+//
+//   GI <key=value ...>\n
+//
+// e.g. "GI state=easy_round goals=red-blue". And the Pi may tune the game:
+// a line "GAME-PARAM <name> <value>" from it goes onto the mesh as
+// MESH_MSG_GAME_PARAM, for the arbiter, which clamps it to the game's range.
+//
 // The Pi link is the C3's USB port by default: one cable from the Pi powers the
 // bridge and carries everything, and the Pi sees it as /dev/ttyACM0. That port
 // is also the console, so in USB mode the two share one stream: every line the
@@ -276,7 +284,30 @@ static void onMeshCue(const pulleys::MeshCue& c, bool /*relayed*/) {
     cHead = next;
 }
 
+// The game's telemetry, a line each. Bodies are short ASCII; one a loop pass
+// at most from the arbiter, so a few slots are plenty.
+static const uint8_t INFO_LEN = 6;
+static char    infoQueue[INFO_LEN][pulleys::MESH_FLOOD_MAX_BODY + 1];
+static uint8_t iHead = 0, iTail = 0;
+
+static void onGameInfo(const pulleys::MeshFlood& f, bool /*relayed*/) {
+    uint8_t next = (iHead + 1) % INFO_LEN;
+    if (next == iTail) { dropped++; return; }
+    uint8_t n = f.len <= pulleys::MESH_FLOOD_MAX_BODY ? f.len : pulleys::MESH_FLOOD_MAX_BODY;
+    memcpy(infoQueue[iHead], f.body, n);
+    infoQueue[iHead][n] = 0;
+    for (uint8_t i = 0; i < n; i++)   // one line, whatever arrived
+        if (infoQueue[iHead][i] == '\n' || infoQueue[iHead][i] == '\r') infoQueue[iHead][i] = ' ';
+    iHead = next;
+}
+
 static void drainQueue() {
+    while (iTail != iHead) {
+        if (PI_LINK.availableForWrite() < 260) break;
+        PI_LINK.printf("GI %s\n", infoQueue[iTail]);
+        iTail = (iTail + 1) % INFO_LEN;
+    }
+
     while (cTail != cHead) {
         if (PI_LINK.availableForWrite() < 80) break;
         const char* name = cueQueue[cTail].name;
@@ -328,6 +359,14 @@ static void startFirmwareHost() {
 // console is a port of its own, so it can be read there.
 static void handlePiLine(char* buf) {
     if (!PI_SHARES_CONSOLE) Serial.printf("  [PI] %s\n", buf);
+    if (strncmp(buf, "GAME-PARAM ", 11) == 0) {
+        // "GAME-PARAM round_time 90": for the arbiter, as "<name> <value>"
+        const char* body = buf + 11;
+        size_t n = strlen(body);
+        if (n > 0 && n < 64)
+            pulleys::mesh_send_flood(pulleys::MESH_MSG_GAME_PARAM, body, (uint8_t)n, 3, 120);
+        return;
+    }
     if (strncmp(buf, "FW-", 3) == 0) startFirmwareHost();
     if (strncmp(buf, "FW-PING", 7) == 0) {
         PI_LINK.printf("FW-BRIDGE id=%04X env=bridge sha256=%s\n",
@@ -426,11 +465,12 @@ static LineReader consoleIn;
 static LineReader piIn;
 #endif
 
-// The console -- and in USB mode the Pi too, on the same port: FW- lines are
-// the Pi's, everything else a console command.
+// The console -- and in USB mode the Pi too, on the same port: FW- and GAME-
+// lines are the Pi's, everything else a console command.
 static void handleSerial() {
     consoleIn.poll(Serial, [](char* line) {
-        if (PI_SHARES_CONSOLE && strncmp(line, "FW-", 3) == 0) handlePiLine(line);
+        if (PI_SHARES_CONSOLE && (strncmp(line, "FW-", 3) == 0 || strncmp(line, "GAME-", 5) == 0))
+            handlePiLine(line);
         else handleConsoleLine(line);
     });
 }
@@ -477,6 +517,7 @@ void setup() {
     pulleys::mesh_on_ota_ready(onLegacyOtaStatus);
     pulleys::mesh_on_event(onMeshEvent);
     pulleys::mesh_on_cue(onMeshCue);
+    pulleys::mesh_on_flood(pulleys::MESH_MSG_GAME_INFO, onGameInfo);
 
     pulleys::census_set_detail(BRIDGE_PI_USB ? "usb" : "uart1");
     pulleys::whoami_reply();

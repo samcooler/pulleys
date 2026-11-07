@@ -18,8 +18,17 @@ strings overlord already accepts (`video_once_test1`, `audio_once_chime`,
 | `audio_gain` | Loudness multiplier per audio cue (optional)        |
 | `players` | Satellite Pis a cue may be addressed to (optional)  |
 | `devices` | Devices the game sets and hears from: lights, latches, switches (optional) |
+| `params` | Named values states use as `$name`; a range makes one tunable live (optional) |
+| `counters` | Whole numbers states add to, with a mark that sends an event (optional) |
+| `show_goals` | Overlord draws the goal colours over the video (optional, default false) |
+| `milestones` | For the playtest tools: states that mark progress, in order (optional) |
 | `cues`   | Every cue the game may use, grouped by type                |
 | `states` | The state machine                                    |
+
+More games than the one the installation runs live in `games/`: bop-it,
+chase the colour, and shifting ropes, each a worked example of the parts
+below. `python -m playtest sim games/chase.yaml` plays simulated visitors
+through one (playtest/README.md).
 
 ```yaml
 cues:
@@ -135,6 +144,61 @@ is the 15-second rate. `overlord`'s keyboard simulator reads the same values,
 one key press standing in for one pull. A game posted to the arbiter takes
 effect at once, from the charge each component has.
 
+## Params
+
+```yaml
+params:
+  round_time:
+    value: 2m
+    min: 1m
+    max: 4m
+    note: how long a round lasts before it gives up
+  easy_goals:
+    value: 2
+    min: 1
+    max: 3
+  nag_delay: 20s                 # no range: a named constant
+```
+
+Named values the rest of the file uses as `$name` wherever a delay or a number
+goes: `after`, `idle` and `every` delays, `at` step times, `goals`, `add`
+amounts, a counter's `reach`, `default_decay_rate` and `charge_per_pull`.
+A value is a duration (`20s`, `1.5s`, `2m`) or a number; `min` and `max`
+must be the same kind, and a duration param can only go where a delay goes.
+
+A param with both `min` and `max` is a **knob**. It can be changed while the
+game runs, without a restart or a reflash: `PARAM round_time 90` on the
+arbiter's serial port, `POST /params` to its HTTP endpoint (body
+`round_time=90`, durations in seconds), or `POST /param/round_time/90s` to
+overlord's control API, which sends it through the bridge. The arbiter clamps
+every value to the range, so whatever turns a knob -- a person, or the
+playtest director -- cannot take the game anywhere its designer did not allow.
+A new value applies the next time it is read: a round already under way keeps
+the deadline it started with. A param without a range cannot be changed live.
+`tune: false` keeps the director's hands off a knob while people can still
+turn it.
+
+Up to 16 params, names up to 23 characters. `tools/game_to_json.py` writes
+them into the JSON as plain numbers, durations in seconds.
+
+## Counters
+
+```yaml
+counters:
+  score:
+    reach: $win_score            # sends score_reached when it climbs to this
+  streak:
+    reach: 5
+  misses:                        # no mark: just a number to log
+```
+
+Whole numbers a game keeps across states: hits, misses, rounds won. A reaction
+changes one with `add:` (a negative amount takes away) or sets it back to 0
+with `clear:`. A counter with a `reach` sends the event `<name>_reached` when
+it climbs from below its mark to the mark or past it -- once per climb, so
+after a `clear` it can be reached again. All counters are 0 when a game loads.
+Up to 8 counters, names up to 15 characters.
+
 ## Ambient sounds
 
 Sounds that play on their own, whatever state the game is in: steam hissing
@@ -249,6 +313,45 @@ has already changed. Setting a value a setting already has does nothing.
 state cancels the steps still to come, and re-entering starts them again. A
 step has `set` and/or `cue` and no `goto` -- `after` is for leaving.
 
+`every` repeats while the state lasts: its reaction runs `delay` after entry,
+then every `delay` after that, whatever else happens -- unlike `idle`, which
+any event puts off. No `goto` here either.
+
+```yaml
+    every:
+      delay: $shift_every        # the ropes swap colours every 30 s
+      colors: shuffle
+      cue:
+        - audio_once_steam
+```
+
+### What a reaction can do
+
+A reaction is what runs for an event, on entry, for `idle`, `every` or an `at`
+step. Its keys run in this order:
+
+| Key      | Does                                                         |
+| -------- | ------------------------------------------------------------ |
+| `set`    | Device settings, held until changed (see Devices)           |
+| `clear`  | Counters back to 0: `clear: [score, streak]`                 |
+| `add`    | Add to counters: `add: {score: 1, lives: -1}`                |
+| `colors` | `shuffle` the five game1 colours among the ropes, or `restore` the day's palette |
+| `goals`  | Deal this many goal colours, 1-5 (`goals: 2`, `goals: $easy_goals`) |
+| `cue`    | Cues, in order                                               |
+| `goto`   | Move to a state (only for an event)                         |
+
+Then any counter the reaction brought to its mark sends `<name>_reached`, to
+the state the game is in at that moment. And then the `goto` -- unless the
+reaction already moved the game: if a counter's event, or Simon completing,
+took it to another state, that wins and the reaction's own `goto` is dropped.
+
+`goals: N` is `game_randomize_simon_N_goals` as an action, so the count can be
+a param; the cue still works. `colors: shuffle` changes which ropes wear which
+colour -- the ropes' own lights change, and so does which component each rope
+drives, since majors go by colour -- for this game only: the arbiter never
+saves it, and `restore`, loading another game, a reboot, or any edit on the
+arbiter's COLOURS screen puts the day's palette back. Purple ropes never move.
+
 Anywhere a list of cues goes, an entry may be `choose_one:` with cues under
 it; one of those is picked at random each time the list fires:
 
@@ -265,7 +368,14 @@ it; one of those is picked at random each time the list fires:
 whether or not the state lists that event. Entering the state arms it, and
 leaving cancels it. `after` runs alongside and is unaffected.
 
-- Events used so far: `first_goal_component_activated` (a goal component lit
+- Every pull is an event before anything else happens to it: `pull` for any
+  rope, then `goal_pull`, `nongoal_pull` or `final_pull` for the kind of rope
+  it was. Then the pull's charge goes in, where things stand after any
+  reaction -- so a `pull` that starts a round whose entry resets the
+  components lands its charge in the new round. A pull is activity for `idle`
+  even when it lights nothing.
+- `<counter>_reached` for a counter with a `reach` (see Counters).
+- Component events: `first_goal_component_activated` (a goal component lit
   while no goal component was lit; it comes just before
   `goal_component_activated` for the same pull), `goal_component_activated`,
   and `nongoal_component_activated` (a major component outside the current goal
@@ -285,9 +395,35 @@ leaving cancels it. `after` runs alongside and is unaffected.
   only exists if the device lists it under `emits`.
 - An event with no entry in the current state is ignored.
 - `after` is cancelled when the state is left and restarts on re-entry.
-  Durations are whole seconds or minutes: `10s`, `2m`. Seconds are the finest
-  granularity; there is no `ms`. `2m` is the default delay.
+  Durations are seconds or minutes, decimals allowed: `10s`, `1.5s`, `2m`, or
+  a duration param, `$round_time`. There is no `ms`. `2m` is the default delay.
 - Order on a transition: the event's `cue`, then the new state's `on_enter_cue`.
 - A `video_once_*` clip fired on entering a state cuts off any clip still
   playing; one fired for an event is dropped if a clip is playing. The cue
   carries which it was over the mesh, so the player needs no state table.
+
+## For the playtest tools and overlord
+
+```yaml
+show_goals: true                 # overlord draws the goal colours over the video
+milestones:                      # states that mean getting further, in order
+  - call
+  - fast_call
+  - win
+```
+
+`show_goals` puts a band across the top of overlord's video while a state that
+reacts to goal events is running, with a block for each goal colour. A Simon
+round otherwise asks for colours nobody can see. The arbiter ignores it.
+
+`milestones` tells the playtest tools how far a session got when the state
+graph does not say (bop-it's `game_over` is as far from the start as its
+`win`). Without it, progress is a state's distance from `start`.
+
+## Telemetry
+
+The arbiter reports what the game does -- each state it enters, the goals it
+deals, counter changes, param values, the palette -- as `MESH_MSG_GAME_INFO`
+floods, batched one per loop pass, plus a heartbeat every 15 s. The Overlord's
+bridge hands them to its Pi, which keeps them with every pull in the play log
+(`overlord/playlog.py`). Nothing in a game file sets this up.

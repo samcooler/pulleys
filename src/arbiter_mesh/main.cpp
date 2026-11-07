@@ -210,11 +210,18 @@ static void handleSerial() {
                 ev.originId  = pulleys::identity_id();
                 components_on_mesh_event(ev);
             } else if (buf[0] == 'g' && n > 2 && buf[1] == ' ') {
-                // "g goal_component_activated" -> inject a game event by name
-                GameEvent e;
-                if (gameevent_from_name(buf + 2, e)) gamestate_event(e);
-                else if (strchr(buf + 2, '.'))       gamestate_input(buf + 2);   // a device's input
-                else Serial.println("  [GAME] unknown event name");
+                // "g goal_component_activated" -> inject a game event by name:
+                // a component event, a device's input, a counter's _reached
+                gamestate_input(buf + 2);
+            } else if (strcmp(buf, "PARAM") == 0) {
+                for (uint8_t i = 0; i < gamestate_param_count(); i++)
+                    Serial.printf("  [GAME] %s = %.4g\n", gamestate_param_name(i), gamestate_param_value(i));
+            } else if (strncmp(buf, "PARAM ", 6) == 0) {
+                // "PARAM round_time 90" -> set a param live (durations in seconds)
+                char name[24] = {};
+                float value = 0;
+                if (sscanf(buf + 6, "%23s %f", name, &value) != 2 || !gamestate_set_param(name, value))
+                    Serial.println("  [GAME] usage: PARAM <name> <value>  (a param with a min and max)");
             } else if (buf[0] == 'V') {
                 devices_print();
             } else if (buf[0] == 'D') {

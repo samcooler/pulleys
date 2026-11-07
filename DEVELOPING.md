@@ -186,8 +186,9 @@ carries everything, and the Pi sees it as `/dev/ttyACM0` (`/dev/cu.usbmodem*` on
 a Mac). `overlord/serial_reader.py` picks a ttyACM port ahead of the Pi's GPIO
 UART. The same port is the bridge's console, so the two share one stream:
 
-- the Pi's lines all start `FW-` and go to the firmware protocol; anything else
-  typed is a console command (`?`, `CENSUS`, `e3`, `v`, ...)
+- the Pi's lines all start `FW-` (the firmware protocol) or `GAME-` (tuning
+  the game); anything else typed is a console command (`?`, `CENSUS`, `e3`,
+  `v`, ...)
 - the bridge's console output never looks like a protocol line: the cue echo,
   the `[PI]` echo and the census mirror are off in this mode, and the Overlord
   logs the rest (banner, status) as `bridge: ...` and acts on none of it
@@ -239,6 +240,27 @@ passes it on as it arrived and checks nothing: it holds no list of cues, so
 changing the game's cues never needs the bridge reflashed. Test one without the arbiter by typing
 `c audio_once_chime` on the console. The console shows
 only `cue <name>` lines by default; `v` toggles the per-event lines and counters.
+
+What the game does, for the Overlord's play log, comes from the arbiter as
+`MESH_MSG_GAME_INFO` floods and goes to the Pi as a line each:
+
+```
+GI <key=value> ...\n
+```
+
+e.g. `GI state=easy_round goals=red-blue count.score=3`. The keys
+(`start`, `state`, `goals`, `palette`, `count.<name>`, `param.<name>` in
+thousandths, and `hb.*` for the 15 s heartbeat) are listed in
+`overlord/playlog.py`. The other way, a line from the Pi
+
+```
+GAME-PARAM <name> <value>\n
+```
+
+goes onto the mesh as `MESH_MSG_GAME_PARAM` and sets one of the game's params
+live on the arbiter, which clamps it to the game file's range (durations in
+seconds). Overlord's live director and its `POST /param/<name>/<value>` route
+send these.
 
 The Overlord player and boot-time firmware coordinator live in `overlord/`.
 The bridge REST firmware route is `GET /api/v1/firmware/<sha256>` on the

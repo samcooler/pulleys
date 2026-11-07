@@ -163,12 +163,28 @@ class Doc:
                        f'<code>{esc(k)} = {esc(v)}</code></div>' for k, v in (sets or {}).items())
 
     def block_html(self, block, enter=False):
-        """A reaction: its device settings, then its cues."""
+        """A reaction: its device settings, its game moves (counters, colours,
+        goals), then its cues."""
         block = block or {}
-        if not block.get("set"):
+        moves = self.moves_html(block)
+        if not block.get("set") and not moves:
             return self.cues_html(block.get("cue"), enter)
-        return self.sets_html(block.get("set")) + (self.cues_html(block.get("cue"), enter)
-                                                    if block.get("cue") else "")
+        return ((self.sets_html(block.get("set")) if block.get("set") else "") + moves
+                + (self.cues_html(block.get("cue"), enter) if block.get("cue") else ""))
+
+    def moves_html(self, block):
+        """clear, add, colors and goals, in the order they run."""
+        lines = []
+        if block.get("clear"):
+            lines.append("clear " + ", ".join(map(str, block["clear"])))
+        for name, amount in (block.get("add") or {}).items():
+            amount = str(amount)
+            lines.append(f"{name} {amount if amount.startswith(('-', '$')) else '+' + amount}")
+        if block.get("colors"):
+            lines.append("ropes swap colours" if block["colors"] == "shuffle" else "ropes back to today's colours")
+        if block.get("goals") is not None:
+            lines.append(f"deal {block['goals']} goal colour(s)")
+        return "".join(f'<div class="cue"><code>{esc(line)}</code></div>' for line in lines)
 
     def cues_html(self, cues, enter=False):
         if not cues:
@@ -206,6 +222,11 @@ class Doc:
                      f'<span>after {self.delay_html(name, "idle", idle["delay"])} without a pull, then every {esc(idle["delay"])}</span>'
                      f'<div class="timer-cues">{self.block_html(idle)}</div></div>'
                      if idle else "")
+        every = st.get("every")
+        every_html = (f'<div class="timer"><span class="tag t-idle">every</span>'
+                      f'<span>every {esc(every["delay"])} in this state, whatever happens</span>'
+                      f'<div class="timer-cues">{self.block_html(every)}</div></div>'
+                      if every else "")
         at = st.get("at") or {}
         at_html = "".join(f'<div class="timer"><span class="tag t-at">at</span>'
                           f'<span>{esc(delay)} into this state</span>'
@@ -228,7 +249,7 @@ class Doc:
     <h3>Reactions <span class="hint">a clip here waits its turn: dropped if one is playing</span></h3>
     {table}
   </div>
-  {f'<div class="block timers">{at_html}{idle_html}{after_html}</div>' if idle or after or at else ""}
+  {f'<div class="block timers">{at_html}{every_html}{idle_html}{after_html}</div>' if idle or after or at or every else ""}
 </section>'''
 
     def strip_html(self):

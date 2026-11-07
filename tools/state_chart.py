@@ -89,6 +89,10 @@ def state_label(name, state, is_start):
     idle = state.get("idle")
     if idle and (idle.get("cue") or idle.get("set")):
         rows += section_rows(f"IDLE every {idle['delay']}", idle.get("cue") or [], idle.get("set"))
+    every = state.get("every")
+    if every:
+        moves = [f"{k}: {every[k]}" for k in ("colors", "goals") if every.get(k) is not None]
+        rows += section_rows(f"EVERY {every['delay']}", (every.get("cue") or []) + moves, every.get("set"))
     for delay, step in (state.get("at") or {}).items():
         step = step or {}
         rows += section_rows(f"AT {delay}", step.get("cue") or [], step.get("set"))

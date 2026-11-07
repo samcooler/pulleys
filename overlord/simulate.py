@@ -1,12 +1,11 @@
-"""Simulator: stand-in for the real components, driven from the keyboard.
+"""Simulator: stand-in for the ropes, driven from the keyboard.
 
-Keys 1-5 pull a major component, each in its own colour, and keys 6-8 the
-final components, all purple. Each press adds charge_per_pull and the charge
-drains at default_decay_rate (the game config's values, 20% and 15 s from full
-in the example), the same rule as the arbiter: it lights at 100% and stays lit
-until it drains to 0. Lighting and wearing out send the same game events the
-real hardware will, and an overlay on the bottom half of the video shows each
-component's charge as a bar.
+Keys 1-5 pull a rope of each major colour, in the game's order, and keys 6-8
+three purple ropes. A press is a pull on that rope's channel, handed to the
+game's engine (playtest/engine.py), which charges, lights and wears out the
+components by the arbiter's rules and sends the same game events -- pull
+events included. An overlay on the bottom half of the video shows each
+component's charge as a bar, and the goals the game has dealt.
 
 Optional: overlord.py only imports this with --simulate.
 """
@@ -30,6 +29,10 @@ MAJOR = [
 ]
 FINAL_KEYS = ["6", "7", "8"]
 FINAL_COLOR = "AF52DE"  # purple
+COLOR_RGB = {"red": "FF3B30", "blue": "0A84FF", "green": "34C759", "yellow": "FFD60A",
+             "orange": "FF9500", "purple": FINAL_COLOR}
+spec_colors = ("red", "blue", "green", "yellow", "orange", "purple")
+PURPLE = 5
 
 # Overlay layout, in a virtual 1920x1080 screen scaled to the window.
 RES_X, RES_Y = 1920, 1080
@@ -57,47 +60,26 @@ def ass_text(x, y, text, size, color="FFFFFF", align=7):
             f"\\1c{ass_color(color)}\\3c&H000000&}}{text}")
 
 
-class Component:
-    def __init__(self, key, color, final, rate, per_pull):
-        self.rate = rate          # percent drained per second
-        self.per_pull = per_pull  # percent one press adds
-        self.key = key
-        self.color = color
-        self.final = final
-        self.level = 0.0          # percent, as of self.stamp
-        self.stamp = 0.0
-        self.on = False           # reached 100 and not yet drained to 0
-
-    def settle(self, now):
-        self.level = max(0.0, self.level - self.rate * (now - self.stamp))
-        self.stamp = now
-
-    def charge(self, now):
-        return max(0.0, min(1.0, (self.level - self.rate * (now - self.stamp)) / 100.0))
-
-    def lit(self, now):
-        return self.on
-
-    def pull(self, now):
-        """Add one press. True if that filled a dark component."""
-        self.settle(now)
-        self.level = min(100.0, self.level + self.per_pull)
-        lights = not self.on and self.level >= 100.0
-        self.on = self.on or lights
-        return lights
-
-
 class Simulator:
-    def __init__(self, game, send_event):
-        """send_event: callback(event_name) that feeds the game engine."""
+    def __init__(self, game, send_event=None):
+        """game: overlord's Game. Each key pulls a rope channel through the
+        game's engine (playtest/engine.py), which does the charging, lighting
+        and wearing out exactly as the arbiter does. send_event is unused, kept
+        for callers of the old signature."""
         self.game = game
-        self.send_event = send_event
         self.video = None
-        rate, per_pull = game.decay_rate, game.charge_per_pull
-        self.majors = [Component(k, c, False, rate, per_pull) for k, c in MAJOR]
-        self.finals = [Component(k, FINAL_COLOR, True, rate, per_pull) for k in FINAL_KEYS]
-        self.by_key = {c.key: c for c in self.majors + self.finals}
-        self._lock = threading.Lock()
+        eng = game.engine
+        roped = sorted(eng.roped)
+        # Keys 1-5: a rope of each major's colour, in the game's order.
+        # Keys 6-8: the first three purple ropes.
+        self.majors = []
+        for i, (key, rgb) in enumerate(MAJOR):
+            color = eng.major_color[i]
+            ch = next((c for c in roped if eng.palette[c] == color), None)
+            self.majors.append((key, ch, COLOR_RGB.get(spec_colors[color], rgb)))
+        purple = [c for c in roped if eng.palette[c] == PURPLE][:len(FINAL_KEYS)]
+        self.finals = [(k, ch, FINAL_COLOR) for k, ch in zip(FINAL_KEYS, purple)]
+        self.by_key = {k: ch for k, ch, _ in self.majors + self.finals if ch is not None}
         self._running = False
         self._input_conf = None
 
@@ -114,8 +96,8 @@ class Simulator:
         self.video = video
         self._running = True
         threading.Thread(target=self._tick_loop, daemon=True).start()
-        print(f"simulate: keys {MAJOR[0][0]}-{MAJOR[-1][0]} light major components, "
-              f"{FINAL_KEYS[0]}-{FINAL_KEYS[-1]} the final ones (focus the video window)",
+        print(f"simulate: keys {MAJOR[0][0]}-{MAJOR[-1][0]} pull a rope of each major colour, "
+              f"{FINAL_KEYS[0]}-{FINAL_KEYS[-1]} the purple ones (focus the video window)",
               flush=True)
 
     def stop(self):
@@ -132,45 +114,13 @@ class Simulator:
             self.press(args[1])
 
     def press(self, key):
-        comp = self.by_key.get(key)
-        if comp is None:
-            return
-        events = []
-        with self._lock:
-            now = time.monotonic()
-            none_lit = not any(c.lit(now) for c in self.majors)  # before this key lights one
-            if comp.pull(now):
-                print(f"simulate: component {key} lit", flush=True)
-                if comp.final:
-                    events.append("final_component_activated")
-                    if all(c.lit(now) for c in self.finals):
-                        events.append("all_final_components_activated")
-                else:
-                    if none_lit:
-                        events.append("first_component_activated")
-                    events.append("component_activated")
-                    if all(c.lit(now) for c in self.majors):
-                        events.append("all_components_activated")
-        self._send(events)
+        ch = self.by_key.get(key)
+        if ch is not None:
+            self.game.pull(ch)
 
     def _tick_loop(self):
         while self._running:
-            events = []
-            with self._lock:
-                now = time.monotonic()
-                for comp in self.majors + self.finals:
-                    # a lit component goes dark once it has drained to empty
-                    if comp.on and comp.charge(now) <= 0.0:
-                        comp.on = False
-                        print(f"simulate: component {comp.key} wore out", flush=True)
-                        if comp.final:
-                            events.append("final_component_deactivated")
-                        else:
-                            events.append("component_deactivated")
-                            if not any(c.lit(now) for c in self.majors):
-                                events.append("all_components_deactivated")
-                overlay = self._render(now)
-            self._send(events)
+            overlay = self._render()
             try:
                 self.video.command("osd-overlay", OVERLAY_ID, "ass-events", overlay,
                                    RES_X, RES_Y, 10)
@@ -178,31 +128,33 @@ class Simulator:
                 print(f"simulate: overlay failed: {e}", flush=True)
             time.sleep(1.0 / FPS)
 
-    def _send(self, events):
-        for name in events:
-            self.send_event(name)
-
     def _show_finals(self):
         # States that react to the final components show their bars instead of the majors.
         return any(self.game.reacts_to(e) for e in (
             "final_component_activated", "final_component_deactivated",
-            "all_final_components_activated"))
+            "all_final_components_activated", "final_pull"))
 
-    def _render(self, now):
-        comps = self.finals if self._show_finals() else self.majors
+    def _render(self):
+        eng = self.game.engine
+        with self.game._lock:
+            rows = self.finals if self._show_finals() else self.majors
+            bars = [(key, rgb, eng.charge_of_channel(ch) / 100.0 if ch is not None else 0.0)
+                    for key, ch, rgb in rows]
+            state = self.game.state or ""
+            goals = eng.goal_colors()
 
         lines = [ass_rect(0, TOP, RES_X, RES_Y - TOP, "000000", alpha="70")]
-        lines.append(ass_text(MARGIN, TOP + 20, (self.game.state or "").upper(), 40))
+        title = state.upper() + (f"   goals: {' '.join(goals)}" if goals else "")
+        lines.append(ass_text(MARGIN, TOP + 20, title, 40))
 
         bar_x = MARGIN + LABEL_W
         bar_w = RES_X - bar_x - MARGIN
         y = TOP + 80
-        for comp in comps:
-            lines.append(ass_text(MARGIN + LABEL_W // 2, y + BAR_H // 2, comp.key, 40,
-                                  comp.color, align=5))
+        for key, rgb, charge in bars:
+            lines.append(ass_text(MARGIN + LABEL_W // 2, y + BAR_H // 2, key, 40, rgb, align=5))
             lines.append(ass_rect(bar_x, y, bar_w, BAR_H, "FFFFFF", alpha="D8"))
-            fill = int(bar_w * comp.charge(now))
+            fill = int(bar_w * max(0.0, min(1.0, charge)))
             if fill > 0:
-                lines.append(ass_rect(bar_x, y, fill, BAR_H, comp.color))
+                lines.append(ass_rect(bar_x, y, fill, BAR_H, rgb))
             y += BAR_H + BAR_GAP
         return "\n".join(lines)

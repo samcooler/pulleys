@@ -8,7 +8,9 @@
 // components.cpp turns what the sensors do into these; gamestate.cpp reacts to
 // them. Neither knows how the other works: this list, and gamestate_event(),
 // is the whole interface. The names are the keys a state lists under `on:` in
-// the game config (GAME_FORMAT.md).
+// the game config (GAME_FORMAT.md). Keep in step with KNOWN_EVENTS in
+// playtest/spec.py, which the validator and the playtest engine use. A game
+// also hears <counter>_reached and its devices' inputs, by name.
 
 // Five major components, one per game1 colour. Keep in step with
 // COMPONENT_COUNTS in tools/game_to_json.py. The finals are not counted here:
@@ -28,8 +30,16 @@ enum GameEvent : uint8_t {
     GE_FINAL_COMPONENT_ACTIVATED,
     GE_FINAL_COMPONENT_DEACTIVATED,
     GE_ALL_FINAL_COMPONENTS_ACTIVATED,
+    // One for every pull, before its charge goes in: `pull` for any rope,
+    // then which kind of rope it was (a goal colour, another major, purple).
+    GE_PULL,
+    GE_GOAL_PULL,
+    GE_NONGOAL_PULL,
+    GE_FINAL_PULL,
     GE_COUNT
 };
+
+inline bool gameevent_is_pull(GameEvent e) { return e >= GE_PULL && e <= GE_FINAL_PULL; }
 
 inline const char* gameevent_name(GameEvent e) {
     static const char* const names[GE_COUNT] = {
@@ -42,6 +52,10 @@ inline const char* gameevent_name(GameEvent e) {
         "final_component_activated",
         "final_component_deactivated",
         "all_final_components_activated",
+        "pull",
+        "goal_pull",
+        "nongoal_pull",
+        "final_pull",
     };
     return e < GE_COUNT ? names[e] : "?";
 }

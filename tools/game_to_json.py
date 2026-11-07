@@ -33,21 +33,14 @@ except ImportError:
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_CONFIG = os.path.join(ROOT, "game_state_machine", "state_config.yaml")
 
-
-def fix_keys(node):
-    """YAML 1.1 reads a bare `on:` key as boolean True (and `off:` as False);
-    spell them back as the words they were written as."""
-    if isinstance(node, dict):
-        return {{True: "on", False: "off"}.get(k, k) if isinstance(k, bool) else k:
-                fix_keys(v) for k, v in node.items()}
-    if isinstance(node, list):
-        return [fix_keys(v) for v in node]
-    return node
+# The rules a game file follows are shared with the playtest engine.
+sys.path.insert(0, ROOT)
+from playtest import spec  # noqa: E402
+from playtest.spec import fix_keys  # noqa: E402,F401  (embed_game.py and others use it from here)
 
 
 def load_config(path):
-    with open(path) as f:
-        return fix_keys(yaml.safe_load(f))
+    return spec.load(path)
 
 
 # What a cue name may be: it is sent over ESP-NOW as ASCII and the bridge writes
@@ -58,18 +51,9 @@ CUE_NAME_MAX = 63
 CUE_NAME = re.compile(r"[a-z0-9_*-]{1,%d}" % CUE_NAME_MAX)
 
 # Every event something emits. A state listing any other name would never fire.
-# Keep in step with src/arbiter_mesh/gameevents.h and overlord/game.py.
-KNOWN_EVENTS = {
-    "first_goal_component_activated",
-    "goal_component_activated",
-    "nongoal_component_activated",
-    "component_deactivated",
-    "all_components_activated",
-    "all_components_deactivated",
-    "final_component_activated",
-    "final_component_deactivated",
-    "all_final_components_activated",
-}
+# Keep in step with src/arbiter_mesh/gameevents.h (playtest/spec.py holds the list).
+# Besides these: a device's inputs, and <counter>_reached for each counter with a mark.
+KNOWN_EVENTS = set(spec.KNOWN_EVENTS)
 
 # How many components of each kind there are. The mesh packet and the component
 # state display have a bar for each. Keep in step with gameevents.h.
@@ -84,7 +68,7 @@ GAME1_COLORS = ("red", "blue", "green", "yellow", "orange")
 MAX_DECAY_RATE = 65.0
 
 # Sections only the Pis read; the arbiter's JSON leaves them out.
-OVERLORD_ONLY = ("ambient_sounds", "players")
+OVERLORD_ONLY = ("ambient_sounds", "players", "show_goals", "milestones")
 
 # Addressing a cue to a player: "shrine__audio_once_bell" is for the Pi named
 # shrine; no prefix is the Overlord's. Keep in step with overlord/players.py.
@@ -170,7 +154,12 @@ def check_devices(cfg, errors):
 
 
 def for_arbiter(cfg):
-    return {k: v for k, v in cfg.items() if k not in OVERLORD_ONLY}
+    """The JSON the arbiter takes. Params become plain numbers, durations in
+    seconds, so the board never parses `2m` in a param."""
+    out = {k: v for k, v in cfg.items() if k not in OVERLORD_ONLY}
+    if cfg.get("params"):
+        out["params"] = spec.params_for_json(spec.load_params(cfg))
+    return out
 
 
 def validate(cfg):
@@ -286,16 +275,62 @@ def validate(cfg):
         if extra:
             errors.append(f"components: unknown kind {sorted(map(str, extra))}; use major")
 
+    if "show_goals" in cfg and not isinstance(cfg["show_goals"], bool):
+        errors.append("show_goals: must be true or false")
+    milestones = cfg.get("milestones")
+    if milestones is not None:
+        if not isinstance(milestones, list) or not all(m in states for m in milestones):
+            errors.append("milestones: must be a list of states, in the order they mark progress")
+
+    # params: named values a state uses as $name; a range makes one tunable
+    params = spec.load_params(cfg, errors)
+
+    def check_value(where, value, want, lo=None, hi=None):
+        """A duration, int or number -- literal or $param -- inside [lo, hi]."""
+        why = spec.check_ref(value, params, want, where)
+        if why:
+            errors.append(why)
+            return
+        if lo is None:
+            return
+        if spec.is_ref(value):
+            p = params[value[1:]]
+            values = [p.value] + [v for v in (p.lo, p.hi) if v is not None]
+        else:
+            values = [spec.parse_duration(value) if want == "duration" else value]
+        if not all(lo < v <= hi for v in values):
+            errors.append(f"{where}: must be above {lo:g} and at most {hi:g}"
+                          f"{' (and so must the param range)' if spec.is_ref(value) else ''}")
+
     rate = cfg.get("default_decay_rate")
-    if rate is not None and (isinstance(rate, bool) or not isinstance(rate, (int, float))
-                             or not 0 < rate <= MAX_DECAY_RATE):
-        errors.append(f"default_decay_rate: must be a number above 0 and at most "
-                      f"{MAX_DECAY_RATE} (percent of full charge per second), not {rate!r}")
+    if rate is not None:
+        check_value("default_decay_rate", rate, "number", 0, MAX_DECAY_RATE)
     add = cfg.get("charge_per_pull")
-    if add is not None and (isinstance(add, bool) or not isinstance(add, (int, float))
-                            or not 0 < add <= 100):
-        errors.append(f"charge_per_pull: must be a number above 0 and at most 100 "
-                      f"(percent of full charge), not {add!r}")
+    if add is not None:
+        check_value("charge_per_pull", add, "number", 0, 100)
+
+    # counters: whole numbers the states add to; one with a `reach` sends
+    # <name>_reached when it climbs to it
+    counters = cfg.get("counters") or {}
+    reached_events = set()
+    if not isinstance(counters, dict):
+        errors.append("counters: must be a map of counter names")
+        counters = {}
+    for name, decl in counters.items():
+        where = f"counters.{name}"
+        if (not isinstance(name, str) or not spec.NAME.fullmatch(name)
+                or len(name) > spec.COUNTER_NAME_MAX):
+            errors.append(f"{where}: a name is lowercase letters, digits and _, starting "
+                          f"with a letter, at most {spec.COUNTER_NAME_MAX} characters")
+            continue
+        if decl is not None and (not isinstance(decl, dict) or set(decl) - {"reach", "note"}):
+            errors.append(f"{where}: must be empty or a map with reach (and note)")
+            continue
+        if decl and "reach" in decl:
+            check_value(f"{where}.reach", decl["reach"], "int")
+            reached_events.add(name + spec.REACHED)
+    if len(counters) > spec.COUNTERS_MAX:
+        errors.append(f"counters: {len(counters)} of them, at most {spec.COUNTERS_MAX}")
 
     # ambient_sounds: overlord's own schedule (GAME_FORMAT.md)
     for i, entry in enumerate(cfg.get("ambient_sounds") or []):
@@ -319,36 +354,89 @@ def validate(cfg):
     if cfg["start"] not in states:
         errors.append(f"start '{cfg['start']}' is not a state")
 
+    # One reaction: what an event, idle, every or at step does. Keys run in the
+    # order spec.ACTION_KEYS lists them; goto only where an event moves the game.
+    def check_action(where, block, may_goto, timer=False):
+        if block is None:
+            return
+        if not isinstance(block, dict):
+            errors.append(f"{where}: must be a map of {', '.join(spec.ACTION_KEYS)}")
+            return
+        allowed = set(spec.ACTION_KEYS) | ({"delay"} if timer else set())
+        for key in set(block) - allowed:
+            errors.append(f"{where}: unknown key '{key}'; use {', '.join(sorted(allowed))}")
+        if "goto" in block:
+            if may_goto:
+                check_goto(where, block["goto"])
+            else:
+                errors.append(f"{where}: no goto here; use after")
+        check_cues(where, block.get("cue"))
+        check_set(where, block.get("set"))
+        clear = block.get("clear")
+        if clear is not None:
+            if not isinstance(clear, list):
+                errors.append(f"{where}.clear: must be a list of counters")
+            else:
+                for c in clear:
+                    if c not in counters:
+                        errors.append(f"{where}.clear: '{c}' is not under counters")
+        adds = block.get("add")
+        if adds is not None:
+            if not isinstance(adds, dict):
+                errors.append(f"{where}.add: must be a map of counter: amount")
+            else:
+                for c, amount in adds.items():
+                    if c not in counters:
+                        errors.append(f"{where}.add: '{c}' is not under counters")
+                    check_value(f"{where}.add.{c}", amount, "int")
+        if "goals" in block:
+            goals = block["goals"]
+            why = spec.check_ref(goals, params, "int", f"{where}.goals")
+            if why:
+                errors.append(why)
+            else:
+                values = ([params[goals[1:]].value, params[goals[1:]].lo, params[goals[1:]].hi]
+                          if spec.is_ref(goals) else [goals])
+                if not all(v is None or 1 <= v <= spec.MAJOR_COUNT for v in values):
+                    errors.append(f"{where}.goals: must be 1 to {spec.MAJOR_COUNT} "
+                                  "(and so must the param range)")
+        if "colors" in block and block["colors"] not in spec.COLOR_ACTIONS:
+            errors.append(f"{where}.colors: must be {' or '.join(spec.COLOR_ACTIONS)}")
+
+    def check_timer(where, block, required=("delay",)):
+        if not isinstance(block, dict) or "delay" not in block:
+            errors.append(f"{where}: needs a delay like 20s, 1.5s or $param")
+            return
+        check_value(f"{where}.delay", block["delay"], "duration", 0, 1e9)
+
     for name, state in states.items():
         state = state or {}
         check_cues(f"{name}.on_enter_cue", state.get("on_enter_cue"))
+        for key in set(state) - {"on", "after", "idle", "every", "at", "on_enter_cue"}:
+            errors.append(f"{name}: unknown key '{key}'; use on, after, idle, every, at")
         for event, action in (state.get("on") or {}).items():
             # `enter` is a lifecycle trigger handled by both the Overlord and
             # arbiter state machines; it is not emitted by a sensor event.
             # A dotted event is a device's input (devices.<device>.emits).
-            if event != "enter" and event not in KNOWN_EVENTS and event not in inputs:
-                errors.append(f"{name}.on.{event}: not an event anything sends")
-            if action is not None and not isinstance(action, dict):
-                errors.append(f"{name}.on.{event}: must be a map with cue, set and/or goto")
-                continue
-            action = action or {}
-            check_cues(f"{name}.on.{event}", action.get("cue"))
-            check_set(f"{name}.on.{event}", action.get("set"))
-            if "goto" in action:
-                check_goto(f"{name}.on.{event}", action["goto"])
+            if (event != "enter" and event not in KNOWN_EVENTS and event not in inputs
+                    and event not in reached_events):
+                hint = (" (a counter needs a reach for that)"
+                        if event.endswith(spec.REACHED) else "")
+                errors.append(f"{name}.on.{event}: not an event anything sends{hint}")
+            check_action(f"{name}.on.{event}", action, may_goto=True)
         after = state.get("after")
         if after:
             if "goto" in after:
                 check_goto(f"{name}.after", after["goto"])
             else:
                 errors.append(f"{name}.after: missing goto")
-        idle = state.get("idle")
-        if idle is not None:
-            if not isinstance(idle, dict) or not re.fullmatch(r"[1-9]\d*[sm]", str(idle.get("delay"))):
-                errors.append(f"{name}.idle: needs delay like 20s or 1m, above 0, and cue")
-            else:
-                check_cues(f"{name}.idle", idle.get("cue"))
-                check_set(f"{name}.idle", idle.get("set"))
+            if "delay" in after:
+                check_value(f"{name}.after.delay", after["delay"], "duration")
+        for key in ("idle", "every"):
+            block = state.get(key)
+            if block is not None:
+                check_timer(f"{name}.{key}", block)
+                check_action(f"{name}.{key}", block, may_goto=False, timer=True)
         at = state.get("at")
         if at is not None:
             if not isinstance(at, dict) or len(at) > AT_MAX:
@@ -356,15 +444,11 @@ def validate(cfg):
                 continue
             for delay, step in at.items():
                 where = f"{name}.at.{delay}"
-                if not re.fullmatch(r"\d+[sm]", str(delay)):
-                    errors.append(f"{where}: must look like 10s or 2m")
+                check_value(where, delay, "duration")
                 if not isinstance(step, dict):
                     errors.append(f"{where}: must be a map with cue and/or set")
                     continue
-                if "goto" in step:
-                    errors.append(f"{where}: no goto here; use after")
-                check_cues(where, step.get("cue"))
-                check_set(where, step.get("set"))
+                check_action(where, step, may_goto=False)
     return errors
 
 

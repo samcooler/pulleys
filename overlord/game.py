@@ -1,223 +1,147 @@
-"""Game engine: runs a state machine from game_state_machine/*.yaml.
+"""Game engine on the wall clock: runs a game_state_machine/*.yaml on the Pi.
 
-Game events come in (from serial, the socket, or the simulator), the current
-state reacts by firing cues through overlord's dispatch and maybe moving to
-another state. Format: game_state_machine/GAME_FORMAT.md.
+The game itself is playtest/engine.py -- the same engine the playtest
+simulator runs at a thousand times real speed, and a copy of what the arbiter
+runs in the installation (src/arbiter_mesh/gamestate.cpp). This file only
+drives it in real time: a thread lets the clock run so timers, `idle`,
+`every` and `at` steps fire when they are due, and events and pulls go in as
+they arrive. Format: game_state_machine/GAME_FORMAT.md.
 
-`set:` blocks change device settings, which only the arbiter can deliver;
-here they are tracked and logged, so a dry run shows what the room would do.
-`at:` steps run on their own timers, as on the arbiter.
+overlord.py uses it with --game, for dry runs without an arbiter: events come
+from the socket (send.sh) or the keyboard simulator (simulate.py), and the
+cues the game fires play here. `set:` changes device settings, which only the
+arbiter can deliver; here they are logged, so a dry run shows what the room
+would do.
 """
 
-import random
-import re
+import sys
 import threading
 import time
 from pathlib import Path
 
-import yaml
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-DEFAULT_GAME = Path(__file__).resolve().parent.parent / "game_state_machine" / "state_config.yaml"
+from playtest import spec  # noqa: E402
+from playtest.engine import Engine  # noqa: E402
+
+DEFAULT_GAME = ROOT / "game_state_machine" / "state_config.yaml"
 
 # Every event the event sources may send. A state that does not list one ignores it.
-GAME_EVENTS = {
-    "first_component_activated",
-    "component_activated",
-    "component_deactivated",
-    "all_components_activated",
-    "all_components_deactivated",
-    "final_component_activated",
-    "final_component_deactivated",
-    "all_final_components_activated",
-}
+GAME_EVENTS = spec.KNOWN_EVENTS
 
-
-# Percent of full charge a lit component loses per second when the config does not say:
-# a full charge lasts 15 s. state_config.yaml's default_decay_rate overrides it.
-DEFAULT_DECAY_RATE = 100.0 / 15.0
-# Percent of full charge one pull adds when the config does not say: six quick
-# pulls (two a second) fill a component. state_config.yaml's charge_per_pull overrides it.
-DEFAULT_CHARGE_PER_PULL = 20.0
-
-
-def parse_duration(text):
-    """`10s` or `2m` -> seconds."""
-    m = re.fullmatch(r"\s*(\d+)\s*(s|m)\s*", str(text))
-    if not m:
-        raise ValueError(f"bad duration {text!r}; use e.g. 10s or 2m")
-    return int(m.group(1)) * (60 if m.group(2) == "m" else 1)
-
-
-def reactions(state):
-    # YAML 1.1 reads a bare `on:` key as boolean True
-    return state.get("on") or state.get(True) or {}
+TICK = 0.05   # seconds between clock steps: timers fire within this of their time
 
 
 class Game:
-    def __init__(self, path, fire_cue):
+    def __init__(self, path, fire_cue, roped=None):
         """fire_cue: callback(cue_name, enter) that plays one cue; enter is
         True for a cue fired on entering a state."""
-        with open(path) as f:
-            config = yaml.safe_load(f)
-        self.name = config.get("game", Path(path).stem)
-        self.start_state = config["start"]
-        self.states = config["states"]
-        self.decay_rate = float(config.get("default_decay_rate", DEFAULT_DECAY_RATE))
-        if self.decay_rate <= 0:
-            raise ValueError(f"default_decay_rate must be above 0, not {self.decay_rate}")
-        self.charge_per_pull = float(config.get("charge_per_pull", DEFAULT_CHARGE_PER_PULL))
-        if not 0 < self.charge_per_pull <= 100:
-            raise ValueError(f"charge_per_pull must be above 0 and at most 100, not {self.charge_per_pull}")
+        self.cfg = spec.load(path)
+        self.engine = Engine(self.cfg, roped=roped)
+        self.name = self.engine.name
+        self.states = self.cfg["states"]
         self._fire_cue = fire_cue
         self._lock = threading.RLock()
-        self._timer = None
-        self._idle_timer = None
-        self._at_timers = []
-        self.settings = {}   # "device.setting" -> value, as the arbiter would hold it
-        for dev, body in (config.get("devices") or {}).items():
-            for prop, values in ((body or {}).get("set") or {}).items():
-                self.settings[f"{dev}.{prop}"] = values[0]
-        self.state = None
-        self.timer_deadline = None  # monotonic time the current `after` fires, or None
+        self._t0 = None
+        self._running = False
+        self._listeners = []
+        self.engine.on_record(self._on_record)
 
-        for name, state in self.states.items():
-            targets = [a.get("goto") for a in reactions(state).values() if a]
-            if state.get("after"):
-                parse_duration(state["after"]["delay"])
-                targets.append(state["after"]["goto"])
-            if state.get("idle"):
-                if parse_duration(state["idle"]["delay"]) <= 0:
-                    raise ValueError(f"state {name}: idle delay must be above 0")
-            for t in targets:
-                if t and t not in self.states:
-                    raise ValueError(f"state {name} goes to unknown state {t}")
+    # -- what the rest of overlord asks --------------------------------------------
+    @property
+    def state(self):
+        return self.engine.state
+
+    @property
+    def decay_rate(self):
+        return self.engine.decay_rate
+
+    @property
+    def charge_per_pull(self):
+        return self.engine.charge_per_pull
+
+    @property
+    def settings(self):
+        return self.engine.settings
+
+    @property
+    def timer_deadline(self):
+        """Monotonic time the current `after` fires, or None."""
+        after = self.engine._after
+        return None if after is None or self._t0 is None else self._t0 + after[0]
+
+    def on_record(self, fn):
+        """fn(record) for everything the engine does (playtest/engine.py lists
+        the kinds): the play log listens here in --game mode."""
+        self._listeners.append(fn)
 
     def handles(self, event_name):
-        # `enter` is a lifecycle trigger, not an event delivered by a sensor.
         if event_name == "enter":
             return False
         return event_name in GAME_EVENTS or any(
-            event_name in reactions(s) for s in self.states.values())
+            event_name in spec.reactions(s) for s in self.states.values())
 
     def reacts_to(self, event_name):
         """True if the current state lists this event."""
         if event_name == "enter":
             return False
         with self._lock:
-            return event_name in reactions(self.states.get(self.state, {}))
+            return event_name in spec.reactions(self.states.get(self.state) or {})
 
+    # -- driving it ----------------------------------------------------------------
     def start(self):
-        print(f"game: {self.name}, starting in {self.start_state}", flush=True)
+        print(f"game: {self.name}, starting in {self.cfg['start']}", flush=True)
         with self._lock:
-            self._enter(self.start_state)
-
-    def event(self, event_name):
-        with self._lock:
-            self._arm_idle()   # any event is activity, listed or not
-            listed = reactions(self.states[self.state])
-            if event_name not in listed:
-                print(f"game: {event_name} ignored in {self.state}", flush=True)
-                return
-            action = listed[event_name] or {}
-            print(f"game: {event_name} in {self.state}", flush=True)
-            self._act(action)
-            if action.get("goto"):
-                self._enter(action["goto"])
+            self._t0 = time.monotonic()
+            self.engine.start()
+        self._running = True
+        threading.Thread(target=self._clock, daemon=True).start()
 
     def stop(self):
+        self._running = False
+
+    def event(self, event_name):
+        """A game event or device input by name, now."""
         with self._lock:
-            self._cancel_timer()
-            self._cancel_idle()
-            self._cancel_at()
+            self._catch_up()
+            self.engine.input(event_name)
 
-    def _enter(self, name):
-        self._cancel_timer()
-        self._cancel_at()
-        print(f"game: {self.state or '-'} -> {name}", flush=True)
-        self.state = name
-        state = self.states[name]
-        enter = reactions(state).get("enter") or {}
-        self._act(enter, enter=True)
-        for delay, step in (state.get("at") or {}).items():
-            timer = threading.Timer(parse_duration(delay), self._at, (delay, step))
-            timer.daemon = True
-            self._at_timers.append(timer)
-            timer.start()
-        after = state.get("after")
-        if after:
-            seconds = parse_duration(after["delay"])
-            timer = threading.Timer(seconds, lambda: self._timeout(timer, after["goto"]))
-            timer.daemon = True
-            self._timer = timer
-            self.timer_deadline = time.monotonic() + seconds
-            timer.start()
-        self._arm_idle()
-
-    def _timeout(self, timer, to_state):
+    def pull(self, channel):
+        """A pull on a rope channel, now (the simulator's keys)."""
         with self._lock:
-            # A timer cancelled just as it fired must not move a state it no longer owns.
-            if self._timer is not timer:
-                return
-            print(f"game: timer in {self.state}", flush=True)
-            self._enter(to_state)
+            self._catch_up()
+            self.engine.pull(channel)
 
-    def _cancel_timer(self):
-        if self._timer:
-            self._timer.cancel()
-        self._timer = None
-        self.timer_deadline = None
-
-    # `idle`: the state's cues fire after `delay` with no event, and again
-    # every `delay` until one arrives. Re-armed by every event and on entry.
-    def _arm_idle(self):
-        self._cancel_idle()
-        idle = self.states[self.state].get("idle") if self.state else None
-        if not idle:
-            return
-        timer = threading.Timer(parse_duration(idle["delay"]),
-                                lambda: self._idle(timer, idle))
-        timer.daemon = True
-        self._idle_timer = timer
-        timer.start()
-
-    def _idle(self, timer, idle):
+    def set_param(self, name, value):
         with self._lock:
-            if self._idle_timer is not timer:
-                return
-            print(f"game: idle in {self.state}", flush=True)
-            self._arm_idle()   # before firing: a cue may change state
-            self._act(idle)
+            return self.engine.set_param(name, value)
 
-    def _cancel_idle(self):
-        if self._idle_timer:
-            self._idle_timer.cancel()
-        self._idle_timer = None
+    def _catch_up(self):
+        if self._t0 is not None:
+            self.engine.advance_to(time.monotonic() - self._t0)
 
-    # `at`: each step once, its delay after entering the state.
-    def _at(self, delay, step):
-        with self._lock:
-            # A step cancelled just as it fired must not run in a state it no longer belongs to.
-            if threading.current_thread() not in self._at_timers:
-                return
-            print(f"game: at {delay} in {self.state}", flush=True)
-            self._act(step)
+    def _clock(self):
+        while self._running:
+            with self._lock:
+                self._catch_up()
+            time.sleep(TICK)
 
-    def _cancel_at(self):
-        for timer in self._at_timers:
-            timer.cancel()
-        self._at_timers = []
-
-    def _act(self, block, enter=False):
-        """One reaction: its settings first, then its cues (as the arbiter does)."""
-        block = block or {}
-        for key, value in (block.get("set") or {}).items():
-            if self.settings.get(key) != value:
-                self.settings[key] = value
-                print(f"game: set {key}={value}", flush=True)
-        self._fire(block.get("cue"), enter=enter)
-
-    def _fire(self, cues, enter=False):
-        for cue in cues or []:
-            if isinstance(cue, dict):   # {choose_one: [...]}: one of them, at random
-                cue = random.choice(cue["choose_one"])
-            self._fire_cue(cue, enter)
+    def _on_record(self, rec):
+        kind = rec["kind"]
+        if kind == "state":
+            print(f"game: {rec.get('prev') or '-'} -> {rec['name']}", flush=True)
+        elif kind == "event":
+            print(f"game: {rec['name']} {'in' if rec['reacted'] else 'ignored in'} {self.state}",
+                  flush=True)
+        elif kind == "set":
+            print(f"game: set {rec['key']}={rec['value']}", flush=True)
+        elif kind == "goals":
+            print(f"game: goals {', '.join(rec['colors'])}", flush=True)
+        elif kind == "timer":
+            print(f"game: {rec['name']} in {self.state}", flush=True)
+        if kind == "cue":
+            self._fire_cue(rec["name"], rec["enter"])
+        for fn in self._listeners:
+            fn(rec)

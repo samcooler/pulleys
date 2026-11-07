@@ -1,0 +1,136 @@
+# Chase the colour: one colour is hunted at a time, and it hops to another
+# every few seconds. Every pull on a rope of the hunted colour scores; catch
+# enough before time runs out and the room celebrates. Format: ../GAME_FORMAT.md.
+#
+# Unlike Simon, nothing is punished and nothing needs holding: the whole crowd
+# can join in, and the question the game asks is only "where is it now?".
+
+game: chase
+start: waiting
+show_goals: true
+
+# For the playtest tools: the states that mean players are getting somewhere.
+milestones:
+  - chase
+  - caught
+
+components:
+  major:
+    - red
+    - blue
+    - green
+    - yellow
+    - orange
+
+charge_per_pull: $charge_per_pull
+default_decay_rate: 10
+
+params:
+  hop:
+    value: 6s
+    min: 3s
+    max: 12s
+    note: how long the colour stays put before it moves
+  target:
+    value: 40
+    min: 15
+    max: 80
+    note: pulls on the hunted colour that win
+  chase_time:
+    value: 90s
+    min: 45s
+    max: 3m
+  charge_per_pull:
+    value: 25
+    min: 10
+    max: 50
+    note: how fast the hunted colour's bar fills -- lighting it earns praise
+
+counters:
+  score:
+    reach: $target
+
+cues:
+  game:
+    - game_reset_components
+  audio_loop:
+    - audio_loop_idle
+  video_loop:
+    - video_loop_idle
+    - video_loop_game1
+  audio_once:
+    - audio_once_bop_call               # placeholder: "it moved!"
+    - audio_once_component_powerup
+    - audio_once_victory_fanfare
+  video_once:
+    - video_once_janis_encouragement_*
+    - video_once_janis_suspicion_*
+    - video_once_janis_progress_confirmation_congrats_1
+
+states:
+
+  waiting:
+    on:
+      enter:
+        clear:
+          - score
+        cue:
+          - audio_loop_idle
+          - video_loop_idle
+      pull:
+        goto: chase
+
+  chase:
+    on:
+      enter:
+        goals: 1
+        cue:
+          - game_reset_components
+          - video_loop_game1
+      goal_pull:
+        add:
+          score: 1
+      goal_component_activated:
+        cue:
+          - audio_once_component_powerup
+          - video_once_janis_encouragement_*
+      score_reached:
+        goto: caught
+    every:
+      delay: $hop
+      goals: 1
+      cue:
+        - audio_once_bop_call
+    after:
+      delay: $chase_time
+      goto: escaped
+
+  caught:
+    on:
+      enter:
+        set:
+          party.lights: lit
+        cue:
+          - audio_once_victory_fanfare
+          - video_once_janis_progress_confirmation_congrats_1
+    after:
+      delay: 30s
+      goto: waiting
+
+  escaped:
+    on:
+      enter:
+        set:
+          party.lights: dark
+        cue:
+          - video_once_janis_suspicion_*
+    after:
+      delay: 10s
+      goto: waiting
+
+devices:
+  party:
+    set:
+      lights:
+        - dark
+        - lit

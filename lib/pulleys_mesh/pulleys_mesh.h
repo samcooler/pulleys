@@ -53,6 +53,13 @@ enum : uint8_t {
     // every node whether or not it knows the type (see "Flood" further down).
     MESH_MSG_STATE        = 0xA0,   // arbiter: every device setting (pulleys_settings)
     MESH_MSG_DEVICE       = 0xA1,   // device: an input event, or what it is doing
+    // Body: ASCII "key=value" items, space-separated -- what the game just did
+    // (state=..., goals=..., count.<name>=..., param.<name>=...), for the play
+    // log on the Pi. The bridge hands it over as a "GI <body>" line.
+    MESH_MSG_GAME_INFO    = 0xA2,   // arbiter: the game's state, for the record
+    // Body: ASCII "<name> <value>". Sets one of the game's params live; the
+    // arbiter clamps it to the game's range and reports it in GAME_INFO.
+    MESH_MSG_GAME_PARAM   = 0xA3,   // bridge (from its Pi): tune the game
 };
 
 // Clock sync: every node beacons its own mesh clock, and each listener pulls a
