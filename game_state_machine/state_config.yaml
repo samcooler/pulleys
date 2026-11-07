@@ -120,6 +120,8 @@ cues:
     - game_randomize_simon_5_goals
     - game_diorama_on               # the diorama lights up 10 s later and unlatches its door
     - game_diorama_off              # lights out, door latched
+    - game_party_lights_on          # the room's AC lights, for a victory
+    - game_party_lights_off
   audio_loop:
     - audio_loop_idle
     - audio_loop_off
@@ -244,6 +246,7 @@ states:
       enter:
         cue:
           - game_diorama_off          # the game is back at its start
+          - game_party_lights_off
           - audio_loop_idle
           - video_loop_idle
       nongoal_component_activated:
@@ -352,6 +355,7 @@ states:
       enter:
         cue:
           - game_diorama_on           # game 1 won: the diorama comes on 10 s from now
+          - game_party_lights_on
           - choose_one:
               - video_once_janis_progress_confirmation_congrats_1
               - video_once_janis_progress_confirmation_congrats_2
@@ -374,6 +378,7 @@ states:
     on:
       enter:
         cue:
+          - game_party_lights_off     # the victory is over
           - game_reset_components
           - video_once_janis_threatening_*
       final_component_activated:
@@ -394,6 +399,7 @@ states:
       enter:
         cue:
           - game_diorama_off
+          - game_party_lights_on
           - video_once_test2        # placeholder
     after:
       delay: 2m                    # placeholder
@@ -403,6 +409,7 @@ states:
     on:
       enter:
         cue:
+          - game_party_lights_off
           - audio_loop_off
     after:
       delay: 2m                    # placeholder

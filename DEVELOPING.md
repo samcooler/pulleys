@@ -10,6 +10,7 @@
 | **Bridge** | any ESP32-C3 (4MB, native USB) | none | USB to its Pi (or UART1, GPIO 21 TX / 20 RX, with `BRIDGE_PI_USB=0`); the Overlord's hosts the firmware AP |
 | **Component state display** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | a Screen running its `components` display: one bar per game component |
 | **Extractor** | D1 Mini ESP32-WROOM-32 | two 32×8 panels as a 64×8 ring + a hanging strip, one chain (GPIO 16) | a Screen running an `extractor_<colour>` display: that colour's score as liquid |
+| **Party lights** | ESP32 DevKit, 30-pin (classic) | none: four outputs (GPIO 32/33/25/26) to the AC light switches | a Screen running its `party` display: the room's lights, on for the victories |
 | **Diorama** | D1 Mini ESP32-WROOM-32 | LED strip (GPIO 16), door-latch SSR (GPIO 26), door switch with pull-up (GPIO 27) | a Screen running its `diorama` display: fluorescent tubes, the door latch and sensor |
 
 ## Build Environments
@@ -22,6 +23,7 @@
 | `bridge` | ESP32-C3 (`seeed_xiao_esp32c3`) | mesh → Pi serial bridge, default env, always a C3 |
 | `component_state_display` | D1 Mini ESP32-WROOM-32 | the screen image pinned to its COMPONENTS display, default env |
 | `screen_extractor` | D1 Mini ESP32-WROOM-32 | the screen image on the extractor surface (ring + strip), default env |
+| `screen_party` | ESP32 DevKit, 30-pin (`esp32dev`) | the screen image pinned to PARTY: four AC light switches, no LEDs, default env |
 | `screen_diorama` | D1 Mini ESP32-WROOM-32 | the screen image pinned to DIORAMA, on its strip, latch and door switch, default env |
 
 ```sh
@@ -46,7 +48,7 @@ python3 tools/release_firmware.py
 ```
 
 This builds `sensor`, `screen`, `component_state_display`, `screen_extractor`,
-`screen_diorama`, `arbiter_mesh`, and `bridge`, then creates the next minor GitHub Release with the images and
+`screen_diorama`, `screen_party`, `arbiter_mesh`, and `bridge`, then creates the next minor GitHub Release with the images and
 `manifest.json`. Use `--build-only` to create local assets only. `./flash_all.sh
 --ota` is retired; managed updates are initiated by restarting the Overlord.
 
@@ -375,3 +377,18 @@ Wiring and polarity are build flags in `[env:screen_diorama]`: `DIORAMA_LEDS`
 maglock) and `DIORAMA_DOOR_OPEN` (HIGH: the switch closes to ground when the
 door is shut). On the console, `d` switches the lights on (no delay) or off, `o`
 acts as if the door opened, and `t r,g,b` tunes the tint live.
+
+## Party lights
+
+One board, a classic 30-pin ESP32 DevKit built as `screen_party`, with no LEDs:
+four outputs (GPIO 32, 33, 25, 26), each driving a switch for a string of the
+room's AC lights. On while the game is in a victory, off otherwise:
+
+- `game_party_lights_on`, fired on entering `party` (game 1 won) and
+  `victory2` (game 2 won). The four come on 200 ms apart, to spread the inrush.
+- `game_party_lights_off`, fired on entering `final`, `kickout` and `passive`.
+
+Every output is driven off as the first thing on boot, and the DevKit's blue
+LED (GPIO 2) shows whether the lights are on. For an active-low relay board,
+build with `-D PARTY_ON=LOW`; the pins are `PARTY_PINS` in
+`[env:screen_party]`. On the console, `p` switches the lights on or off.

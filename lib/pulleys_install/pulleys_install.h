@@ -153,6 +153,7 @@ enum ScreenDisplay : uint8_t {
     SCREEN_EXTRACTOR_YELLOW = 8,
     SCREEN_EXTRACTOR_ORANGE = 9,
     SCREEN_DIORAMA          = 10,  // the diorama's fluorescent tubes, its door latch and sensor
+    SCREEN_PARTY            = 11,  // four AC light switches, on for the victories
     SCREEN_DISPLAY_COUNT,
 
     // Displays the power-cycle steps through on an unlisted board. The ones
@@ -165,7 +166,8 @@ enum ScreenDisplay : uint8_t {
     // need their own surface too ([env:screen_extractor]); a board built for it
     // runs only those, and one a 256-LED screen is listed for is refused.
     // DIORAMA is one board with a strip and a door on it, built in
-    // ([env:screen_diorama]).
+    // ([env:screen_diorama]); PARTY is one with four relays and no LEDs
+    // ([env:screen_party]).
     SCREEN_CYCLE_COUNT = SCREEN_ALLON
 };
 static constexpr uint8_t SCREEN_EXTRACTOR_COUNT = 5;   // one per game1 colour
@@ -187,6 +189,7 @@ inline const char* screen_display_name(uint8_t d) {
         case SCREEN_EXTRACTOR_YELLOW: return "extractor_yellow";
         case SCREEN_EXTRACTOR_ORANGE: return "extractor_orange";
         case SCREEN_DIORAMA:          return "diorama";
+        case SCREEN_PARTY:            return "party";
         default:             return "?";
     }
 }

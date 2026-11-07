@@ -38,6 +38,8 @@
 //   DIORAMA   — a strip of failing hospital fluorescents, dark until the game
 //             says so; it also unlatches the diorama's door and turns to
 //             rainbow when someone opens it. One board, built for it
+//   PARTY     — no LEDs at all: four outputs switching the room's AC lights,
+//             on while the game is in a victory. One board, built for it
 //
 // Every display runs on the same board and hears the same mesh: every sensor
 // event, the arbiter's palette, its component charges. Which one draws is the
@@ -77,7 +79,21 @@ static_assert(LED_COUNT >= DIORAMA_LEDS, "LED_COUNT has to cover the diorama str
   #define SCREEN_DIORAMA_BUILD 0
 #endif
 
+// A party build ([env:screen_party]) is marked by PARTY_PINS and drives no LEDs.
+#ifdef PARTY_PINS
+  #define SCREEN_PARTY_BUILD 1
+  #ifndef SCREEN_FORCE_DISPLAY
+    #error "a party build pins its display: -D SCREEN_FORCE_DISPLAY=pulleys::SCREEN_PARTY"
+  #endif
+static_assert(SCREEN_FORCE_DISPLAY == pulleys::SCREEN_PARTY,
+              "PARTY_PINS is set, so this build is the party lights and nothing else");
+#else
+  #define SCREEN_PARTY_BUILD 0
+#endif
+
 #ifdef SCREEN_FORCE_DISPLAY
+static_assert(SCREEN_FORCE_DISPLAY != pulleys::SCREEN_PARTY || SCREEN_PARTY_BUILD,
+              "the party display needs PARTY_PINS: build [env:screen_party]");
 static_assert(SCREEN_FORCE_DISPLAY != pulleys::SCREEN_DIORAMA || SCREEN_DIORAMA_BUILD,
               "the diorama display needs DIORAMA_LEDS: build [env:screen_diorama]");
 static_assert(SCREEN_FORCE_DISPLAY != pulleys::SCREEN_WAVE ||
@@ -85,6 +101,7 @@ static_assert(SCREEN_FORCE_DISPLAY != pulleys::SCREEN_WAVE ||
               "the wave display needs at least 29 LEDs (14, skip 1, 14)");
 static_assert(SCREEN_FORCE_DISPLAY == pulleys::SCREEN_WAVE ||
               SCREEN_FORCE_DISPLAY == pulleys::SCREEN_DIORAMA ||
+              SCREEN_FORCE_DISPLAY == pulleys::SCREEN_PARTY ||
               LED_COUNT >= 256,
               "the matrix displays need the whole 8x32 (256 LEDs)");
 #else
@@ -838,6 +855,85 @@ static void renderDiorama(uint32_t now, float dt) {
 }
 #endif
 
+// ── Display: party ────────────────────────────────────────────────────────────
+// Not a display at all: four outputs, each powering a switch for a string of
+// the room's AC lights. The game fires game_party_lights_on as it enters a
+// victory (party, after game 1; victory2) and game_party_lights_off as it
+// leaves one (final, kickout) or lands back at its start (passive). The four
+// come on PARTY_STAGGER_MS apart, so they do not all draw their inrush at once,
+// and go off together.
+//
+// PARTY_ON is the level that switches a light on: HIGH for an SSR or a relay
+// module driven high, LOW for the common active-low relay boards. Every output
+// is driven off as the very first thing on boot. The dev board's own LED
+// (PARTY_STATUS_PIN) mirrors the lights, so the board can be checked with
+// nothing plugged into it.
+#if SCREEN_PARTY_BUILD
+#ifndef PARTY_ON
+  #define PARTY_ON          HIGH
+#endif
+#ifndef PARTY_STAGGER_MS
+  #define PARTY_STAGGER_MS  200
+#endif
+#ifndef PARTY_STATUS_PIN
+  #define PARTY_STATUS_PIN  2       // the blue LED on a 30-pin DevKit
+#endif
+#define PARTY_OFF           (PARTY_ON == HIGH ? LOW : HIGH)
+
+static const uint8_t PARTY_PIN[] = { PARTY_PINS };
+static constexpr uint8_t PARTY_COUNT = sizeof(PARTY_PIN) / sizeof(PARTY_PIN[0]);
+
+static bool     partyOn    = false;
+static uint32_t partyOnAt  = 0;
+static uint8_t  partyLit   = 0;      // how many of the outputs are on so far
+
+static void partyOutputsOff() {
+    for (uint8_t i = 0; i < PARTY_COUNT; i++) {
+        pinMode(PARTY_PIN[i], OUTPUT);
+        digitalWrite(PARTY_PIN[i], PARTY_OFF);
+    }
+    pinMode(PARTY_STATUS_PIN, OUTPUT);
+    digitalWrite(PARTY_STATUS_PIN, LOW);
+}
+
+static void partySwitch(bool on) {
+    if (on == partyOn) return;
+    partyOn = on;
+    if (on) {
+        partyOnAt = millis();
+        partyLit  = 0;          // partyPoll() brings them up one by one
+    } else {
+        partyOutputsOff();
+        partyLit = 0;
+    }
+    digitalWrite(PARTY_STATUS_PIN, on ? HIGH : LOW);
+    pulleys::census_set_detail(on ? "party on" : "party off");
+    Serial.printf("  [PARTY] lights %s\n", on ? "ON" : "OFF");
+}
+
+// Repeats of a cue are deduped by the mesh, and a repeat of the state it is
+// already in changes nothing.
+static void onPartyCue(const pulleys::MeshCue& c, bool /*relayed*/) {
+    if      (strcmp(c.name, "game_party_lights_on")  == 0) partySwitch(true);
+    else if (strcmp(c.name, "game_party_lights_off") == 0) partySwitch(false);
+}
+
+static void partyInit() {
+    pulleys::mesh_on_cue(onPartyCue);
+    Serial.printf("  [PARTY] %u outputs, on = %s:", PARTY_COUNT, PARTY_ON == HIGH ? "HIGH" : "LOW");
+    for (uint8_t i = 0; i < PARTY_COUNT; i++) Serial.printf(" GPIO%u", PARTY_PIN[i]);
+    Serial.println();
+}
+
+static void partyPoll(uint32_t now) {
+    while (partyOn && partyLit < PARTY_COUNT &&
+           now - partyOnAt >= (uint32_t)partyLit * PARTY_STAGGER_MS) {
+        digitalWrite(PARTY_PIN[partyLit], PARTY_ON);
+        partyLit++;
+    }
+}
+#endif
+
 // ── Serial console — inject fake events to test the display standalone ────────
 //   e<ch>  simulate one detection on that channel
 //   c<bar> <percent>  set a component bar as if the arbiter had sent it
@@ -850,6 +946,7 @@ static void renderDiorama(uint32_t now, float dt) {
 //   d      diorama: lights on (at once, no delay) / off, as the game's cues do
 //   o      diorama: act as if the door had just been opened
 //   t<r>,<g>,<b>  diorama: set the tubes' tint, for finding it on the bench
+//   p      party: lights on / off, as the game's cues do
 static void handleSerial() {
     static char buf[96];
     static uint8_t len = 0;
@@ -912,6 +1009,10 @@ static void handleSerial() {
                 Serial.printf("  diorama tint: %u,%u,%u (put one you like in dioramaTint)\n",
                               dioramaTint.r, dioramaTint.g, dioramaTint.b);
 #endif
+#if SCREEN_PARTY_BUILD
+            } else if (buf[0] == 'p') {
+                partySwitch(!partyOn);
+#endif
             } else if (buf[0] == 'w') {
                 wavePanel.serpentine = !wavePanel.serpentine;
                 Serial.printf("  14x2 rows: %s (set PANEL_14X2_SERPENTINE to keep it)\n",
@@ -954,10 +1055,15 @@ void setup() {
     pinMode(DIORAMA_LATCH_PIN, OUTPUT);
     digitalWrite(DIORAMA_LATCH_PIN, DIORAMA_LATCH_LOCK);
 #endif
+#if SCREEN_PARTY_BUILD
+    partyOutputsOff();   // the room's lights stay off until the game says
+#endif
     Serial.begin(115200);
     delay(1000);
 
+#if !SCREEN_PARTY_BUILD   // no LEDs on it, and LED_PIN could be anything there
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, LED_COUNT);
+#endif
     FastLED.setMaxPowerInVoltsAndMilliamps(5, LED_MAX_MA);
     FastLED.setBrightness(255);
     fill_solid(leds, LED_COUNT, CRGB::Black);
@@ -984,6 +1090,9 @@ void setup() {
     else if (mode == pulleys::SCREEN_WAVE)  waveInit();
 #if SCREEN_DIORAMA_BUILD
     dioramaInit();
+#endif
+#if SCREEN_PARTY_BUILD
+    partyInit();
 #endif
     pulleys::census_set_detail(pulleys::screen_display_name(mode));
     Serial.printf("  display=%s (%s)\n", pulleys::screen_display_name(mode),
@@ -1016,6 +1125,9 @@ void loop() {
 #if SCREEN_DIORAMA_BUILD
     dioramaPoll(now);
 #endif
+#if SCREEN_PARTY_BUILD
+    partyPoll(now);
+#endif
 
     // No dwell timer: the mode was chosen at boot and holds until the next
     // power cycle. 'm' on serial still flips it for bench testing.
@@ -1037,6 +1149,9 @@ void loop() {
 #endif
 #if SCREEN_DIORAMA_BUILD
         else if (mode == pulleys::SCREEN_DIORAMA) renderDiorama(now, dt);
+#endif
+#if SCREEN_PARTY_BUILD
+        else if (mode == pulleys::SCREEN_PARTY) { /* no LEDs: the relays are partyPoll()'s */ }
 #endif
         else                                      renderRanking(dt, pulleys::mesh_now_secs());
 
