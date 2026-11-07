@@ -25,7 +25,7 @@ import random
 
 from .engine import Engine
 from .players import Population, Visitor, meaning_of_cue, meaning_of_setting
-from .spec import COLORS
+from .spec import COLORS, PURPLE, reactions
 
 CLIP_SECONDS = 4.0   # a typical Janis clip
 
@@ -45,8 +45,13 @@ class World:
         self.groups = {}
         self.occupied = {}            # channel -> visitor id
         self._reported = set()        # groups whose leaving is in the trace
+        self._flash_until = -1.0
         self.here = []                # visitors still in the room
         self._open = set()            # groups not all gone yet
+        goal_events = ("goal_pull", "nongoal_pull", "goal_component_activated",
+                       "first_goal_component_activated", "all_components_activated")
+        self._goal_states = {n for n, st in cfg["states"].items()
+                             if any(e in reactions(st or {}) for e in goal_events)}
         self._next_id = 0
         self.engine.on_record(self._on_record)
 
@@ -90,18 +95,26 @@ class World:
 
     def rope_needing(self, v):
         """A free rope of a colour v wants that is dark and that nobody present
-        is pulling, or None."""
+        is pulling, or None. Each purple rope is a final of its own, so any
+        dark one is needed, whoever is on the others."""
         manned = {self.engine.palette[ch] for ch, who in self.occupied.items() if who != v.id}
         best = None
         for ch in sorted(self.engine.roped):
             if ch in self.occupied:
                 continue
             c = self.engine.palette[ch]
-            if c in manned or self.lit(ch) or v.want_color(c) <= 0.6:
+            if (c in manned and c != PURPLE) or self.lit(ch) or v.want_color(c) <= 0.6:
                 continue
             if best is None or v.want_color(c) > v.want_color(self.engine.palette[best]):
                 best = ch
         return best
+
+    def visible_goals(self):
+        """The goals overlord would be drawing now: only while the state cares
+        about goals (overlord/goal_display.py), and only with show_goals."""
+        if not self.show_goals or self.engine.state not in self._goal_states:
+            return None
+        return set(self.engine.goal_colors()) or None
 
     # -- the engine's records become what people perceive -------------------------
     def _on_record(self, rec):
@@ -112,6 +125,36 @@ class World:
         for v in self.here:
             if v.left is None:
                 v.perceive(p, self)
+        if rec["kind"] == "set" and rec["key"] == "diorama.latch" and rec["value"] == "open":
+            self._diorama_opens()
+
+    def _diorama_opens(self):
+        """In the first victory the diorama unlatches. Inside: the art spirits,
+        their souls drawn up through tubes for Janis, and signage hinting that
+        purple sets them free. Whoever reads it may tell their group."""
+        went_in = False
+        for v in list(self.here):
+            if v.left is None and v.look_in_diorama(self):
+                went_in = True
+        for v in list(self.here):
+            if v.left is None and v.knows_twist:
+                for other in self.groups[v.group][1]:
+                    if other.left is None and not other.knows_twist and v.rng.random() < other.tr.social:
+                        other.learn_twist(self.t, 0.8)
+        if went_in:
+            self.engine.input("diorama.door_opened")   # as the door switch would report
+
+    FLASH_SECONDS = 1.8   # the diorama's purple flash; a press during it is not another press
+
+    def press_button(self, v):
+        """"Free the spirits", pressed. The board flashes purple whatever the
+        game is doing; the game hears diorama.button_pressed and answers with
+        a bad noise and Janis."""
+        if self.t < self._flash_until:
+            return
+        self._flash_until = self.t + self.FLASH_SECONDS
+        v.pressed(self)
+        self.engine.input("diorama.button_pressed")
 
     def _percept(self, rec):
         kind = rec["kind"]
@@ -132,7 +175,7 @@ class World:
             return meaning and {"kind": "setting", "meaning": meaning, "key": rec["key"], "value": rec["value"]}
         if kind == "palette":
             return {"kind": "palette"}
-        if kind == "goals" and self.show_goals:
+        if kind == "goals" and self.visible_goals() is not None:
             return {"kind": "goals", "colors": rec["colors"]}
         return None
 
@@ -145,8 +188,7 @@ class World:
         members = []
         for tr in traits:
             v = Visitor(self._next_id, gid, tr, random.Random(self.rng.randrange(1 << 30)), self.t)
-            if self.show_goals and self.engine.goal_mask:
-                v.goals_shown = set(self.engine.goal_colors())
+            v.goals_shown = self.visible_goals()
             self._next_id += 1
             self.visitors.append(v)
             self.here.append(v)

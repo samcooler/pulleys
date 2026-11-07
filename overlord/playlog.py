@@ -16,6 +16,7 @@ the bridge passes on as a line of key=value items:
     goals=<c>-<c>            the goal colours it dealt (goals=none)
     palette=<32 digits>      the colour index each rope channel wears
     count.<name>=<n>         a counter's new value
+    input=<device.input>     a device's input reached the game (diorama.button_pressed)
     param.<name>=<milli>     a param's value, in thousandths
     hb.state= hb.goals= hb.palette=
                              a heartbeat every 15 s: what is true now, so a log
@@ -135,6 +136,8 @@ class PlayLog:
                 return None
             self.palette = palette
             return self.write({"kind": "palette", "colors": [COLORS[c] for c in palette]})
+        if key == "input" and value:
+            return self.write({"kind": "input", "name": value})
         if key.startswith(("count.", "param.")):
             what, _, name = key.partition(".")
             try:

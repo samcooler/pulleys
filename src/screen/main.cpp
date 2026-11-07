@@ -719,14 +719,22 @@ static void renderExtractor(uint32_t now, float dt) {
 //   diorama.lights  dark | creepy     the tubes off, or striking up and flickering
 //   diorama.latch   locked | open     the door held, or released
 //
-// and hears two inputs back, diorama.door_opened and diorama.door_closed. When
-// the game changes them is the game file's business (state_config.yaml), not
-// this board's. Unset -- no game, or the arbiter silent past the lease -- is
+// and sends three inputs back: diorama.door_opened, diorama.door_closed and
+// diorama.button_pressed. When the game changes them is the game file's
+// business (state_config.yaml), not this board's. Unset -- no game, or the arbiter silent past the lease -- is
 // dark and locked.
 //
 // Opening the door while the tubes are lit also turns them to a running
 // rainbow for DIORAMA_RAINBOW_MS, here on the board, so it is instant; the
 // room then jolts back to its flicker. The game hears the door all the same.
+//
+// Inside is a button marked "free the spirits". It does not: pressed, the
+// tubes flash purple a few times, unevenly, for DIORAMA_PURPLE_MS -- here on
+// the board, instant, whatever the game is doing -- and the game hears
+// diorama.button_pressed, to answer with a bad noise and Janis. The purple is
+// the arbiter's purple, the finals' colour: the room's one hint, besides the
+// signage, at what will actually free them. A press during the flash is not
+// another press. The button closes to ground (DIORAMA_BUTTON_PRESSED LOW).
 //
 // The latch is a solid-state relay on an output. DIORAMA_LATCH_UNLOCK is the
 // level that releases the door: HIGH for a fail-secure strike (power opens
@@ -749,6 +757,15 @@ static void renderExtractor(uint32_t now, float dt) {
 #ifndef DIORAMA_RAINBOW_MS
   #define DIORAMA_RAINBOW_MS   2000
 #endif
+#ifndef DIORAMA_BUTTON_PIN
+  #define DIORAMA_BUTTON_PIN   25      // "free the spirits"
+#endif
+#ifndef DIORAMA_BUTTON_PRESSED
+  #define DIORAMA_BUTTON_PRESSED LOW
+#endif
+#ifndef DIORAMA_PURPLE_MS
+  #define DIORAMA_PURPLE_MS    1800
+#endif
 #ifndef DIORAMA_BRIGHTNESS
   #define DIORAMA_BRIGHTNESS   180     // of 255
 #endif
@@ -764,6 +781,11 @@ static uint32_t rainbowUntil    = 0;       // 0 = not showing it
 static bool     doorOpen        = false;   // debounced
 static bool     doorRaw         = false;
 static uint32_t doorRawSince    = 0;
+static bool     buttonDown      = false;   // debounced
+static bool     buttonRaw       = false;
+static uint32_t buttonRawSince  = 0;
+static uint32_t purpleFrom      = 0;
+static uint32_t purpleUntil     = 0;       // 0 = not flashing
 
 static void dioramaLatch(bool open) {
     latchOpen = open;
@@ -774,15 +796,30 @@ static void dioramaDoorOpened(uint32_t now) {
     if (diorama.on) rainbowUntil = (now + DIORAMA_RAINBOW_MS) | 1;
 }
 
+// "Free the spirits": the purple flash, and the game told. False if it was
+// already flashing from the last press.
+static bool dioramaButtonPressed(uint32_t now) {
+    if (purpleUntil && (int32_t)(purpleUntil - now) > 0) return false;
+    purpleFrom  = now;
+    purpleUntil = (now + DIORAMA_PURPLE_MS) | 1;
+    rainbowUntil = 0;
+    pulleys::device_emit("diorama.button_pressed");
+    Serial.println("  [DIORAMA] free the spirits: pressed");
+    return true;
+}
+
 static void dioramaInit() {
     pulleys::diorama_init(diorama, pulleys::diorama_tubes_for(DIORAMA_LEDS), esp_random());
     pinMode(DIORAMA_DOOR_PIN, INPUT_PULLUP);
     doorRaw = doorOpen = digitalRead(DIORAMA_DOOR_PIN) == DIORAMA_DOOR_OPEN;
     doorRawSince = millis();
+    pinMode(DIORAMA_BUTTON_PIN, INPUT_PULLUP);
+    buttonRaw = buttonDown = digitalRead(DIORAMA_BUTTON_PIN) == DIORAMA_BUTTON_PRESSED;
+    buttonRawSince = millis();
     pulleys::settings_init();
-    Serial.printf("  [DIORAMA] %u tubes on %u LEDs; latch GPIO %d, door GPIO %d (%s)\n",
+    Serial.printf("  [DIORAMA] %u tubes on %u LEDs; latch GPIO %d, door GPIO %d (%s), button GPIO %d\n",
                   diorama.tubes, DIORAMA_LEDS, DIORAMA_LATCH_PIN, DIORAMA_DOOR_PIN,
-                  doorOpen ? "open" : "shut");
+                  doorOpen ? "open" : "shut", DIORAMA_BUTTON_PIN);
 }
 
 // Every loop, not every frame: the door should not wait on the LEDs. The
@@ -811,11 +848,51 @@ static void dioramaPoll(uint32_t now) {
         pulleys::device_emit(doorOpen ? "diorama.door_opened" : "diorama.door_closed");
         if (doorOpen) dioramaDoorOpened(now);
     }
+
+    raw = digitalRead(DIORAMA_BUTTON_PIN) == DIORAMA_BUTTON_PRESSED;
+    if (raw != buttonRaw) { buttonRaw = raw; buttonRawSince = now; }
+    if (buttonRaw != buttonDown && now - buttonRawSince >= DIORAMA_DEBOUNCE_MS) {
+        buttonDown = buttonRaw;
+        if (buttonDown) dioramaButtonPressed(now);
+    }
     pulleys::settings_poll();
+}
+
+// The purple flash: on and off in uneven beats, each tube catching or not, so
+// it reads as the room straining rather than a party light. Black between.
+static bool dioramaPurple(uint32_t now) {
+    if (!purpleUntil) return false;
+    if ((int32_t)(purpleUntil - now) <= 0) {
+        purpleUntil = 0;
+        if (diorama.on) pulleys::diorama_jolt(diorama);   // back to the flicker, with a shudder
+        return false;
+    }
+    static const uint16_t BEAT_MS[] = {90, 160, 70, 220, 120, 260, 80, 300, 140, 400};
+    uint32_t t = now - purpleFrom;
+    uint8_t beat = 0;
+    while (beat < sizeof(BEAT_MS) / sizeof(BEAT_MS[0]) && t >= BEAT_MS[beat]) t -= BEAT_MS[beat++];
+    bool lit = (beat % 2) == 0 && beat < sizeof(BEAT_MS) / sizeof(BEAT_MS[0]);
+    if (!lit) return true;
+    CRGB purple = pulleys::color_rgb(pulleys::COLOR_PURPLE);
+    for (uint8_t i = 0; i < diorama.tubes; i++) {
+        if (((i * 7 + beat * 3) % 5) == 0) continue;   // a tube that fails to catch this beat
+        uint16_t p0 = pulleys::diorama_tube_start(i);
+        for (uint8_t k = 0; k < pulleys::DIORAMA_TUBE_PX && p0 + k < DIORAMA_LEDS; k++) {
+            CRGB c = purple;
+            c.nscale8(DIORAMA_BRIGHTNESS);
+            if (k == 0 || k == pulleys::DIORAMA_TUBE_PX - 1) c.nscale8(DIORAMA_TUBE_END);
+            leds[p0 + k] = c;
+        }
+    }
+    return true;
 }
 
 static void renderDiorama(uint32_t now, float dt) {
     fill_solid(leds, LED_COUNT, CRGB::Black);   // the gaps between fixtures
+    if (dioramaPurple(now)) {
+        pulleys::diorama_step(diorama, dt);      // the tubes keep their own time underneath
+        return;
+    }
     bool rainbow = rainbowUntil && (int32_t)(rainbowUntil - now) > 0;
     if (rainbowUntil && !rainbow) {
         rainbowUntil = 0;
@@ -930,6 +1007,7 @@ static void partyPoll(uint32_t now) {
 //             arc on the bench before writing it into WaveParams
 //   d      diorama: bench override on / off -- lit and unlatched whatever the game says
 //   o      diorama: act as if the door had just been opened (and tell the game)
+//   b      diorama: press "free the spirits" (the purple flash, and tell the game)
 //   t<r>,<g>,<b>  diorama: set the tubes' tint, for finding it on the bench
 //   p      party: bench override on / off -- lit whatever the game says
 //   S<key>=<value>  diorama/party: as if the arbiter had set it ("S party.lights=lit");
@@ -990,6 +1068,8 @@ static void handleSerial() {
             } else if (buf[0] == 'o') {
                 pulleys::device_emit("diorama.door_opened");
                 dioramaDoorOpened(millis());
+            } else if (buf[0] == 'b') {
+                if (!dioramaButtonPressed(millis())) Serial.println("  [DIORAMA] still flashing");
             } else if (buf[0] == 't') {
                 int r, g, b;
                 if (sscanf(buf + 1, "%d,%d,%d", &r, &g, &b) == 3)

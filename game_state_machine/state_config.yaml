@@ -75,11 +75,11 @@ components:
 # An input a device emits is an event like any other, named device.input:
 # `on: diorama.door_opened:` in a state reacts to it.
 devices:
-  diorama:                          # the diorama's tubes, its door latch and door switch
+  diorama:                          # its tubes, door latch, door switch, and the button inside
     set:
       lights: [dark, creepy]
       latch: [locked, open]
-    emits: [door_opened, door_closed]
+    emits: [door_opened, door_closed, button_pressed]
   party:                            # the four AC light switches
     set:
       lights: [dark, lit]
@@ -293,11 +293,21 @@ cues:
     - audio_once_overlord_defeat
     - audio_once_machine_shutdown
     - audio_once_idle_return_cue
+    - audio_once_spirits_denied       # placeholder: the big bad noise when "free the spirits" is pressed
   video_loop:
     - video_loop_idle
     - video_loop_game1
 
 # Flow: passive -> easy_round -> medium_round -> hard_round -> party -> final -> victory2 -> kickout -> passive
+#
+# The story: the ropes are levers, and every round won extracts more of the art
+# spirits' souls for Janis, who is bad. The party is her congratulations, and
+# 10 s into it the diorama unlatches: inside, the spirit puppets in their room,
+# their souls drawn up through tubes into the ceiling, and signage hinting that
+# purple sets them free. Opening the door gets a warning from Janis. A button in there says "free the spirits"; it does
+# not. Pressed, the diorama's tubes flash purple (on the board, instantly), a
+# bad noise plays, and Janis says the button has been disabled. The real way
+# out is the purple ropes: light them all in the final and the spirits go free.
 #
 # Janis: encouragement for every correct component in the rounds, nagging when
 # the ropes go quiet, and an escalating reaction to purple (warn, beg, anger)
@@ -438,6 +448,15 @@ states:
               - video_once_janis_progress_confirmation_congrats_1
               - video_once_janis_progress_confirmation_congrats_2
               - video_once_janis_progress_confirmation_congrats_3
+      diorama.door_opened:            # someone is looking in
+        cue:
+          - choose_one:
+              - video_once_janis_warn_dont_go_in   # Don't go in there.
+              - video_once_janis_warn_dont_look    # Don't look in there.
+      diorama.button_pressed:         # "free the spirits": it was never going to work
+        cue:
+          - audio_once_spirits_denied
+          - video_once_janis_beg_button   # That button has been disabled. Now get back to work.
     at:
       10s:                          # the diorama comes on 10 s into the celebration
         set:
@@ -468,6 +487,19 @@ states:
       final_component_activated:
         cue:
           - video_once_janis_panic_*
+      diorama.door_opened:
+        cue:
+          - choose_one:
+              - video_once_janis_warn_dont_go_in
+              - video_once_janis_warn_dont_look
+              - video_once_janis_anger_stop_it     # Stop it. Get out of there.
+      diorama.button_pressed:
+        cue:
+          - audio_once_spirits_denied
+          - choose_one:
+              - video_once_janis_beg_button
+              - video_once_janis_anger_no_1
+              - video_once_janis_anger_no_2
       all_final_components_activated:
         goto: victory2
     idle:

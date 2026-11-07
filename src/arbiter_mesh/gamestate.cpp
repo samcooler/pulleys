@@ -673,6 +673,7 @@ void gamestate_event(GameEvent e) { gamestate_input(gameevent_name(e)); }
 
 void gamestate_input(const char* name) {
     if (!s_ready || !name || strcmp(name, "enter") == 0) return;
+    if (strchr(name, '.')) info("input=%s", name);  // a device's: did anyone open the diorama?
     if (s_idleOn) s_idleAt = millis() + s_idleMs;   // any event is activity
     JsonVariant state = s_doc["states"][s_state];
     JsonObject on = state["on"].as<JsonObject>();

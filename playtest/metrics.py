@@ -154,6 +154,7 @@ def session_metrics(sess, shape, context=None):
     setback = last_timeout is not None and 0 <= b - last_timeout <= 15.0
     lulls = sum(1 for p, q in zip(pulls, pulls[1:]) if q["t"] - p["t"] >= 10.0)
     cues = [r for r in recs if r["kind"] == "cue" and not r["name"].startswith("game_") and r["t"] <= b]
+    inputs = Counter(r["name"] for r in recs if r["kind"] == "input" and r["t"] <= b + 1)
     return {
         "start": a,
         "minutes": dur / 60.0,
@@ -172,6 +173,7 @@ def session_metrics(sess, shape, context=None):
         "cues": len(cues),
         "dropped_clips": sum(1 for r in cues if r.get("dropped")),
         "states": states,
+        "inputs": dict(inputs),   # devices: diorama.door_opened, diorama.button_pressed, ...
     }
 
 
@@ -214,6 +216,8 @@ def summarise(rows):
     out["setback_rate"] = sum(1 for r in rows if r["setback"]) / len(rows)
     reached = Counter(s for r in rows for s in set(r["states"]))
     out["reached"] = {s: n / len(rows) for s, n in reached.most_common()}
+    used = Counter(name for r in rows for name in r.get("inputs", {}))
+    out["inputs"] = {name: n / len(rows) for name, n in used.most_common()}
     if any("true_fun" in r for r in rows):
         tf = [r for r in rows if "true_fun" in r]
         out["true_fun"] = sum(r["true_fun"] for r in tf) / len(tf)

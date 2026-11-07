@@ -11,7 +11,7 @@
 | **Component state display** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | a Screen running its `components` display: one bar per game component |
 | **Extractor** | D1 Mini ESP32-WROOM-32 | two 32×8 panels as a 64×8 ring + a hanging strip, one chain (GPIO 16) | a Screen running an `extractor_<colour>` display: that colour's score as liquid |
 | **Party lights** | ESP32 DevKit, 30-pin (classic) | none: four outputs (GPIO 32/33/25/26) to the AC light switches | a Screen running its `party` display: the room's lights, on for the victories |
-| **Diorama** | D1 Mini ESP32-WROOM-32 | LED strip (GPIO 16), door-latch SSR (GPIO 26), door switch with pull-up (GPIO 27) | a Screen running its `diorama` display: fluorescent tubes, the door latch and sensor |
+| **Diorama** | D1 Mini ESP32-WROOM-32 | LED strip (GPIO 16), door-latch SSR (GPIO 26), door switch with pull-up (GPIO 27), "free the spirits" button to ground (GPIO 25) | a Screen running its `diorama` display: fluorescent tubes, the door latch and sensor, and the button, which flashes the tubes purple and tells the game |
 
 ## Build Environments
 

@@ -280,7 +280,11 @@ def sc_production(E):
         for c in E.goals():
             burst(E, chan(c))
         seen.append(E.state())
-    E.wait(61)                                   # the party, then the final
+    E.wait(11)                                   # 10 s into the party the diorama opens
+    E.take_cues()
+    E.input("diorama.button_pressed")            # "free the spirits": refused
+    seen.append(E.take_cues())
+    E.wait(50)                                   # the rest of the party, then the final
     seen.append(E.state())
     for ch in (6, 12, 18):                       # every purple rope with a rope on it
         burst(E, ch)
@@ -292,8 +296,9 @@ def sc_production(E):
     return seen
 
 SC_PRODUCTION = (None, sc_production,
-                 ["easy_round", "medium_round", "hard_round", "party", "final", "victory2",
-                  "passive", "easy_round"])
+                 ["easy_round", "medium_round", "hard_round", "party",
+                  ["audio_once_spirits_denied", "video_once_janis_beg_button"],
+                  "final", "victory2", "passive", "easy_round"])
 
 SCENARIOS = {
     "charge": SC_CHARGE, "simon": SC_SIMON, "pull_first": SC_PULL_FIRST,

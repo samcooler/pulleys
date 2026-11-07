@@ -141,6 +141,8 @@ class Game:
             print(f"game: goals {', '.join(rec['colors'])}", flush=True)
         elif kind == "timer":
             print(f"game: {rec['name']} in {self.state}", flush=True)
+        elif kind == "input":
+            print(f"game: input {rec['name']}", flush=True)
         if kind == "cue":
             self._fire_cue(rec["name"], rec["enter"])
         for fn in self._listeners:

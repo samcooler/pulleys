@@ -111,6 +111,8 @@ def describe(label, rows, outcomes, cfg):
     print(f"  fun score {s.get('fun', 0):.2f}   (simulated true fun {s.get('true_fun', 0):.1f})")
     reached = s.get("reached", {})
     print("  reached: " + ", ".join(f"{st} {reached.get(st, 0):.0%}" for st in order))
+    if s.get("inputs"):
+        print("  devices used: " + ", ".join(f"{n} {f:.0%}" for n, f in s["inputs"].items()))
     by = defaultdict(list)
     for r in rows:
         by[r["archetype"]].append(r)

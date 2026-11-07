@@ -32,6 +32,7 @@ from .spec import COLORS, PURPLE
 # ── What a cue means to someone standing in the room ─────────────────────────
 # First match wins. The meaning sets how it feels (IMPACT) and what it teaches.
 CUE_MEANINGS = [
+    (r"denied", "rebuff"),
     (r"progress_confirmation|productivity_score|corporate_approval", "progress"),
     (r"congrats|celebration|pizza|victory|fanfare|liberation|party", "celebrate"),
     (r"encouragement", "praise"),
@@ -45,8 +46,10 @@ _MEANINGS = [(re.compile(p), m) for p, m in CUE_MEANINGS]
 
 # How it feels the first time, as a bump to affect. Scold is per visitor:
 # compliant people dislike it, rebels enjoy it (see Traits.compliance).
+# "rebuff" is the room answering something a visitor did with a big bad noise
+# (the diorama's button): bad news in the story, and in the theatre a moment.
 IMPACT = {
-    "praise": 0.25, "progress": 0.45, "celebrate": 0.7, "gain": 0.06,
+    "praise": 0.25, "progress": 0.45, "celebrate": 0.7, "gain": 0.06, "rebuff": 0.2,
     "loss": -0.12, "nag": -0.04, "reveal": 0.55, "shift": 0.18, "scene": 0.12,
     "lit": 0.12, "agency": 0.015,
 }
@@ -184,6 +187,8 @@ class Visitor:
         self.boost_until = -1.0   # a nag spurs them for a few seconds
         self.goals_shown = None   # colours the game is showing as goals, if it shows any
         self.done_bias = 0.0      # after a climax, the visit feels finished
+        self.knows_twist = False  # read the diorama's signage: Janis is bad, purple frees the spirits
+        self.press_at = None      # inside the diorama, about to press "free the spirits"
         self.my_color = None      # the colour of the rope they are at, as they last saw it
 
     # -- perceiving --------------------------------------------------------------
@@ -220,7 +225,12 @@ class Visitor:
             if meaning == "nag":
                 self.boost_until = t + 5.0
             if meaning == "scold" and self.rope is not None and world.color_of(self.rope) == PURPLE:
-                d = self.tr.learn * (0.5 - self.tr.compliance)
+                if self.knows_twist:
+                    # Her panic is the proof it is working.
+                    self.affect += 0.15
+                    d = self.tr.learn * 0.5
+                else:
+                    d = self.tr.learn * (0.5 - self.tr.compliance)
                 self.belief[PURPLE] = min(0.98, max(0.02, self.belief[PURPLE] + d))
         elif kind == "setting":
             self.feel(p["meaning"], p["key"] + "=" + p["value"], t, 1.2)
@@ -231,6 +241,41 @@ class Visitor:
                 self.feel("shift", "palette", t)
         elif kind == "goals":
             self.goals_shown = set(p["colors"]) if self.notice() else self.goals_shown
+
+    def look_in_diorama(self, world):
+        """The diorama has opened. Maybe go and look; maybe read the signage.
+        Returns True if they went in."""
+        go = min(0.95, 0.2 + 0.5 * self.tr.curiosity + 0.3 * self.tr.attention)
+        if self.rng.random() >= go:
+            return False
+        if self.rope is not None:
+            world.release(self.rope)
+            self.rope = None
+        self.walk_until = world.t + self.rng.uniform(15.0, 40.0)   # inside, looking
+        if self.rng.random() < 0.5 + 0.4 * self.tr.attention:
+            self.learn_twist(world.t, 0.9)
+        if self.rng.random() < 0.35 + 0.5 * self.tr.curiosity:     # a button that says "free the spirits"
+            self.press_at = world.t + self.rng.uniform(3.0, 12.0)
+        return True
+
+    def pressed(self, world):
+        """They pressed it. The tubes flash purple and the room says no; an
+        attentive presser takes the colour as a hint. A curious one may try
+        again while still inside."""
+        t = world.t
+        self.feel("reveal", "purple_flash", t)
+        if not self.knows_twist and self.rng.random() < (0.4 + 0.4 * self.tr.attention) * 0.75:
+            self.learn_twist(t, 0.75)
+        again = t + self.rng.uniform(3.0, 8.0)
+        if again < self.walk_until and self.rng.random() < self.tr.curiosity * 0.5:
+            self.press_at = again
+
+    def learn_twist(self, t, sure):
+        if self.knows_twist:
+            return
+        self.knows_twist = True
+        self.belief[PURPLE] = max(self.belief[PURPLE], sure)
+        self.feel("reveal", "twist", t)
 
     def _credit(self, t, sign):
         """A praise lands: colours that lit just before are what was wanted."""
@@ -264,6 +309,9 @@ class Visitor:
                 self.belief[color] -= self.tr.learn * 0.5 * self.belief[color]
                 del self.lit_at[color]
 
+        if self.press_at is not None and t >= self.press_at:
+            self.press_at = None
+            world.press_button(self)
         if t < self.walk_until:
             return
         if self.rope is None:
@@ -274,7 +322,7 @@ class Visitor:
 
         self._watch(world)
         if world.show_goals and self.rng.random() < self.tr.attention * 0.3 * dt:
-            self.goals_shown = set(world.engine.goal_colors()) or None   # a glance at the display
+            self.goals_shown = world.visible_goals()   # a glance at the display
         want = self._want(world)
         # Pulling something that seems unwanted: look for another rope, sooner
         # the more curious they are (about every 5-20 s); at once if the game

@@ -27,7 +27,7 @@ both:
     pull    ch, color, cls (goal | nongoal | final)
     goals   colors                       palette colors (32 colour names)
     count   name, value                  param   name, value
-    set     key, value
+    set     key, value                   input   name (a device's: diorama.door_opened)
 """
 
 import itertools
@@ -166,9 +166,12 @@ class Engine:
 
     def input(self, name):
         """An event by name: a device's input (diorama.door_opened), or any
-        game event injected by hand."""
+        game event injected by hand. A device's input is also recorded as an
+        `input`, as the arbiter reports it to the play log."""
         if name == "enter":
             return
+        if "." in name:
+            self._emit("input", name=name)
         self._deliver(name)
 
     def set_param(self, name, value, quiet=False, force=False):

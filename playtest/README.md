@@ -108,6 +108,13 @@ Each visitor has three numbers over time:
   time runs out, or with their group.
 - **beliefs**: per colour, how sure they are that pulling it is wanted.
 
+When the diorama unlatches during the party, visitors may leave their ropes
+to look inside. The curious and attentive are more likely to go. Some read the
+signage and learn that purple frees the spirits, and they tell their group.
+Some press "free the spirits" once or several times; its purple flash is a
+hint an attentive presser may take. Once a visitor knows the twist, Janis
+panicking at purple stops being a reason to stop.
+
 Five kinds of visitor come in groups: passers-by, families, solvers, rebels
 (who pull purple because Janis says not to), and party crowds. Each kind has
 its own pull rate, attention, curiosity, compliance, patience and time
@@ -190,12 +197,16 @@ to do with them.
    simulated single visits and little in overlapping play. `nag_delay`
    made no measurable difference.
 
-5. **The final asks for what the game spent three rounds punishing.** After
-   being scolded for every purple pull, visitors are told nothing when purple
-   becomes the goal. Even with goals shown, 1% of simulated visits win the
-   final. This depends on the model's assumption that nobody tells them to
-   pull purple. If the twist is meant to be found, something in the room
-   (the diorama, a clip, the purple ropes' own light) has to say so.
+5. **The final depends on the diorama.** The rounds punish purple, then the
+   final asks for it. What turns people around is the diorama: it unlatches
+   during the party, and inside are the spirits having their souls extracted,
+   signage hinting that purple frees them, and a "free the spirits" button
+   that flashes purple and is refused. Without the diorama in the model, 1%
+   of simulated visits won the final, with goals shown. With it, 34% did:
+   about three in four groups that reached the final. That rests on guesses
+   about how many people look inside and read the signage. The play log now
+   records `diorama.door_opened` and `diorama.button_pressed`, so real nights
+   will show how many groups find it, and whether those groups win the final.
 
 ## Limits
 
