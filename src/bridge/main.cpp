@@ -319,12 +319,38 @@ static void onGameInfo(const pulleys::MeshFlood& f, bool /*relayed*/) {
     iHead = next;
 }
 
+// Configuration replies have their own bounded queue. Keep callbacks free of
+// UART writes, and leave normal events/cues in their existing queues.
+static constexpr uint8_t INSTALL_QUEUE = 8;
+static char installQueue[INSTALL_QUEUE][512];
+static uint8_t installHead = 0, installTail = 0;
+static void onInstallation(const pulleys::MeshFlood& f, bool) {
+    if (f.h.originType != pulleys::MESH_ORIGIN_ARBITER || f.len < 28) return;
+    char body[pulleys::MESH_FLOOD_MAX_BODY + 1];
+    memcpy(body, f.body, f.len); body[f.len] = 0;
+    char q[17]; unsigned bridge, part, count;
+    if (sscanf(body, "%16s %x %u %u", q, &bridge, &part, &count) != 4 ||
+        bridge != pulleys::identity_id() || count < 1 || count > 64 || part >= count) return;
+    for (uint8_t i = 0; i < f.len; ++i)
+        if (body[i] == '\r' || body[i] == '\n') return;
+    uint8_t next = (installHead + 1) % INSTALL_QUEUE;
+    if (next == installTail) { ++dropped; return; }
+    char* out = installQueue[installHead];
+    int used = snprintf(out, 512, "IC %04X %.28s", f.h.originId, body);
+    // Hex protects whitespace at chunk boundaries from line-reader trimming.
+    for (uint8_t i = 28; i < f.len; ++i)
+        used += snprintf(out + used, 512 - used, "%02X", (uint8_t)body[i]);
+    out[used++] = '\n'; out[used] = 0;
+    installHead = next;
+}
+
 static void drainQueue() {
     while (iTail != iHead) {
         if (PI_LINK.availableForWrite() < 260) break;
         PI_LINK.printf("GI %s\n", infoQueue[iTail]);
         iTail = (iTail + 1) % INFO_LEN;
     }
+
 
     while (cTail != cHead) {
         if (PI_LINK.availableForWrite() < 80) break;
@@ -345,6 +371,14 @@ static void drainQueue() {
         qTail = (qTail + 1) % QUEUE_LEN;
         forwarded++;
     }
+    // Media and sensor records take priority over configuration readback.
+    while (installTail != installHead) {
+        size_t length = strlen(installQueue[installTail]);
+        if ((size_t)PI_LINK.availableForWrite() < length) break;
+        PI_LINK.write((const uint8_t*)installQueue[installTail], length);
+        installTail = (installTail + 1) % INSTALL_QUEUE;
+    }
+
 }
 
 // The firmware AP and its HTTP endpoint. Raised once, the first time this
@@ -388,6 +422,12 @@ static void startFirmwareHost() {
 // console is a port of its own, so it can be read there.
 static void handlePiLine(char* buf) {
     if (!PI_SHARES_CONSOLE) Serial.printf("  [PI] %s\n", buf);
+    if (strncmp(buf, "INSTALL ", 8) == 0) {
+        size_t n = strlen(buf + 8);
+        if (n > 0 && n <= pulleys::MESH_FLOOD_MAX_BODY)
+            pulleys::mesh_send_flood(pulleys::MESH_MSG_INSTALL_REQ, buf + 8, n, 1);
+        return;
+    }
     if (strncmp(buf, "GAME-PARAM ", 11) == 0) {
         // "GAME-PARAM round_time 90": for the arbiter, as "<name> <value>"
         const char* body = buf + 11;
@@ -501,7 +541,7 @@ static LineReader piIn;
 // lines are the Pi's, everything else a console command.
 static void handleSerial() {
     consoleIn.poll(Serial, [](char* line) {
-        if (PI_SHARES_CONSOLE && (strncmp(line, "FW-", 3) == 0 || strncmp(line, "GAME-", 5) == 0))
+        if (PI_SHARES_CONSOLE && (strncmp(line, "FW-", 3) == 0 || strncmp(line, "GAME-", 5) == 0 || strncmp(line, "INSTALL ", 8) == 0))
             handlePiLine(line);
         else handleConsoleLine(line);
     });
@@ -518,12 +558,14 @@ void setup() {
     // Firmware chunks arrive as ~600-character lines, more than the default
     // buffer holds. HardwareSerial requires sizing it before begin().
     Serial.setRxBufferSize(1024);
+    Serial.setTxBufferSize(1024);
 #if CONFIG_IDF_TARGET_ESP32C3
     // Keep an idle native-USB console from stalling the radio without a host.
     Serial.setTxTimeoutMs(0);
 #endif
 #else
     Serial1.setRxBufferSize(1024);
+    Serial1.setTxBufferSize(1024);
     Serial1.begin(BRIDGE_BAUD, SERIAL_8N1, BRIDGE_RX_PIN, BRIDGE_TX_PIN);
 #endif
     Serial.begin(115200);
@@ -552,6 +594,7 @@ void setup() {
     pulleys::mesh_on_event(onMeshEvent);
     pulleys::mesh_on_cue(onMeshCue);
     pulleys::mesh_on_flood(pulleys::MESH_MSG_GAME_INFO, onGameInfo);
+    pulleys::mesh_on_flood(pulleys::MESH_MSG_INSTALL_RES, onInstallation);
 
     pulleys::census_set_detail(BRIDGE_PI_USB ? "usb" : "uart1");
     pulleys::whoami_reply();

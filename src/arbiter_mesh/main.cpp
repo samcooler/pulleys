@@ -25,6 +25,8 @@
 #include "components.h"
 #include "devices.h"
 #include "installcfg.h"
+#include "installation.h"
+#include "installmap.h"
 #include "installui.h"
 #include "ui.h"
 
@@ -183,9 +185,9 @@ static void handleSerial() {
                 pulleys::RtcTime t;
                 t.year   = num(0, 4); t.month  = num(4, 2); t.day    = num(6, 2);
                 t.hour   = num(8, 2); t.minute = num(10, 2); t.second = num(12, 2);
-                if (t.month >= 1 && t.month <= 12 && t.day >= 1 && t.day <= 31 &&
-                    t.hour < 24 && t.minute < 60 && t.second < 60 && s_rtc.set(t)) {
-                    clocksrc_mark_set();
+                bool digits = true;
+                for (uint8_t i = 1; i < n; ++i) if (buf[i] < '0' || buf[i] > '9') digits = false;
+                if (digits && clocksrc_set(t)) {
                     char o[24]; pulleys::RTC::format(t, o, sizeof(o));
                     Serial.printf("  [RTC] set to %s (source now: %s)\n",
                                   o, clocksrc_source_str());
@@ -427,6 +429,7 @@ void setup() {
 #endif
     monitor_init();
     installcfg_init();
+    installation_init();
     eventlog_init(&s_rtc);
     // The monitor has one hook slot; the SD log, the mapping screen and the
     // game all want every event. The log keeps every pull, mapping or not; the
@@ -454,6 +457,7 @@ void loop() {
     static uint32_t last_ui   = 0;
     uint32_t now = millis();
 
+    installmap_tick();
     pulleys::mesh_poll();
     pulleys::census_poll();
     gameconfig_poll();
@@ -461,6 +465,7 @@ void loop() {
     devices_tick();
     components_tick();
     installcfg_tick();
+    installation_tick();
     handleSerial();
 
     // A targeted update owns the board while it runs. The panel holds its last frame rather

@@ -639,3 +639,12 @@ remote needs the same folder names.
   client closes it. macOS `nc -U` does not close after stdin EOF, so it hangs.
   Python closes the socket right after sending.
 - Only one test client is accepted at a time (`listen(1)`); `send.sh` is short-lived so this is not a problem in practice.
+
+## Installation controls
+
+Open `http://overlord.local:8080/installation` to map ropes, assign channel
+colours, tune RGB, and set the arbiter clock through the bridge. The arbiter
+remains authoritative; the page shows current readback, storage, and connection
+status. Requires updated arbiter and bridge firmware. See
+[INSTALLATION_API.md](INSTALLATION_API.md) for operation, API, protocol, and
+hardware validation still needed.

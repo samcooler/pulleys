@@ -23,12 +23,15 @@ static bool     s_dirty     = false;   // changed since the last send: burst (an
 static bool     s_save      = false;   // ... and the change is the operator's, to keep
 static uint32_t s_changedAt = 0;
 static uint32_t s_lastSend  = 0;
+static uint32_t s_revision = 0;
+static bool s_stored = true;
 
 // While the game has the colours shuffled, the day's palette waits here.
 static bool    s_gameShuffled = false;
 static uint8_t s_dayColors[pulleys::CHANNEL_COUNT];
 
 static void markDirty(bool save = true) {
+    ++s_revision;
     s_dirty     = true;
     s_save      = s_save || save;
     s_changedAt = millis();
@@ -51,12 +54,23 @@ static void send(bool urgent) {
     if (urgent) gamestate_note_palette();
 }
 
-static void saveMap() {
+static bool saveMap() {
     Preferences p;
-    p.begin(NVS_NS, false);
-    p.putBytes("map", s_rows, (size_t)s_count * sizeof(pulleys::MeshConfigRow));
-    p.putBool("seeded", true);
+    if (!p.begin(NVS_NS, false)) return false;
+    size_t bytes = (size_t)s_count * sizeof(pulleys::MeshConfigRow);
+    bool mapOk = bytes ? p.putBytes("map", s_rows, bytes) == bytes
+                       : (!p.isKey("map") || p.remove("map"));
+    bool seedOk = p.putBool("seeded", true) == 1;
     p.end();
+    return mapOk && seedOk;
+}
+
+static void save() {
+    bool mapOk = saveMap();
+    // A map edit during a temporary game shuffle must still save the daily
+    // palette, not make the game's temporary permutation permanent.
+    bool paletteOk = pulleys::palette_save(s_gameShuffled ? s_dayColors : nullptr);
+    s_stored = mapOk && paletteOk;
 }
 
 static int findRow(uint16_t id) {
@@ -85,8 +99,7 @@ void installcfg_init() {
             s_rows[s_count].channel = pulleys::CHANNEL_ASSIGNMENT[i].channel;
             s_count++;
         }
-        saveMap();
-        pulleys::palette_save();
+        save();
         Serial.printf("  [INSTALL] seeded %u sensors from CHANNEL_ASSIGNMENT\n", s_count);
     }
     // Announce on the first tick rather than waiting out a repeat. Not by
@@ -98,8 +111,7 @@ void installcfg_tick() {
     uint32_t now = millis();
     if (s_dirty && now - s_changedAt >= SETTLE_MS) {
         if (s_save) {
-            saveMap();
-            pulleys::palette_save();
+            save();
         }
         send(/*urgent=*/true);
         s_dirty = false;
@@ -185,8 +197,7 @@ void installcfg_game_shuffle() {
     if (s_save) {
         // An operator's edit is still waiting to be saved: save it as it is,
         // before the game's shuffle lands on top of it.
-        saveMap();
-        pulleys::palette_save();
+        save();
         s_save = false;
     }
     if (!s_gameShuffled) {
@@ -323,3 +334,11 @@ bool installcfg_handle_serial(const char* line) {
     }
     return false;
 }
+
+uint32_t installcfg_revision() { return s_revision; }
+const char* installcfg_storage() { return s_save ? "pending" : s_stored ? "saved" : "failed"; }
+bool installcfg_game_shuffled() { return s_gameShuffled; }
+const uint8_t* installcfg_daily_colors() { return s_gameShuffled ? s_dayColors : pulleys::palette_get(); }
+
+void installcfg_note_clock_change() { ++s_revision; }
+void installcfg_note_mapping_change() { ++s_revision; }

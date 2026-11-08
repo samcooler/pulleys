@@ -47,6 +47,7 @@ import gain as gain_config
 from control import ControlServer
 from serial_reader import SerialReader
 from firmware_manager import FirmwareManager
+from installation import InstallationManager
 
 # On the Pi, media is synced into a directory outside the git checkout (see deploy/).
 MEDIA = Path(os.environ.get("OVERLORD_MEDIA") or Path(__file__).resolve().parent / "media")
@@ -379,10 +380,13 @@ def main():
     director = None
 
     firmware_updater = None
+    installation = None
 
     def on_serial_event(event_name):
         event_name = event_name.strip()
         if not event_name:
+            return
+        if installation and installation.handle_line(event_name):
             return
         if firmware_updater and firmware_updater.handle_line(event_name):
             return
@@ -424,10 +428,13 @@ def main():
         test_mode=args.test,
         port=args.serial_port,
     )
+    installation = InstallationManager(serial, busy=lambda: bool(
+        firmware_updater and firmware_updater.snapshot()["active_job"]))
     serial.start()
     if not args.test:
         firmware_updater = FirmwareManager(serial)
         firmware_updater.start()
+        installation.start()
 
     # Goals over the video, for a game that wants them seen (show_goals: true).
     if playlog and game_cfg and game_cfg.get("show_goals"):
@@ -487,7 +494,7 @@ def main():
     api = None
     if args.control_port:
         try:
-            api = ControlServer(control, args.control_bind, args.control_port, firmware=firmware_updater)
+            api = ControlServer(control, args.control_bind, args.control_port, firmware=firmware_updater, installation=installation)
             api.start()
             print(f"control: http://{api.address[0]}:{api.address[1]}/status", flush=True)
         except OSError as e:  # the player matters more than its remote control
@@ -518,6 +525,7 @@ def main():
             ambient.stop()
         if api:
             api.stop()
+        installation.stop()
         if firmware_updater:
             firmware_updater.stop()
         serial.stop()

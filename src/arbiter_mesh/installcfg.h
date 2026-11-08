@@ -57,3 +57,13 @@ const pulleys::MeshConfigRow* installcfg_rows();
 //   RGB                  print each colour's RGB
 //   RGB <colour> <r> <g> <b>   set one (0-255)   RGB reset   all back to default
 bool installcfg_handle_serial(const char* line);
+
+// Shared by touchscreen/serial and remote configuration. Revision also changes
+// for temporary game palette edits; storage refers to operator configuration.
+uint32_t installcfg_revision();
+const char* installcfg_storage();
+bool installcfg_game_shuffled();
+const uint8_t* installcfg_daily_colors();
+
+void installcfg_note_clock_change();
+void installcfg_note_mapping_change();

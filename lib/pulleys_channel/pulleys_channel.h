@@ -154,14 +154,15 @@ inline void palette_load() {
     if (m == sizeof(rgb)) colors_set_rgb(rgb);
 }
 
-inline void palette_save() {
+inline bool palette_save(const uint8_t* channels = nullptr) {
     uint8_t rgb[COLOR_COUNT * 3];
     colors_get_rgb(rgb);
     Preferences p;
-    p.begin("palette", false);
-    p.putBytes("col", _palette::table(), CHANNEL_COUNT);
-    p.putBytes("rgb", rgb, sizeof(rgb));
+    if (!p.begin("palette", false)) return false;
+    bool colOk = p.putBytes("col", channels ? channels : _palette::table(), CHANNEL_COUNT) == CHANNEL_COUNT;
+    bool rgbOk = p.putBytes("rgb", rgb, sizeof(rgb)) == sizeof(rgb);
     p.end();
+    return colOk && rgbOk;
 }
 
 inline CRGB channel_color(uint8_t ch) { return color_rgb(channel_color_index(ch)); }

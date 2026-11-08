@@ -5,12 +5,14 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
+from installation import InstallationError
+
 WEB = Path(__file__).with_name("web")
 MAX_IMAGE = 7 * 1024 * 1024
 
 
 class ControlServer:
-    def __init__(self, handle, host="127.0.0.1", port=8080, firmware=None):
+    def __init__(self, handle, host="127.0.0.1", port=8080, firmware=None, installation=None):
         class Handler(BaseHTTPRequestHandler):
             def _body(self, limit, binary=False):
                 if self.headers.get("Transfer-Encoding"):
@@ -65,16 +67,30 @@ class ControlServer:
                 parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
                 content_type = "application/json; charset=utf-8"
                 try:
-                    assets = {(): ("index.html", "text/html"),
+                    assets = {("installation",): ("installation.html", "text/html"),
+                              ("installation.js",): ("installation.js", "application/javascript"),
+                              ("installation.css",): ("installation.css", "text/css"),
+                              (): ("index.html", "text/html"),
                               ("dashboard.css",): ("dashboard.css", "text/css"),
                               ("dashboard.js",): ("dashboard.js", "application/javascript")}
                     if self.command == "GET" and tuple(parts) in assets:
                         name, content_type = assets[tuple(parts)]
                         status, body = 200, (WEB / name).read_bytes()
+                    elif parts[:2] == ["api", "installation"]:
+                        if installation is None:
+                            status, body = 503, {"error": "installation manager unavailable"}
+                        elif self.command == "GET" and len(parts) == 2:
+                            status, body = 200, installation.snapshot()
+                        elif self.command == "POST" and len(parts) == 3:
+                            status, body = 200, installation.mutate(parts[2], self._body(2048))
+                        else:
+                            status, body = 404, {"error": "no such installation route"}
                     elif parts[:2] == ["api", "firmware"]:
                         status, body = self._firmware(parts)
                     else:
                         status, body = handle(self.command, parts)
+                except InstallationError as exc:
+                    status, body = exc.status, {"error": str(exc)}
                 except (ValueError, UnicodeError) as exc:
                     status, body = 400, {"error": str(exc)}
                 except TimeoutError:

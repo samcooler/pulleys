@@ -97,8 +97,7 @@ static void saveCb(lv_event_t*) {
     t.year   = (uint16_t)s_field[0]; t.month  = (uint8_t)s_field[1];
     t.day    = (uint8_t)s_field[2];  t.hour   = (uint8_t)s_field[3];
     t.minute = (uint8_t)s_field[4];  t.second = (uint8_t)s_field[5];
-    if (s_rtc->set(t)) {
-        clocksrc_mark_set();
+    if (clocksrc_set(t)) {
         char b[24]; pulleys::RTC::format(t, b, sizeof(b));
         Serial.printf("  [RTC] set from touch: %s (source now: %s)\n",
                       b, clocksrc_source_str());

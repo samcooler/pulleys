@@ -60,6 +60,8 @@ enum : uint8_t {
     // Body: ASCII "<name> <value>". Sets one of the game's params live; the
     // arbiter clamps it to the game's range and reports it in GAME_INFO.
     MESH_MSG_GAME_PARAM   = 0xA3,   // bridge (from its Pi): tune the game
+    MESH_MSG_INSTALL_REQ  = 0xA4,   // bounded JSON request to the arbiter
+    MESH_MSG_INSTALL_RES  = 0xA5,   // correlated installation response chunks
 };
 
 // Clock sync: every node beacons its own mesh clock, and each listener pulls a

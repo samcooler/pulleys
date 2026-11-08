@@ -32,3 +32,9 @@ void        clocksrc_tick();          // persists a snapshot roughly once a minu
 void        clocksrc_mark_set();      // call after an explicit serial set
 TimeSource  clocksrc_source();
 const char* clocksrc_source_str();
+
+// Shared touchscreen/serial/remote path, including calendar validation.
+bool clocksrc_present();
+bool clocksrc_read(pulleys::RtcTime& time);
+bool clocksrc_set(const pulleys::RtcTime& time);
+const char* clocksrc_storage();

@@ -54,66 +54,78 @@ Unmapping exists on serial but is outside touchscreen parity.
   Bound configuration work and return busy/unavailable during firmware work
   when the transport cannot serve both safely.
 
+## Progress
+
+Software implementation is in place: the Installation page covers mapping,
+Colours/RGB, and Clock through a shared arbiter controller and bridge protocol.
+All 46 automated API/protocol/controller and firmware regression tests pass.
+Fixture-backed
+browser checks cover the main flows and desktop/390px layouts. Firmware builds
+and final review are recorded in `overlord/INSTALLATION_API.md`.
+
+Real bridge/radio, touchscreen, NVS reboot/failure, and RTC verification remain
+required before field use. No devices have been flashed for this change.
+
 ## Implementation steps
 
 ### 1. Define protocol and extract shared arbiter controllers
 
-- [ ] Specify request/response schemas, operation names, size limits, errors,
+- [x] Specify request/response schemas, operation names, size limits, errors,
       retry/deduplication rules, arbiter selection, and revision semantics.
-- [ ] Define snapshots containing sensor assignments, reported channels and
+- [x] Define snapshots containing sensor assignments, reported channels and
       freshness, channel colours/rope counts, six RGB values, saved versus
       active palette state, clock/source/presence, and mapping session status.
-- [ ] Extract mapping state/capture from `installui.cpp` so touchscreen and
+- [x] Extract mapping state/capture from `installui.cpp` so touchscreen and
       remote sessions use the same controller and event suppression path.
-- [ ] Define exclusive mapping-session ownership across touchscreen and
+- [x] Define exclusive mapping-session ownership across touchscreen and
       browsers. Add a renewable lease and expiry; disconnect, timeout, reboot,
       and explicit Done must leave mapping safely closed.
-- [ ] Add structured arbiter handlers using existing setters, with readback,
+- [x] Add structured arbiter handlers using existing setters, with readback,
       persistence results, and explicit validation errors.
 
 ### 2. Implement transport and Overlord installation API
 
-- [ ] Relay configuration requests and responses through the bridge using
+- [x] Relay configuration requests and responses through the bridge using
       dedicated serial records and mesh message handling.
-- [ ] Add an Overlord installation manager with bounded pending requests,
+- [x] Add an Overlord installation manager with bounded pending requests,
       snapshot reassembly, freshness tracking, reconnect handling, and polling.
-- [ ] Add installation snapshot and mutation endpoints under
+- [x] Add installation snapshot and mutation endpoints under
       `/api/installation`; document the final route and body schemas.
-- [ ] Return meaningful unavailable, busy, conflict, timeout, and validation
+- [x] Return meaningful unavailable, busy, conflict, timeout, and validation
       results. Do not present locally queued changes as confirmed success.
-- [ ] Ensure browser polling observes touchscreen edits and arbiter reboots.
+- [x] Ensure browser polling observes touchscreen edits and arbiter reboots.
 
 ### 3. Add navigation, Colours, and RGB
 
-- [ ] Add Installation/Firmware navigation while retaining existing firmware
+- [x] Add Installation/Firmware navigation while retaining existing firmware
       routes and workflows.
-- [ ] Show arbiter connection, identity, and snapshot age; disable edits until
+- [x] Show arbiter connection, identity, and snapshot age; disable edits until
       current authoritative state is available.
-- [ ] Add channels 1–24 with rope counts, colour names, swatches, and selectors.
-- [ ] Add game1 shuffle, six RGB editors, and reset-all-to-default action.
-- [ ] Debounce RGB edits and show pending/applied/error states. Avoid replacing
+- [x] Add channels 1–24 with rope counts, colour names, swatches, and selectors.
+- [x] Add game1 shuffle, six RGB editors, and reset-all-to-default action.
+- [x] Debounce RGB edits and show pending/applied/error states. Avoid replacing
       a user's unfinished input during snapshot refreshes.
-- [ ] Surface temporary game palette changes and saved daily values clearly.
+- [x] Surface temporary game palette changes and saved daily values clearly.
 
 ### 4. Add Map Ropes
 
-- [ ] Implement Start, countdown, captured rope list, channel assignment,
+- [x] Implement Start, countdown, captured rope list, channel assignment,
       Again, and Done using the arbiter-owned session.
-- [ ] Show each rope's reported and assigned channel and convergence progress.
-- [ ] Match the 5-second/10-rope capture behavior, including starting the next
+- [x] Show each rope's reported and assigned channel and convergence progress.
+- [x] Match the 5-second/10-rope capture behavior, including starting the next
       group when a new rope is pulled after an assignment.
-- [ ] Renew the session lease while the browser is active. Enforce expiry on the
+- [x] Renew the session lease while the browser is active. Enforce expiry on the
       arbiter even if the browser disappears without sending Done.
-- [ ] Show session ownership and prevent concurrent mapping operators from
+- [x] Show session ownership and prevent concurrent mapping operators from
       silently taking over. Ensure expiry restores normal game event handling.
 
 ### 5. Add Clock
 
-- [ ] Show current arbiter time, clock source, and RTC availability.
-- [ ] Add manual date/time entry with Save/Cancel and valid-date checks.
-- [ ] Add Set from Overlord with an explicit local timezone and consistent
+- [x] Show current arbiter time, clock source, and RTC availability.
+- [x] Add manual date/time entry with Save/Cancel and valid-date checks.
+- [x] Add Set from Overlord with an explicit local timezone and consistent
       local-wall-time conversion; do not silently use the browser timezone.
-- [ ] Read back the clock after setting and report missing RTC or write failure.
+- [x] Read back the clock after setting and report missing RTC or write failure.
       Explain power-loss behavior where relevant.
 
 ### 6. Validate and document
@@ -126,12 +138,13 @@ Unmapping exists on serial but is outside touchscreen parity.
       game shuffle versus saved daily palette behavior.
 - [ ] Test API/UI disconnected, pending, confirmed, conflict, and failed states;
       keep existing firmware and control API regression coverage passing.
-- [ ] Build affected arbiter/bridge firmware and verify partition fit.
-- [ ] Check browser layouts on desktop and a phone-sized viewport.
+- [x] Build affected arbiter/bridge firmware and verify partition fit; also
+      build sensor/screen callers of the shared palette storage helper.
+- [x] Check browser layouts on desktop and a phone-sized viewport.
 - [ ] Verify on hardware through the real bridge: rope capture/assignment,
       device convergence, touchscreen synchronization, persistence after
       reboot, clock readback, and continued cue/event/firmware operation.
-- [ ] Document operation, transport/API schemas, persistence, mapping lease,
+- [x] Document operation, transport/API schemas, persistence, mapping lease,
       timeout behavior, and remaining hardware limitations.
 
 ## Completion criteria
@@ -145,3 +158,15 @@ media cues, and mesh event handling continue to work.
 
 Implementation order: protocol/shared controllers → transport/snapshot/API →
 Colours/RGB → Map Ropes → Clock → final hardware validation and documentation.
+
+## Latest validation
+
+- `python3 -m unittest discover -s test`: 46 tests passed (including a native
+  C++ capture/lease/calendar test and HTTP/protocol regression tests).
+- `pio run -e arbiter_mesh -e bridge -e bridge_esp32 -e sensor -e screen`:
+  all five environments built successfully and fit their app partitions.
+- `node --check overlord/web/installation.js` and `git diff --check`: passed.
+- Browser fixture checks: mapping start/assignment/Done, RGB apply, clock
+  readback, stale-edit rejection with unfinished input preserved, and desktop
+  plus 390px layouts; no browser JavaScript errors observed.
+- Hardware validation in phase 6 remains open. Firmware was built, not flashed.

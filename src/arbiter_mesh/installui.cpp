@@ -1,5 +1,6 @@
 #include "installui.h"
 #include "installcfg.h"
+#include "installmap.h"
 #include "monitor.h"
 #include <lvgl.h>
 #include <Arduino.h>
@@ -25,8 +26,7 @@
 #define UI_CHANNELS  24
 #define GRID_COLS    6
 
-#define LISTEN_MS    5000    // the window for pulling ropes that share a channel
-#define MAX_CAPTURE  10
+#define LISTEN_MS    MappingSession::LISTEN_MS
 
 // ── Shared ────────────────────────────────────────────────────────────────────
 static lv_obj_t* makeButton(lv_obj_t* parent, int x, int y, int w, int h,
@@ -115,131 +115,109 @@ static uint8_t ropesOn(uint8_t ch) {
 // LISTEN  the window is open: every rope pulled now joins the group
 // PICK    window closed; a channel tap moves the whole group. Once moved, the
 //         next rope pulled that is not in the group starts a new one.
-enum MapState : uint8_t { MAP_WAIT, MAP_LISTEN, MAP_PICK };
-
-static lv_obj_t* s_mapOpen;      // opener
-static lv_obj_t* s_map;          // modal
+static lv_obj_t* s_mapOpen;
+static lv_obj_t* s_map;
 static lv_obj_t* s_mapStatus;
 static lv_obj_t* s_mapList;
 static lv_obj_t* s_mapBtn[UI_CHANNELS + 1];
-static bool      s_mapIsOpen = false;
-
-static MapState  s_state = MAP_WAIT;
-static uint16_t  s_cap[MAX_CAPTURE];
-static uint8_t   s_capCount = 0;
-static uint32_t  s_listenAt = 0;
-static int8_t    s_assigned = -1;    // channel the group was moved to, -1 = not yet
-static bool      s_restyle  = true;  // repaint the grid on the next refresh
-
-static bool captured(uint16_t id) {
-    for (uint8_t i = 0; i < s_capCount; i++) if (s_cap[i] == id) return true;
-    return false;
-}
-
-static void startGroup(uint16_t id) {
-    s_capCount = 0;
-    s_cap[s_capCount++] = id;
-    s_assigned = -1;
-    s_state    = MAP_LISTEN;
-    s_listenAt = millis();
-}
-
-static void resetGroup() {
-    s_capCount = 0;
-    s_assigned = -1;
-    s_state    = MAP_WAIT;
-}
+static bool s_mapIsOpen = false;
+static bool s_restyle = true;
 
 static void refreshMap() {
+    const auto& session = installmap_state();
+    auto phase = session.phase;
+    auto count = session.count;
+    const auto* ids = session.ids;
+    auto assigned = session.assigned;
+    auto listenAt = session.listenAt;
     char b[400];
     uint32_t now = millis();
 
     uint8_t confirmed = 0;
-    for (uint8_t i = 0; i < s_capCount; i++) {
-        const MonNode* n = findSensor(s_cap[i]);
-        if (s_assigned >= 0 && n && n->known && n->channel == s_assigned) confirmed++;
+    for (uint8_t i = 0; i < count; i++) {
+        const MonNode* n = findSensor(ids[i]);
+        if (assigned >= 0 && n && n->known && n->channel == assigned) confirmed++;
     }
 
-    switch (s_state) {
-        case MAP_WAIT:
+    switch (phase) {
+        case MappingSession::WAIT:
             snprintf(b, sizeof(b), "Pull a rope. Pull several within %d s to put them on one channel.",
                      LISTEN_MS / 1000);
             break;
-        case MAP_LISTEN: {
-            uint32_t gone = now - s_listenAt;
+        case MappingSession::LISTEN: {
+            uint32_t gone = now - listenAt;
             uint32_t left = gone < LISTEN_MS ? LISTEN_MS - gone : 0;
             snprintf(b, sizeof(b), "Listening... %lu s   pull any others that share this channel",
                      (unsigned long)((left + 999) / 1000));
             break;
         }
-        case MAP_PICK:
-            if (s_assigned < 0)
+        case MappingSession::PICK:
+            if (assigned < 0)
                 snprintf(b, sizeof(b), "Tap the channel for %s.",
-                         s_capCount == 1 ? "this rope" : "these ropes");
-            else if (confirmed < s_capCount)
+                         count == 1 ? "this rope" : "these ropes");
+            else if (confirmed < count)
                 snprintf(b, sizeof(b), "Moving to ch %d... %u of %u confirmed",
-                         s_assigned, confirmed, s_capCount);
+                         assigned, confirmed, count);
             else
-                snprintf(b, sizeof(b), "Done: ch %d. Pull the next rope.", s_assigned);
+                snprintf(b, sizeof(b), "Done: ch %d. Pull the next rope.", assigned);
             break;
     }
     setTextIfChanged(s_mapStatus, b);
     static uint32_t lastCol = 0;
-    uint32_t col = s_state == MAP_PICK && s_assigned >= 0 && confirmed == s_capCount ? COL_OK
-                 : s_state == MAP_LISTEN ? COL_WARN : COL_TEXT;
+    uint32_t col = phase == MappingSession::PICK && assigned >= 0 && confirmed == count ? COL_OK
+                 : phase == MappingSession::LISTEN ? COL_WARN : COL_TEXT;
     if (col != lastCol) { lv_obj_set_style_text_color(s_mapStatus, lv_color_hex(col), 0); lastCol = col; }
 
     // One line per rope: where it reports, where the map has it, and whether
     // a move has landed.
     int len = snprintf(b, sizeof(b), "ROPE    NOW  MAP\n");
-    for (uint8_t i = 0; i < s_capCount && len < (int)sizeof(b); i++) {
-        const MonNode* n = findSensor(s_cap[i]);
-        int mapped = installcfg_channel_of(s_cap[i]);
+    for (uint8_t i = 0; i < count && len < (int)sizeof(b); i++) {
+        const MonNode* n = findSensor(ids[i]);
+        int mapped = installcfg_channel_of(ids[i]);
         char nowS[6], mapS[6];
         if (n && n->known) snprintf(nowS, sizeof(nowS), "%2d", n->channel);
         else               snprintf(nowS, sizeof(nowS), " ?");
         if (mapped >= 0)   snprintf(mapS, sizeof(mapS), "%2d", mapped);
         else               snprintf(mapS, sizeof(mapS), " -");
         const char* mark = "";
-        if (s_assigned >= 0)
-            mark = (n && n->known && n->channel == s_assigned) ? "  ok" : "  ...";
+        if (assigned >= 0)
+            mark = (n && n->known && n->channel == assigned) ? "  ok" : "  ...";
         len += snprintf(b + len, sizeof(b) - len, "N-%04X  %s   %s%s\n",
-                        s_cap[i], nowS, mapS, mark);
+                        ids[i], nowS, mapS, mark);
     }
     setTextIfChanged(s_mapList, b);
 
     // The grid is live only once there is a closed group to move. Restyled
     // only on a change: every style write repaints, and the panel tears.
     static int8_t lastLive = -1, lastAssigned = -2;
-    bool live = s_state == MAP_PICK && s_capCount > 0;
-    if (!s_restyle && live == lastLive && s_assigned == lastAssigned) return;
+    bool live = phase == MappingSession::PICK && count > 0;
+    if (!s_restyle && live == lastLive && assigned == lastAssigned) return;
     s_restyle = false;
-    lastLive = live; lastAssigned = s_assigned;
+    lastLive = live; lastAssigned = assigned;
     for (uint8_t ch = 1; ch <= UI_CHANNELS; ch++) {
         lv_obj_set_style_opa(s_mapBtn[ch], live ? LV_OPA_COVER : LV_OPA_40, 0);
-        lv_obj_set_style_border_width(s_mapBtn[ch], ch == s_assigned ? 4 : 1, 0);
+        lv_obj_set_style_border_width(s_mapBtn[ch], ch == assigned ? 4 : 1, 0);
         lv_obj_set_style_border_color(s_mapBtn[ch],
-            lv_color_hex(ch == s_assigned ? COL_TEXT : COL_DIV), 0);
+            lv_color_hex(ch == assigned ? COL_TEXT : COL_DIV), 0);
     }
 }
 
 static void mapChannelCb(lv_event_t* e) {
     uint8_t ch = (uint8_t)(intptr_t)lv_event_get_user_data(e);
-    if (s_state != MAP_PICK || s_capCount == 0) return;
-    for (uint8_t i = 0; i < s_capCount; i++) installcfg_set_channel(s_cap[i], ch);
-    s_assigned = (int8_t)ch;
+    installmap_assign(ch);
     refreshMap();
 }
 
-static void mapAgainCb(lv_event_t*) { resetGroup(); refreshMap(); }
+static void mapAgainCb(lv_event_t*) { installmap_reset(); refreshMap(); }
 
 static void mapCloseCb(lv_event_t*) {
+    installmap_close(0, 0);
     s_mapIsOpen = false;
     lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void mapOpenCb(lv_event_t*) {
-    resetGroup();
+    if (!installmap_open(0, 0)) return;
     s_restyle = true;
     // Colours may have changed since the buttons were painted.
     for (uint8_t ch = 1; ch <= UI_CHANNELS; ch++) paintChannelButton(s_mapBtn[ch], ch);
@@ -273,27 +251,9 @@ static void buildMap() {
 }
 
 bool installui_on_event(const pulleys::MeshEvent& ev) {
-    if (!s_mapIsOpen) return false;
-    if (ev.originType != pulleys::MESH_ORIGIN_SENSOR) return true;
-    // An ack only says a move landed; the monitor has already recorded where.
-    if (!pulleys::mesh_event_is_pull(ev)) { refreshMap(); return true; }
-
-    bool known = captured(ev.originId);
-    switch (s_state) {
-        case MAP_WAIT:
-            startGroup(ev.originId);
-            break;
-        case MAP_LISTEN:
-            if (!known && s_capCount < MAX_CAPTURE) s_cap[s_capCount++] = ev.originId;
-            break;
-        case MAP_PICK:
-            // A new rope after a move is the next one being mapped. Before a
-            // move it is someone else pulling; it waits for AGAIN or a move.
-            if (!known && s_assigned >= 0) startGroup(ev.originId);
-            break;
-    }
-    refreshMap();
-    return true;
+    bool consumed = installmap_on_event(ev);
+    if (consumed && s_mapIsOpen) refreshMap();
+    return consumed;
 }
 
 // ── COLOURS ───────────────────────────────────────────────────────────────────
@@ -472,14 +432,21 @@ void installui_init() {
 }
 
 void installui_tick() {
-    if (!s_mapIsOpen) return;
-    uint32_t now = millis();
-    if (s_state == MAP_LISTEN && now - s_listenAt >= LISTEN_MS) {
-        s_state = MAP_PICK;
-        refreshMap();
+    installmap_tick();
+    static uint32_t lastRevision = 0;
+    if (lastRevision != installcfg_revision()) {
+        lastRevision = installcfg_revision();
+        if (s_colIsOpen) refreshColours();
+        if (s_tuneIsOpen) refreshTune();
+        if (s_mapIsOpen)
+            for (uint8_t ch = 1; ch <= UI_CHANNELS; ++ch) paintChannelButton(s_mapBtn[ch], ch);
     }
-    // The countdown, and acks landing via the monitor.
+    // Give touch operators a visible reason when a browser owns mapping.
+    setTextIfChanged(lv_obj_get_child(s_mapOpen, 0),
+        installmap_state().active && installmap_state().owner ? "MAP: REMOTE" : "MAP ROPES");
+    if (!s_mapIsOpen) return;
     static uint32_t last = 0;
+    uint32_t now = millis();
     if (now - last >= 250) { last = now; refreshMap(); }
 }
 

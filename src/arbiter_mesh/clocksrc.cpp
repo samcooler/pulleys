@@ -1,4 +1,6 @@
 #include "clocksrc.h"
+#include "calendar_time.h"
+#include "installcfg.h"
 #include <Arduino.h>
 #include <Preferences.h>
 
@@ -8,6 +10,7 @@
 static pulleys::RTC* s_rtc = nullptr;
 static TimeSource    s_src = TIME_NONE;
 static uint32_t      s_lastSnap = 0;
+static const char* s_snapshotStorage = "unknown";
 
 // "Aug 30 2026" / "22:58:00" — the compiler's format, not ours.
 static bool parseBuildTime(pulleys::RtcTime& t) {
@@ -44,8 +47,8 @@ static bool loadSnapshot(pulleys::RtcTime& t) {
 
 static void saveSnapshot(const pulleys::RtcTime& t) {
     Preferences p;
-    if (!p.begin(NVS_NS, false)) return;
-    p.putBytes("t", &t, sizeof(t));
+    if (!p.begin(NVS_NS, false)) { s_snapshotStorage = "failed"; return; }
+    s_snapshotStorage = p.putBytes("t", &t, sizeof(t)) == sizeof(t) ? "saved" : "failed";
     p.end();
 }
 
@@ -117,3 +120,15 @@ const char* clocksrc_source_str() {
         default:            return "none";
     }
 }
+
+bool clocksrc_present() { return s_rtc && s_rtc->present(); }
+bool clocksrc_read(pulleys::RtcTime& time) { return clocksrc_present() && s_rtc->now(time); }
+bool clocksrc_set(const pulleys::RtcTime& time) {
+    if (!valid_calendar_time(time.year, time.month, time.day, time.hour, time.minute, time.second) ||
+        !clocksrc_present() || !s_rtc->set(time)) return false;
+    clocksrc_mark_set();
+    installcfg_note_clock_change();
+    return true;
+}
+
+const char* clocksrc_storage() { return s_snapshotStorage; }
