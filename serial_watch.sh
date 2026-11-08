@@ -16,12 +16,12 @@ while true; do
     if [[ -n "$PORT" ]]; then
         echo "---- Connected to $PORT (type a command + Enter; Ctrl-C to quit) ----"
         "$PYTHON" - "$PORT" <<'EOF'
-import serial, sys, select, time
+import serial, sys, select, time, os
 port = sys.argv[1]
 try:
     s = serial.Serial()
     s.port = port
-    s.baudrate = 115200
+    s.baudrate = int(os.environ.get("PULLEYS_SERIAL_BAUD", "115200"))
     s.timeout = 0
     # The CH340 drives the auto-reset circuit from DTR/RTS, so asserting either
     # on open holds the chip in reset and prints nothing. See [env:screen].

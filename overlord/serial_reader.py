@@ -2,6 +2,7 @@
 
 import glob
 import os
+import re
 import socket
 import sys
 import threading
@@ -12,7 +13,8 @@ try:
 except ImportError:
     serial = None
 
-BAUD = 115200
+BAUD = 921600
+LEGACY_BAUD = 115200
 RECONNECT_DELAY = 2.0
 SOCKET_PATH = os.environ.get("OVERLORD_SOCK", "/tmp/overlord.sock")
 
@@ -34,7 +36,7 @@ def find_serial_port():
 
 
 class SerialReader:
-    def __init__(self, on_event, test_mode=False, port=None):
+    def __init__(self, on_event, test_mode=False, port=None, baud=BAUD):
         """
         on_event: callback(event_name: str) called for each event
         test_mode: if True, listen on Unix socket instead of serial
@@ -43,6 +45,10 @@ class SerialReader:
         self.on_event = on_event
         self.test_mode = test_mode
         self.port = port
+        self.baud = int(baud)
+        if self.baud <= 0:
+            raise ValueError("serial baud must be positive")
+        self._bridge_id = None
         self._running = False
         self._thread = None
         self._serial = None
@@ -51,6 +57,50 @@ class SerialReader:
     @property
     def connected(self):
         return self._serial is not None and self._serial.is_open
+
+    @property
+    def baudrate(self):
+        return self._serial.baudrate if self.connected else None
+
+    def _probe_baud(self, port):
+        """Identify the bridge before allowing workers to write to this port.
+
+        Old bridges still boot at 115200. A bridge self-update can change its
+        boot rate, so every connection probes preferred, fast, and legacy rates.
+        Native USB accepts either host rate without a physical UART change.
+        """
+        self._bridge_id = None
+        for rate in dict.fromkeys((self.baud, BAUD, LEGACY_BAUD)):
+            if not self._running:
+                return None
+            try:
+                port.baudrate = rate
+                port.reset_input_buffer()
+            except (OSError, ValueError):
+                continue
+            deadline = time.monotonic() + 2
+            next_ping = 0
+            while self._running and time.monotonic() < deadline:
+                now = time.monotonic()
+                if now >= next_ping:
+                    port.write(b"FW-PING\n")
+                    port.flush()
+                    next_ping = now + .4
+                raw = port.readline()
+                text = raw.decode("ascii", "ignore").strip()
+                if not text.startswith("FW-BRIDGE "):
+                    continue
+                fields = dict(token.split("=", 1) for token in text.split()[1:] if "=" in token)
+                if re.fullmatch(r"[0-9A-Fa-f]{4}", fields.get("id", "")) and fields.get("env", "").startswith("bridge"):
+                    self._bridge_id = fields["id"].upper()
+                    return text
+        return None
+
+    def _bridge_rebooting(self, text):
+        if not text.startswith("FW-STATUS "):
+            return False
+        fields = dict(token.split("=", 1) for token in text.split()[1:] if "=" in token)
+        return fields.get("id", "").upper() == self._bridge_id and fields.get("state") == "ok"
 
     def write_line(self, line):
         """Write one control line to the connected bridge UART, if available."""
@@ -109,7 +159,7 @@ class SerialReader:
             try:
                 s = serial.Serial()
                 s.port = port
-                s.baudrate = BAUD
+                s.baudrate = self.baud
                 s.timeout = 0.3
                 # Prevents CH340 boards from resetting
                 s.dtr = False
@@ -118,10 +168,13 @@ class SerialReader:
                 s.dtr = False
                 s.rts = False
                 time.sleep(0.1)
-                s.reset_input_buffer()
+                identity = self._probe_baud(s)
+                if identity is None:
+                    raise RuntimeError("no bridge reply at preferred/legacy serial rates")
                 with self._write_lock:
                     self._serial = s
-                print(f"serial: connected to {port}", flush=True)
+                print(f"serial: connected to {port} at {s.baudrate} baud", flush=True)
+                self.on_event(identity)
 
                 # Read loop
                 while self._running:
@@ -132,6 +185,12 @@ class SerialReader:
                         text = line.decode("utf-8", "replace").strip()
                         if text:
                             self.on_event(text)
+                            if self._bridge_rebooting(text):
+                                # Re-probe after its install ACK: the new image
+                                # may boot at a different baud rate. Do not
+                                # wait for USB-UART to disconnect physically.
+                                print("serial: bridge rebooting; rechecking baud", flush=True)
+                                break
                     except serial.SerialException:
                         break
                     except Exception as e:

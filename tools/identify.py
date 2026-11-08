@@ -30,6 +30,7 @@ except ImportError:
 
 PREFIX = "PULLEYS-ID"
 BAUD = 115200
+FAST_BAUD = 921600
 # A board whose USB is native CDC reboots when the port opens, so the probe has
 # to outlast a boot before concluding silence. The WROOM's CH340 does not reset
 # (DTR/RTS held low) and answers on the first "?".
@@ -69,43 +70,51 @@ def probe(port, out, versions=False):
         s.dtr = False
         s.rts = False
         s.reset_input_buffer()
-        deadline = time.monotonic() + TIMEOUT
-        version_deadline = None
-        buf = b""
-        asked = 0.0
-        while time.monotonic() < (version_deadline or deadline):
-            if not identified and time.monotonic() - asked > 0.7:
-                s.write(b"?\n")
-                s.flush()
-                asked = time.monotonic()
-            chunk = s.read(512)
-            if not chunk:
-                continue
-            buf += chunk
-            while b"\n" in buf:
-                raw, buf = buf.split(b"\n", 1)
-                line = raw.decode("utf-8", "replace").strip()
-                if PREFIX in line:
-                    fields = parse(line[line.index(PREFIX):])
-                    row.update(cls=fields.get("class", UNKNOWN), role=fields.get("role", UNKNOWN),
-                               env=fields.get("env", UNKNOWN), id=fields.get("id", UNKNOWN),
-                               label=fields.get("label", UNKNOWN), name=fields.get("name", UNKNOWN),
-                               mac=fields.get("mac", UNKNOWN), build=fields.get("build", UNKNOWN),
-                               sha256=fields.get("sha256", "unknown"), source="id")
-                    identified = True
-                    if not versions or len(row["sha256"]) == 64:
-                        out.append(row)
-                        return
-                    if version_deadline is None:
-                        s.write(b"CENSUS 500\n")
-                        s.flush()
-                        version_deadline = time.monotonic() + 1.5
-                elif identified and "PULLEYS-CENSUS " in line:
-                    fields = parse(line[line.index("PULLEYS-CENSUS "):])
-                    if fields.get("id", "").upper() == row["id"].upper() and fields.get("self") == "1":
-                        row["sha256"] = fields.get("sha256", "unknown")
-                        out.append(row)
-                        return
+        # Keep ordinary nodes at 115200; fast bridge firmware boots at 921600.
+        for baud in (BAUD, FAST_BAUD):
+            s.baudrate = baud
+            s.reset_input_buffer()
+            deadline = time.monotonic() + (TIMEOUT if baud == BAUD else 2.0)
+            version_deadline = None
+            buf = b""
+            identified = False
+            asked = 0.0
+            while time.monotonic() < (version_deadline or deadline):
+                if not identified and time.monotonic() - asked > 0.7:
+                    s.write(b"?\n")
+                    s.flush()
+                    asked = time.monotonic()
+                chunk = s.read(512)
+                if not chunk:
+                    continue
+                buf += chunk
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    line = raw.decode("utf-8", "replace").strip()
+                    if PREFIX in line:
+                        fields = parse(line[line.index(PREFIX):])
+                        row.update(cls=fields.get("class", UNKNOWN), role=fields.get("role", UNKNOWN),
+                                   env=fields.get("env", UNKNOWN), id=fields.get("id", UNKNOWN),
+                                   label=fields.get("label", UNKNOWN), name=fields.get("name", UNKNOWN),
+                                   mac=fields.get("mac", UNKNOWN), build=fields.get("build", UNKNOWN),
+                                   sha256=fields.get("sha256", "unknown"), source="id", baud=baud)
+                        identified = True
+                        if not versions or len(row["sha256"]) == 64:
+                            out.append(row)
+                            return
+                        if version_deadline is None:
+                            s.write(b"CENSUS 500\n")
+                            s.flush()
+                            version_deadline = time.monotonic() + 1.5
+                    elif identified and "PULLEYS-CENSUS " in line:
+                        fields = parse(line[line.index("PULLEYS-CENSUS "):])
+                        if fields.get("id", "").upper() == row["id"].upper() and fields.get("self") == "1":
+                            row["sha256"] = fields.get("sha256", "unknown")
+                            out.append(row)
+                            return
+            if identified:
+                out.append(row)
+                return
     except Exception as exc:
         row["source"] = "error"
         row["error"] = str(exc)

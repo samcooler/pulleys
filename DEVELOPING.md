@@ -84,7 +84,18 @@ so another device appearing during the build cannot silently join the selection.
 `list --scan` waits for a scan in the shared firmware queue. OTA `flash` waits for
 the job and reboot/hash verification by default, returns nonzero on failure, and
 supports `--no-wait` for background work. Interrupting the CLI does not cancel an
-already queued Overlord job. USB requires pyserial in the Python environment
+already queued Overlord job. On interactive terminals, image uploads and OTA
+jobs use a fixed display with one progress bar per image/device and the percent
+on the right. Rows show queued, offering, connecting, transferring, verifying,
+confirmed, skipped, or failed states, including retry attempts. Transfer bars
+measure bytes, so 100% still waits for reboot/hash verification; skipped devices
+show `--%` because no transfer was needed. The display fits the terminal and
+keeps active work visible when there are more devices than rows. Output piped to
+a file, a non-terminal, or `TERM=dumb` uses plain progress lines with no cursor
+control codes. Ctrl+C restores the cursor and leaves queued OTA work running.
+USB flashing keeps PlatformIO's native progress output.
+
+USB requires pyserial in the Python environment
 running `fw`; PlatformIO is discovered on PATH or under `~/.platformio/penv/`, or
 can be selected with `PLATFORMIO_CMD`.
 
@@ -559,3 +570,12 @@ call `pulleys::settings_init()` after `mesh_init()`, read
 `pulleys::setting_is("dev.setting", "value")` every loop (unset means safe),
 `device_report()` what it is doing, `device_emit()` its inputs, and
 `settings_poll()` every loop.
+
+## Bridge transfer speed
+
+Bridge serial defaults to 921600 baud; firmware chunks are 4 KiB with per-chunk
+CRC-32. Deploy Overlord's matching host code before updating the bridge: its
+reader probes both fast and legacy 115200 rates and reconnects after the bridge
+self-update changes its boot speed. Other roles keep their 115200 consoles.
+See `overlord/FIRMWARE_API.md` for framing and `overlord/README.md` for migration
+and the non-flashing transfer benchmark.

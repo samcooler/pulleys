@@ -277,7 +277,8 @@ class FirmwareManager:
             if connected is None:
                 connected = any(node["id"] == self.transport._bridge_id and node["online"] for node in devices)
             return copy.deepcopy({"now": now, "devices": devices,
-                    "bridge": {"id": self.transport._bridge_id, "connected": connected},
+                    "bridge": {"id": self.transport._bridge_id, "connected": connected,
+                               "baud": getattr(self.transport.serial, "baudrate", None)},
                     "releases": [self._release_view(row) for row in sorted(self._releases.values(), key=lambda row: row["created_at"], reverse=True)],
                     "latest_release_id": self._latest, "jobs": list(reversed(self._jobs)),
                     "active_job": self._active, "logs": self._logs[-300:], "automatic_startup": True})

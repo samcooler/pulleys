@@ -48,7 +48,7 @@ ESP-NOW commands
       |
       v
 bridge node (ESP32)
-      |  serial, 115200 baud, one event per line
+      |  serial, 921600 baud (legacy 115200 supported), one event per line
       v
 overlord.py
       |
@@ -648,3 +648,30 @@ remains authoritative; the page shows current readback, storage, and connection
 status. Requires updated arbiter and bridge firmware. See
 [INSTALLATION_API.md](INSTALLATION_API.md) for operation, API, protocol, and
 hardware validation still needed.
+
+## Bridge serial performance
+
+New bridge firmware uses 921600 baud and 4096-byte firmware chunks. Overlord
+probes the preferred rate and legacy 115200 before accepting bridge traffic,
+and re-probes after the bridge reports its own installation succeeded. This
+lets the old bridge receive the new image at its old rate and reconnect at the
+new rate after reboot. Native USB CDC has no physical UART baud bottleneck;
+the larger chunks still reduce its request/response overhead.
+
+Deploy the new Overlord code **before** updating a bridge. The new host still
+serves 384-byte requests from old bridge firmware. New bridge firmware requires
+per-chunk CRC-32 replies from the updated host; image SHA-256 and post-reboot
+identity checks remain mandatory. The first migration update is at the old
+speed. Check `/api/firmware`'s `bridge.baud` and the bridge's `chunk` identity
+field after updating; startup logs also show the detected baud.
+
+`--serial-baud` or `OVERLORD_SERIAL_BAUD` selects the preferred baud for a custom
+`BRIDGE_BAUD` firmware build. Other node roles retain their 115200 console rate.
+`fw list --usb` automatically tries fast bridges as well. For bench tools, use
+`tools/survey.py --baud 921600` or
+`PULLEYS_SERIAL_BAUD=921600 ./serial_watch.sh` when connected to a fast bridge.
+
+The serial-only `FW-BENCH sha256=<cached image SHA-256> size=<prefix byte count>`
+command reads firmware bytes through the same checked chunk path without
+flashing. It reports bytes, elapsed milliseconds, and the received prefix's
+SHA-256, allowing speed and integrity checks against the cached image.

@@ -67,6 +67,8 @@ def main():
     ap.add_argument("--test", action="store_true",
                     help="test mode: listen on $OVERLORD_SOCK (default /tmp/overlord.sock)")
     ap.add_argument("--serial-port", help="explicit serial port path")
+    ap.add_argument("--serial-baud", type=int, default=int(os.environ.get("OVERLORD_SERIAL_BAUD", "921600")),
+                    help="preferred bridge serial baud (default 921600; probes legacy 115200 too)")
     ap.add_argument("--control-port", type=int, default=8080,
                     help="port for the REST control API (0 = off; default 8080)")
     ap.add_argument("--control-bind", default=os.environ.get("OVERLORD_CONTROL_BIND", "0.0.0.0"),
@@ -427,6 +429,7 @@ def main():
         on_event=on_serial_event,
         test_mode=args.test,
         port=args.serial_port,
+        baud=args.serial_baud,
     )
     installation = InstallationManager(serial, busy=lambda: bool(
         firmware_updater and firmware_updater.snapshot()["active_job"]))

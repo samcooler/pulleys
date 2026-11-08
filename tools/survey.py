@@ -38,10 +38,10 @@ LISTEN_SLACK = 2.5
 FIELD_RE = re.compile(r'(\w+)=(?:"([^"]*)"|(\S+))')
 
 
-def open_port(port):
+def open_port(port, baud=BAUD):
     s = serial.Serial()
     s.port = port
-    s.baudrate = BAUD
+    s.baudrate = baud
     s.timeout = 0.3
     # Same reason as identify.py: the CH340 boards sit in reset while DTR/RTS
     # are asserted and print nothing at all.
@@ -69,9 +69,9 @@ def parse(line):
     return out
 
 
-def collect(port, spread_ms):
+def collect(port, spread_ms, baud=BAUD):
     """Run one census round and return the rows, newest answer per board."""
-    s = open_port(port)
+    s = open_port(port, baud=baud)
     try:
         s.write(f"CENSUS {spread_ms}\n".encode())
         s.flush()
@@ -136,9 +136,10 @@ def main():
     ap.add_argument("--spread", type=int, default=DEFAULT_SPREAD_MS,
                     help="ms for boards to spread their answers over")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--baud", type=int, default=BAUD, help="serial baud (921600 for fast bridges)")
     a = ap.parse_args()
 
-    rows = collect(find_port(a.port), a.spread)
+    rows = collect(find_port(a.port), a.spread, baud=a.baud)
     if a.json:
         print(jsonlib.dumps(sorted(rows.values(), key=lambda f: f.get("id", "")), indent=2))
     else:

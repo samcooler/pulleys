@@ -245,8 +245,8 @@ class FirmwareUpdater:
                     self._emit("device", node_id=node_id, **results[node_id])
                     break
                 print(f"firmware: {env} {node_id} attempt {attempt}/3", flush=True)
-                # USB-UART bridges carry Base64 records at 115200 baud. Budget
-                # for their wire overhead and chunk round trips as images grow.
+                # Keep a conservative timeout for legacy 115200-baud bridges
+                # while newer bridges use 921600 baud and 4 KiB chunks.
                 timeout = max(180, table[env]["size"] / 4000 + 60)
                 status = self._wait_status(node_id, timeout)
                 if status and status.get("state") == "ok":
@@ -315,19 +315,20 @@ class FirmwareUpdater:
 
     def _answer_chunk(self, line):
         import base64
+        import zlib
         fields = _fields(line)
         digest = fields.get("sha256", "").lower()
         try:
             offset = int(fields["offset"])
-            length = min(384, int(fields.get("length", 384)))
+            length = int(fields.get("length", 384))
             path = self._assets[digest]
-            if offset < 0 or length <= 0 or offset >= path.stat().st_size:
+            if offset < 0 or not 1 <= length <= 4096 or offset >= path.stat().st_size:
                 raise ValueError("invalid chunk range")
             with path.open("rb") as stream:
                 stream.seek(offset)
                 chunk = stream.read(length)
             encoded = base64.b64encode(chunk).decode("ascii")
-            if self.serial.write_line(f"FW-DATA sha256={digest} offset={offset} b64={encoded}"):
+            if self.serial.write_line(f"FW-DATA sha256={digest} offset={offset} crc32={zlib.crc32(chunk):08x} b64={encoded}"):
                 self._emit("progress", node_id=self._transfer_target, bytes=offset + len(chunk), sha256=digest)
         except Exception as exc:
             self.serial.write_line(f"FW-ERROR sha256={digest} offset={fields.get('offset','?')} reason=unavailable")

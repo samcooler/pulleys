@@ -99,3 +99,19 @@ Device states: `offering`, `connecting`, `transferring`, `verifying`, `confirmed
 
 The existing `/status`, `/volume`, `/cue`, `/param`, and `/playtest` endpoints
 retain their existing behavior.
+
+## Fast bridge transport
+
+Updated bridges boot at 921600 baud and request up to 4096 bytes per chunk.
+Overlord probes fast and legacy rates before exposing a connected link, and
+re-probes after its own bridge's successful self-update ACK. Upgrade Overlord
+first; old bridges continue using 115200 baud and 384-byte requests during
+migration. Native USB CDC does not have the UART rate limit.
+
+Each `FW-DATA` record now includes `crc32=<8 hex digits>` before its final `b64`
+field. Old bridges ignore the extra field; new bridges check it and retry a
+corrupted chunk up to three times. The 4 KiB binary buffer and ~5.6 KiB line
+buffer are static, and the bridge RX ring is 16 KiB, avoiding task-stack overflow
+and line truncation. Lengths above 4096 are rejected. Full-image SHA-256, image
+size, and post-reboot build identity checks are unchanged. `bridge.baud` reports
+the active host baud, and `FW-BRIDGE` identity reports include `baud` and `chunk`.

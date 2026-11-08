@@ -5,6 +5,7 @@
 #include <pulleys_mesh.h>
 #include <pulleys_ota.h>
 #include <pulleys_census.h>
+#include <pulleys_fw_serial.h>
 #include <WebServer.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
@@ -72,7 +73,7 @@
   #define BRIDGE_RX_PIN 18
 #endif
 #ifndef BRIDGE_BAUD
-  #define BRIDGE_BAUD   115200
+  #define BRIDGE_BAUD   pulleys::FW_SERIAL_BAUD
 #endif
 
 // Where the Pi's lines go, and whether the console shares that port.
@@ -93,12 +94,16 @@ static char fwEnv[32] = {};
 static uint32_t fwSize = 0;
 static uint16_t fwTarget = 0;
 static bool fwOfferActive = false;
+// Shared by the HTTP stream and self-update, which run one at a time. These
+// buffers cannot live on the 8 KiB Arduino loop stack with 4 KiB chunks.
+static uint8_t fwChunkBuffer[pulleys::FW_CHUNK_BYTES];
+static char fwChunkLine[pulleys::FW_LINE_BYTES];
 static void drainQueue();
 
 static bool requestFirmwareChunkOnce(uint32_t offset, uint8_t* out, size_t want, size_t& got) {
     PI_LINK.printf("FW-READ sha256=%s offset=%lu length=%u\n", fwSha,
                    (unsigned long)offset, (unsigned)want);
-    char line[640];
+    char* line = fwChunkLine;
     uint32_t start = millis();
     size_t used = 0;
     while (millis() - start < 5000) {
@@ -122,11 +127,18 @@ static bool requestFirmwareChunkOnce(uint32_t offset, uint8_t* out, size_t want,
                     size_t decoded = 0;
                     int rc = mbedtls_base64_decode(out, want, &decoded,
                                                   (const unsigned char*)b64, strlen(b64));
+                    if (rc != 0 || decoded != want) return false;
+                    char* check = strstr(line, "crc32=");
+                    if (!check) return false;
+                    char* end = nullptr;
+                    uint32_t expected = strtoul(check + 6, &end, 16);
+                    if (end != check + 14 || *end != ' ' ||
+                        pulleys::fw_chunk_crc32(out, decoded) != expected) return false;
                     got = decoded;
-                    return rc == 0 && decoded > 0;
+                    return true;
                 }
                 used = 0;
-            } else if (used < sizeof(line) - 1) {
+            } else if (used < pulleys::FW_LINE_BYTES - 1) {
                 line[used++] = c;
             }
         }
@@ -160,11 +172,11 @@ static void serveFirmware() {
     fwServer.setContentLength(fwSize);
     fwServer.send(200, "application/octet-stream", "");
     WiFiClient client = fwServer.client();
-    uint8_t data[384];
+    uint8_t* data = fwChunkBuffer;
     uint32_t offset = 0;
     while (offset < fwSize && client.connected()) {
         size_t want = fwSize - offset;
-        if (want > sizeof(data)) want = sizeof(data);
+        if (want > pulleys::FW_CHUNK_BYTES) want = pulleys::FW_CHUNK_BYTES;
         size_t got = 0;
         if (!requestFirmwareChunk(offset, data, want, got) || got > want) break;
         size_t sent = 0;
@@ -178,6 +190,34 @@ static void serveFirmware() {
     }
     Serial.printf("[FW] HTTP served %lu/%lu bytes\n", (unsigned long)offset,
                   (unsigned long)fwSize);
+}
+
+// Bench-test the same checked transfer path without writing an OTA partition.
+static void benchmarkFirmware(char* command) {
+    char digest[65] = {};
+    unsigned size = 0;
+    if (fwOfferActive || sscanf(command, "sha256=%64s size=%u", digest, &size) != 2 ||
+        strlen(digest) != 64 || !size || size > 7 * 1024 * 1024) return;
+    char previous[65]; strlcpy(previous, fwSha, sizeof(previous));
+    strlcpy(fwSha, digest, sizeof(fwSha));
+    mbedtls_sha256_context hash;
+    mbedtls_sha256_init(&hash);
+    mbedtls_sha256_starts_ret(&hash, 0);
+    uint32_t started = millis(), offset = 0;
+    while (offset < size) {
+        size_t want = min((size_t)(size - offset), pulleys::FW_CHUNK_BYTES), got = 0;
+        if (!requestFirmwareChunk(offset, fwChunkBuffer, want, got)) break;
+        mbedtls_sha256_update_ret(&hash, fwChunkBuffer, got);
+        offset += got;
+    }
+    uint8_t sum[32]; char actual[65];
+    mbedtls_sha256_finish_ret(&hash, sum);
+    mbedtls_sha256_free(&hash);
+    for (uint8_t i = 0; i < 32; ++i) snprintf(actual + 2 * i, 3, "%02x", sum[i]);
+    PI_LINK.printf("FW-BENCH state=%s bytes=%lu elapsed_ms=%lu sha256=%s\n",
+                   offset == size ? "ok" : "failed", (unsigned long)offset,
+                   (unsigned long)(millis() - started), actual);
+    strlcpy(fwSha, previous, sizeof(fwSha));
 }
 
 static void onFirmwareStatus(const pulleys::MeshFwStatus& status) {
@@ -219,12 +259,12 @@ static void updateBridgeSelf(uint32_t size, const char* sha) {
     mbedtls_sha256_context hash;
     mbedtls_sha256_init(&hash);
     mbedtls_sha256_starts_ret(&hash, 0);
-    uint8_t buf[384];
+    uint8_t* buf = fwChunkBuffer;
     uint32_t off = 0;
     bool ok = true;
     while (off < size) {
         size_t want = size - off;
-        if (want > sizeof(buf)) want = sizeof(buf);
+        if (want > pulleys::FW_CHUNK_BYTES) want = pulleys::FW_CHUNK_BYTES;
         size_t got = 0;
         if (!requestFirmwareChunk(off, buf, want, got) || got > want ||
             Update.write(buf, got) != got) { ok = false; break; }
@@ -436,10 +476,11 @@ static void handlePiLine(char* buf) {
             pulleys::mesh_send_flood(pulleys::MESH_MSG_GAME_PARAM, body, (uint8_t)n, 3, 120);
         return;
     }
+    if (strncmp(buf, "FW-BENCH ", 9) == 0) { benchmarkFirmware(buf + 9); return; }
     if (strncmp(buf, "FW-", 3) == 0) startFirmwareHost();
     if (strncmp(buf, "FW-PING", 7) == 0) {
-        PI_LINK.printf("FW-BRIDGE id=%04X env=" PULLEYS_ENV " sha256=%s\n",
-                       pulleys::identity_id(), pulleys::whoami_firmware_hash());
+        PI_LINK.printf("FW-BRIDGE id=%04X env=" PULLEYS_ENV " sha256=%s baud=%lu chunk=%u\n",
+                       pulleys::identity_id(), pulleys::whoami_firmware_hash(), (unsigned long)BRIDGE_BAUD, (unsigned)pulleys::FW_CHUNK_BYTES);
     } else if (strncmp(buf, "FW-CENSUS", 9) == 0 ||
                strncmp(buf, "FW-QUERY", 8) == 0) {
         int spread = 3000;
@@ -516,7 +557,7 @@ static void handleConsoleLine(char* buf) {
 // Split a stream into lines and hand each one on. Sized for the firmware
 // protocol's longest line, an FW-DATA chunk in base64.
 struct LineReader {
-    char     buf[640];
+    char     buf[pulleys::FW_LINE_BYTES];
     uint16_t len = 0;
     template <typename S, typename F> void poll(S& in, F handle) {
         while (in.available()) {
@@ -555,20 +596,24 @@ static void pollPi() {
 
 void setup() {
 #if BRIDGE_PI_USB
-    // Firmware chunks arrive as ~600-character lines, more than the default
-    // buffer holds. HardwareSerial requires sizing it before begin().
-    Serial.setRxBufferSize(1024);
+    // A 4 KiB chunk is about 5.6 KiB of Base64 plus framing. Configure
+    // hardware buffers before begin(); a delayed loop must not truncate it.
+    Serial.setRxBufferSize(pulleys::FW_SERIAL_RX_BYTES);
     Serial.setTxBufferSize(1024);
 #if CONFIG_IDF_TARGET_ESP32C3
     // Keep an idle native-USB console from stalling the radio without a host.
     Serial.setTxTimeoutMs(0);
 #endif
 #else
-    Serial1.setRxBufferSize(1024);
+    Serial1.setRxBufferSize(pulleys::FW_SERIAL_RX_BYTES);
     Serial1.setTxBufferSize(1024);
     Serial1.begin(BRIDGE_BAUD, SERIAL_8N1, BRIDGE_RX_PIN, BRIDGE_TX_PIN);
 #endif
-    Serial.begin(115200);
+#if BRIDGE_PI_USB
+    Serial.begin(BRIDGE_BAUD);
+#else
+    Serial.begin(115200); // separate bench console; Pi UART uses BRIDGE_BAUD
+#endif
     delay(1000);
 
     pulleys::identity_init(PULLEYS_TYPE_BRIDGE);
@@ -598,8 +643,8 @@ void setup() {
 
     pulleys::census_set_detail(BRIDGE_PI_USB ? "usb" : "uart1");
     pulleys::whoami_reply();
-    PI_LINK.printf("FW-BRIDGE id=%04X env=" PULLEYS_ENV " sha256=%s\n",
-                   pulleys::identity_id(), pulleys::whoami_firmware_hash());
+    PI_LINK.printf("FW-BRIDGE id=%04X env=" PULLEYS_ENV " sha256=%s baud=%lu chunk=%u\n",
+                   pulleys::identity_id(), pulleys::whoami_firmware_hash(), (unsigned long)BRIDGE_BAUD, (unsigned)pulleys::FW_CHUNK_BYTES);
     Serial.println("Bridge ready — forwarding mesh events to the Pi.\n");
 }
 
