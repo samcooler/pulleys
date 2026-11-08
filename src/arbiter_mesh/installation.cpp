@@ -2,6 +2,8 @@
 #include "installcfg.h"
 #include "installmap.h"
 #include "clocksrc.h"
+#include "gamestate.h"
+#include "devices.h"
 #include "monitor.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -59,6 +61,28 @@ void snapshot(JsonObject out) {
     out["revision"] = installcfg_revision();
     out["storage"] = installcfg_storage();
     out["game_shuffled"] = installcfg_game_shuffled();
+    out["uptime_ms"] = millis();
+    JsonObject game = out["game"].to<JsonObject>();
+    game["ready"] = gamestate_ready();
+    game["name"] = gamestate_game();
+    game["state"] = gamestate_state();
+    game["state_age_ms"] = gamestate_state_age_ms();
+    game["timer_left_ms"] = gamestate_timer_left_ms();
+    game["timer_target"] = gamestate_timer_target();
+    game["goals_visible"] = gamestate_goals_visible();
+    JsonArray goals = game["goal_colors"].to<JsonArray>();
+    uint8_t goalMask = gamestate_goal_color_mask();
+    for (uint8_t c = 0; c < pulleys::COLOR_COUNT; ++c)
+        if (goalMask & (1u << c)) goals.add(c);
+    char deviceStatus[80];
+    game["devices_ok"] = devices_summary(deviceStatus, sizeof(deviceStatus));
+    game["devices_status"] = deviceStatus;
+    JsonObject mesh = out["mesh"].to<JsonObject>();
+    mesh["sensors"] = monitor_count(pulleys::MESH_ORIGIN_SENSOR);
+    mesh["screens"] = monitor_count(pulleys::MESH_ORIGIN_SCREEN);
+    mesh["events"] = monitor_total_events();
+    mesh["events_per_min"] = monitor_events_per_min();
+    mesh["skew_spread_ms"] = monitor_skew_spread();
     JsonArray channels = out["channels"].to<JsonArray>();
     const uint8_t* daily = installcfg_daily_colors();
     for (uint8_t ch = 1; ch <= 24; ++ch) {

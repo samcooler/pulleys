@@ -7,7 +7,7 @@ function newSession() {
 }
 let session=sessionStorage.getItem('mapping-session');
 if(!/^[0-9A-F]{16}$/.test(session || '')) session=newSession();
-let clockDirty=false,clockBase=null,lastRenew=0;
+let clockDirty=false,clockBase=null,lastRenew=0,receivedAt=Date.now(),renderedGoals='';
 const names = ['red','blue','green','yellow','orange','purple'];
 function notice(text, error=false) {
   $('notice').textContent = text;
@@ -58,10 +58,10 @@ function render() {
   $('channel-fields').disabled=!live; $('rgb-fields').disabled=!live;
   $('shuffle').disabled=!live; $('reset').disabled=!live;
   $('arbiter').disabled=pending || options.length<2 || !!(row?.mapping?.active && row.mapping.owner===session);
-  $('connection').textContent=state.bridge_connected ? (row?.fresh ? 'Arbiter connected' : 'Waiting for arbiter') : 'Bridge disconnected';
+  renderOverview(row);
   renderMapping(row,live);
   renderClock(row,live);
-  if(!row) { $('arbiter-status').textContent=state.error || 'Waiting for a configuration snapshot…'; return; }
+  if(!row) { $('arbiter-status').textContent=state.error || 'Waiting for a configuration snapshot…'; $('storage').textContent=state.busy ? 'Firmware work is in progress. Configuration updates are paused.' : 'Edits become available when the arbiter responds.'; return; }
   $('arbiter-status').textContent=`${row.id} · revision ${row.revision} · received ${row.age_seconds}s ago${row.fresh?'':' · stale'}`;
   $('storage').textContent=state.busy ? 'Firmware work is in progress. Configuration edits are paused.' : pending ? 'Waiting for the arbiter to apply the change…' : row.storage==='pending' ? 'Applied on arbiter; waiting for storage. Device convergence is not yet confirmed.' : row.storage==='failed' ? 'Applied on arbiter, but storage failed. Changes may be lost after reboot.' : 'Operator configuration saved on arbiter. Device convergence is not confirmed by this page.';
   if(row.game_shuffled) $('storage').textContent+=' The game is using a temporary shuffle; an operator edit restores the daily palette first.';
@@ -80,8 +80,8 @@ async function refresh() {
   try {
     const response=await fetch('/api/installation'); const data=await response.json();
     if(!response.ok) throw new Error(data.error || 'Configuration unavailable');
-    state=data;render();
-    if(networkError){notice("Connection restored.");networkError=false;}
+    state=data;receivedAt=Date.now();render();
+    if(networkError){notice("Connection restored.");networkError=false;renderOverview(current());}
   } catch(error) {
     if(state) {state.bridge_connected=false;render();}
     networkError=true;notice(error.message,true);
@@ -109,6 +109,29 @@ async function mutate(op,values,base=null,quiet=false) {
 $('arbiter').addEventListener('change',()=>{selected=$('arbiter').value;dirty.clear();clockDirty=false;clockBase=null;render();});
 $('shuffle').addEventListener('click',()=>mutate('shuffle',{}));
 $('reset').addEventListener('click',async()=>{if(await mutate('reset_rgb',{})){dirty.clear();render();}});
+function renderOverview(row) {
+  const view=InstallationStatus.model(state,row,{pending,networkError,elapsedSeconds:(Date.now()-receivedAt)/1000});
+  const fields={health:'health',freshness:'freshness',game:'gameName',state:'state','state-age':'stateAge',timer:'timer','timer-target':'timerTarget',nodes:'nodes',activity:'activity',events:'events',uptime:'uptime',skew:'skew',devices:'devices','goals-status':'goalsMessage'};
+  for(const [id,key] of Object.entries(fields)) {
+    const element=$(`overview-${id}`);
+    if(element.textContent!==view[key]) element.textContent=view[key];
+  }
+  $('connection').textContent=view.health;
+  document.querySelector('.overview-panel').classList.toggle('report-stale',!view.live);
+  $('overview-devices').classList.toggle('status-warning',!view.devicesOk);
+  const goalValues=view.goals.map(index=>[index,row.colors?.[index]]);
+  const key=JSON.stringify(goalValues);
+  if(renderedGoals!==key) {
+    renderedGoals=key;
+    const goals=$('overview-goals');goals.replaceChildren();
+    for(const [index,color] of goalValues) {
+      const chip=document.createElement('span');chip.className='goal-chip';
+      const swatch=document.createElement('span');swatch.className='swatch';swatch.setAttribute('aria-hidden','true');
+      if(color?.rgb) paint(swatch,color.rgb);
+      chip.append(swatch,document.createTextNode(color?.name || names[index]));goals.append(chip);
+    }
+  }
+}
 function renderMapping(row,live) {
   const map=row?.mapping;
   const owned=!!map?.active && map.owner===session;
@@ -161,6 +184,7 @@ $('clock-form').addEventListener('submit',async event=>{
 $('clock-now').addEventListener('click',async()=>{if(await mutate('clock_now',{})){clockDirty=false;clockBase=null;render();}});
 setInterval(async()=>{
   const row=current();
+  renderOverview(row);
   if(document.visibilityState==='visible' && !pending && row?.fresh && row.mapping?.active && row.mapping.owner===session && Date.now()-lastRenew>6000) {
     lastRenew=Date.now();await mutate('map_renew',{session},null,true);
   }

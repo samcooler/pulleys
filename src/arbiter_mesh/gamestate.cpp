@@ -1,4 +1,5 @@
 #include "gamestate.h"
+#include "goal_colors.h"
 #include "components.h"
 #include "devices.h"
 #include "installcfg.h"
@@ -783,6 +784,11 @@ const char* gamestate_param_name(uint8_t i)  { return i < s_paramCount ? s_param
 float       gamestate_param_value(uint8_t i) { return i < s_paramCount ? s_params[i].value : 0.0f; }
 
 bool        gamestate_goals_visible() { return s_ready && s_goalsVisible; }
+uint8_t gamestate_goal_color_mask() {
+    return visible_goal_color_mask(gamestate_goals_visible(), components_goal_mask(),
+                                   s_majorColor, GAME_MAJOR_COMPONENTS);
+}
+
 bool        gamestate_ready()  { return s_ready; }
 const char* gamestate_game()   { return s_game; }
 const char* gamestate_state()  { return s_state; }

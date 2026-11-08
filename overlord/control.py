@@ -67,7 +67,8 @@ class ControlServer:
                 parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
                 content_type = "application/json; charset=utf-8"
                 try:
-                    assets = {("installation",): ("installation.html", "text/html"),
+                    assets = {("installation_status.js",): ("installation_status.js", "application/javascript"),
+                              ("installation",): ("installation.html", "text/html"),
                               ("installation.js",): ("installation.js", "application/javascript"),
                               ("installation.css",): ("installation.css", "text/css"),
                               (): ("index.html", "text/html"),

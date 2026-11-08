@@ -170,3 +170,18 @@ Colours/RGB → Map Ropes → Clock → final hardware validation and documentat
   readback, stale-edit rejection with unfinished input preserved, and desktop
   plus 390px layouts; no browser JavaScript errors observed.
 - Hardware validation in phase 6 remains open. Firmware was built, not flashed.
+
+## Follow-up: game goals and status overview
+
+- [x] Include authoritative game/state/timer, visible goal colours, device
+  summary, mesh counts/activity/skew, and uptime in installation snapshots.
+- [x] Show named goal chips on the arbiter LCD, using the same visible-goal
+  colour conversion as Overlord's snapshot.
+- [x] Add the game/mesh overview to the top of Installation, with prominent
+  goals and explicit stale, disconnected, firmware-paused, and unavailable states.
+- [x] Test reordered major colours, hidden goals, chunked status readback, and
+  browser timer/freshness rules. All 48 host regression tests pass.
+- [x] Check desktop and 390px overview layouts with simulated game/mesh
+  data; no page overflow or browser JavaScript errors observed.
+- [x] Build updated arbiter firmware; image fits at 21.4% of its app partition.
+- [ ] Verify updated LCD layout and live state/goal changes on real hardware.

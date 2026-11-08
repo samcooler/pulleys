@@ -200,6 +200,24 @@ class InstallationTests(unittest.TestCase):
                             str(root / 'test/installation_core.cpp'), '-o', binary], check=True, capture_output=True)
             subprocess.run([binary], check=True, capture_output=True)
 
+    def test_game_goals_and_mesh_status_survive_chunked_readback(self):
+        row = installation()
+        row.update(uptime_ms=120000, game={'ready': True, 'name': 'Installation game',
+            'state': 'easy_round', 'state_age_ms': 8000, 'timer_left_ms': 42000,
+            'timer_target': 'round_end', 'goals_visible': True, 'goal_colors': [0, 2],
+            'devices_ok': False, 'devices_status': 'diorama.latch: no report'},
+            mesh={'sensors': 12, 'screens': 3, 'events': 90, 'events_per_min': 30, 'skew_spread_ms': 8})
+        self.serial.on_write = lambda request: self.reply(request, row)
+        self.manager.mutate('shuffle', self.body)
+        result = self.manager.snapshot()['arbiters'][0]
+        self.assertEqual(result['game'], row['game'])
+        self.assertEqual(result['mesh'], row['mesh'])
+        self.assertEqual(result['uptime_ms'], row['uptime_ms'])
+
+    def test_browser_status_rules(self):
+        root = Path(__file__).resolve().parents[1]
+        subprocess.run(['node', str(root / 'test/installation_status.cjs')], check=True, capture_output=True)
+
     def test_real_http_routes_validation_and_static_page(self):
         self.serial.on_write = lambda request: self.reply(request)
         server = ControlServer(lambda *_: (200, {'legacy': True}), port=0, installation=self.manager)
@@ -209,7 +227,13 @@ class InstallationTests(unittest.TestCase):
             connection.request('GET', '/installation')
             response = connection.getresponse()
             self.assertEqual(response.status, 200)
-            self.assertIn(b'Channel colours', response.read())
+            html = response.read()
+            self.assertIn(b'Channel colours', html)
+            self.assertIn(b'Game goals', html)
+            connection.request('GET', '/installation_status.js')
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertIn(b'InstallationStatus', response.read())
             connection.request('GET', '/api/installation')
             response = connection.getresponse()
             self.assertTrue(json.loads(response.read())['arbiters'][0]['fresh'])

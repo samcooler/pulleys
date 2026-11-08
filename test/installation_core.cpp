@@ -2,8 +2,17 @@
 #include <cstdint>
 #include "src/arbiter_mesh/mapping_session.h"
 #include "src/arbiter_mesh/calendar_time.h"
+#include "src/arbiter_mesh/goal_colors.h"
 
 int main() {
+    const uint8_t reordered[] = {4, 2, 0, 3, 1};
+    assert(visible_goal_color_mask(true, 0b00101, reordered, 5) == 0b10001);
+    assert(visible_goal_color_mask(false, 0b11111, reordered, 5) == 0);
+    assert(visible_goal_color_mask(true, 0, reordered, 5) == 0);
+    assert(visible_goal_color_mask(true, 0b11111, reordered, 5) == 0b11111);
+    const uint8_t unknown[] = {255};
+    assert(visible_goal_color_mask(true, 1, unknown, 1) == 0);
+
     MappingSession s;
     assert(s.open(1, 10, 100));
     assert(!s.open(2, 10, 100));

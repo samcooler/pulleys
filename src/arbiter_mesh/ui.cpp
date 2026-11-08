@@ -73,6 +73,8 @@ static lv_obj_t* s_gameTimer;
 static lv_obj_t* s_flashBar;
 static lv_obj_t* s_flashLbl;
 static lv_obj_t* s_gameLog;
+static lv_obj_t* s_goalTitle;
+static lv_obj_t* s_goalLabels[pulleys::COLOR_COUNT];
 static lv_obj_t* s_gameDev;    // one line: are the devices doing what the game set?
 static uint32_t  s_seenSeq = 0;
 static uint32_t  s_flashAt = 0;
@@ -205,6 +207,22 @@ void ui_init() {
     lv_label_set_text(s_gameDev, "");
     lv_obj_set_style_text_font(s_gameDev, &lv_font_unscii_8, 0);
     lv_obj_align(s_gameDev, LV_ALIGN_TOP_LEFT, 270, 74);   // under the log's four lines
+
+    // Final line in the left column: named goal colours, hidden outside states
+    // that react to goals. Keep names readable even when an RGB is tuned dark.
+    s_goalTitle = lv_label_create(s_gamePanel);
+    lv_label_set_text(s_goalTitle, "GOALS: -");
+    lv_obj_set_style_text_font(s_goalTitle, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_color(s_goalTitle, lv_color_hex(COL_DIM), 0);
+    lv_obj_set_pos(s_goalTitle, 0, 80);
+    for (uint8_t c = 0; c < pulleys::COLOR_COUNT; ++c) {
+        s_goalLabels[c] = lv_label_create(s_gamePanel);
+        lv_label_set_text(s_goalLabels[c], "");
+        lv_obj_add_flag(s_goalLabels[c], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_font(s_goalLabels[c], &lv_font_unscii_8, 0);
+        lv_obj_set_style_bg_opa(s_goalLabels[c], LV_OPA_COVER, 0);
+    }
+
 }
 
 // Health colour from how long a node has been quiet.
@@ -418,6 +436,32 @@ static void refreshGame() {
     } else {
         setTextIfChanged(s_gameTimer, "");
     }
+
+    static uint8_t lastGoals = 0xFF;
+    static CRGB lastGoalRgb[pulleys::COLOR_COUNT];
+    uint8_t goals = gamestate_goal_color_mask();
+    setTextIfChanged(s_goalTitle, goals ? "GOALS:" : "GOALS: -");
+    int goalX = 56;
+    for (uint8_t c = 0; c < pulleys::COLOR_COUNT; ++c) {
+        bool selected = goals & (1u << c);
+        setTextIfChanged(s_goalLabels[c], selected ? pulleys::color_name(c) : "");
+        if (!selected) {
+            if (goals != lastGoals) lv_obj_add_flag(s_goalLabels[c], LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        CRGB rgb = pulleys::color_rgb(c);
+        if (goals != lastGoals || rgb != lastGoalRgb[c]) {
+            lv_obj_clear_flag(s_goalLabels[c], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_bg_color(s_goalLabels[c], lv_color_make(rgb.r, rgb.g, rgb.b), 0);
+            unsigned luma = (rgb.r * 299u + rgb.g * 587u + rgb.b * 114u) / 1000u;
+            lv_obj_set_style_text_color(s_goalLabels[c], lv_color_hex(luma > 140 ? COL_BG : COL_TEXT), 0);
+            lv_obj_set_pos(s_goalLabels[c], goalX, 80);
+            lastGoalRgb[c] = rgb;
+        }
+        goalX += strlen(pulleys::color_name(c)) * 8 + 4;
+    }
+
+    lastGoals = goals;
 
     // Log, newest first; the top line is what the flash bar is showing.
     const GameTrigger* log = gamestate_log();

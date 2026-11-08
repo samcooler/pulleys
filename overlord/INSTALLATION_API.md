@@ -158,3 +158,37 @@ Latest local validation: 46 regression tests passed; arbiter, native-USB bridge,
 classic ESP32 bridge, sensor, and screen builds all fit their app partitions.
 Browser conflict handling preserves unfinished RGB input and requires review
 before retrying against a new revision.
+
+## Game goals and overview status
+
+The top of the Installation page shows the current game/state, state age, next
+transition and remaining time, named goal colour chips using the configured RGB,
+sensor/screen counts, pull activity, arbiter uptime, mesh clock spread, and the
+summary of desired versus reported game-device settings. Bridge connection,
+report freshness, pending edits, and paused updates during firmware work are
+shown alongside these values.
+
+The arbiter snapshot adds `uptime_ms`, `game`, and `mesh`. `game` includes
+`ready`, `name`, `state`, `state_age_ms`, `timer_left_ms` (-1 for no timer),
+`timer_target`, `goals_visible`, `goal_colors` (palette indices), `devices_ok`,
+and `devices_status`. `mesh` includes `sensors`, `screens`, `events`,
+`events_per_min`, and `skew_spread_ms`.
+
+Goal component bits are converted through the game's configured major-colour
+order. The arbiter LCD and snapshot use the same conversion and visibility rule:
+only states reacting to goals show them. The previous round's goals are hidden
+in party/idle states. The LCD shows the names as colour chips on the bottom line
+of its game strip. No game rules, goals, timers, or configuration revisions are
+changed by displaying this status.
+
+The browser estimates elapsed/remaining time between fresh reports, but never
+advances the state locally. On stale/disconnected/paused data it shows historical
+goals and reported timer values as such. Older arbiter firmware without these
+fields still supports the configuration page; the overview explains that game
+status needs updated arbiter firmware. No bridge protocol change is required.
+
+Validation: 48 host regression tests pass, including native C++ tests for hidden
+goals and reordered component colours, chunked status readback, and Node tests
+for timer/freshness/visibility presentation. The arbiter firmware build fits its
+partition. The LCD layout and real radio goal/state updates still need hardware
+verification before deployment.

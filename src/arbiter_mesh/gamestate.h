@@ -67,6 +67,8 @@ void gamestate_note_palette();                  // installcfg.cpp, when the pale
 // so the last round's do not linger on the extractors through a party.
 // playtest/spec.py GOAL_EVENTS is the same list.
 bool        gamestate_goals_visible();
+// Visible goals as palette-colour bits (not component bits); shared by both UIs.
+uint8_t     gamestate_goal_color_mask();
 
 uint32_t    gamestate_state_age_ms();      // time in the current state
 int32_t     gamestate_timer_left_ms();     // until `after` fires; -1 if none

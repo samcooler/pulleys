@@ -1,11 +1,24 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Overlord · Installation</title><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/installation.css"><script src="/installation.js" defer></script></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Overlord · Installation</title><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/installation.css"><script src="/installation_status.js" defer></script><script src="/installation.js" defer></script></head>
 <body>
 <header class="topbar"><a class="brand" href="/"><span class="brand-mark">O</span> OVERLORD</a><nav aria-label="Main navigation"><a href="/">Firmware</a><a href="/installation" aria-current="page">Installation</a></nav><span id="connection" class="connection">Connecting</span></header>
 <main>
-<div class="page-heading"><div><p class="eyebrow">PULLEYS / INSTALLATION</p><h1>Colour, across the room.</h1><p class="subtitle">Map ropes, tune colours, and set the arbiter clock.</p></div></div>
+<div class="page-heading"><div><p class="eyebrow">PULLEYS / INSTALLATION</p><h1>The room, at a glance.</h1><p class="subtitle">Follow the game, map ropes, and tune the installation.</p></div></div>
 <div id="notice" role="status" aria-live="polite" hidden></div>
-<section class="panel"><div class="panel-heading"><div><h2>Arbiter</h2><p id="arbiter-status">Waiting for a configuration snapshot…</p></div><label>Device <select id="arbiter" aria-label="Arbiter device"></select></label></div><p class="installation-status" id="storage">Edits become available when the arbiter responds.</p></section>
+<section class="panel overview-panel" aria-label="Game and installation status"><div class="panel-heading"><div><p class="eyebrow">GAME AND MESH</p><h2 id="overview-game">Game status unavailable</h2><p id="arbiter-status">Waiting for a configuration snapshot…</p></div><label>Device <select id="arbiter" aria-label="Arbiter device"></select></label></div>
+<div class="overview-health"><strong id="overview-health" role="status">Connecting</strong><span id="overview-freshness">Waiting for an arbiter report.</span></div>
+<div class="overview-goals"><h3>Game goals</h3><p id="overview-goals-status">Waiting for game status.</p><div id="overview-goals" class="goal-chips" aria-label="Goal colours"></div></div>
+<div class="overview-grid">
+<article><span>Current state</span><strong id="overview-state">—</strong><small id="overview-state-age">Waiting for a game</small></article>
+<article><span>Next transition</span><strong id="overview-timer">—</strong><small id="overview-timer-target">Waiting for a game</small></article>
+<article><span>Mesh nodes</span><strong id="overview-nodes">—</strong><small>Last heard by the arbiter</small></article>
+<article><span>Pull activity</span><strong id="overview-activity">—</strong><small id="overview-events">Waiting for mesh status</small></article>
+<article><span>Arbiter uptime</span><strong id="overview-uptime">—</strong><small>Since the last reboot</small></article>
+<article><span>Mesh clock spread</span><strong id="overview-skew">—</strong><small>Difference across node clocks</small></article>
+</div>
+
+<p class="installation-status" id="overview-devices">Waiting for device status.</p>
+<p class="installation-status" id="storage">Edits become available when the arbiter responds.</p></section>
 <section class="panel installation-panel"><div class="panel-heading"><div><h2>Map ropes</h2><p>Pull one or more ropes within 5 seconds, then assign the group to a channel.</p></div><button id="map-start" class="button primary" disabled>Start mapping</button></div>
 <p id="map-status" class="installation-status" role="status">Mapping is closed. Pulls reach the game.</p>
 <div class="map-controls"><label>Assign captured ropes to <select id="map-channel" disabled aria-label="Mapping destination channel"></select></label><button id="map-assign" class="button primary" disabled>Assign channel</button><button id="map-again" class="button secondary" disabled>Again</button><button id="map-done" class="button secondary" disabled>Done</button></div>
