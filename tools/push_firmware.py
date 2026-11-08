@@ -15,10 +15,28 @@ import urllib.parse
 import urllib.request
 
 
-def request(base, path="", body=None, binary=False):
+class UploadBody:
+    def __init__(self, data, progress):
+        self.data = data
+        self.total = len(data)
+        self.progress = progress
+
+    def __iter__(self):
+        for offset in range(0, self.total, 64 * 1024):
+            end = min(offset + 64 * 1024, self.total)
+            yield self.data[offset:end]
+            # http.client resumes the iterator after sending the previous
+            # chunk. Reading the bytes alone must not advance sent progress.
+            self.progress(end, self.total)
+
+
+def request(base, path="", body=None, binary=False, progress=None):
     payload = body if binary else json.dumps(body).encode() if body is not None else None
     method = "PUT" if binary else "POST" if payload is not None else "GET"
     headers = {"Content-Type": "application/octet-stream" if binary else "application/json"}
+    if binary and progress is not None:
+        headers["Content-Length"] = str(len(payload))
+        payload = UploadBody(payload, progress)
     req = urllib.request.Request(base.rstrip("/") + "/api/firmware" + path,
                                  data=payload, headers=headers, method=method)
     try:

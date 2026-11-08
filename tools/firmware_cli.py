@@ -16,9 +16,11 @@ import uuid
 if __package__:
     from . import release_firmware as bundles
     from .push_firmware import request
+    from .firmware_progress import ProgressDisplay
 else:
     import release_firmware as bundles
     from push_firmware import request
+    from firmware_progress import ProgressDisplay
 
 ROOT = Path(__file__).resolve().parents[1]
 TYPES = {"sensor", "screen", "bridge", "arbiter", "traveler", "station"}
@@ -215,25 +217,27 @@ def selected_build_envs(args, choice):
 def wait_job(url, job, *, quiet=False):
     if not quiet:
         print(f"Job {job['id']} · {url.rstrip('/')}/", flush=True)
-    previous = None
-    while True:
-        progress = (job["state"], tuple((node, item.get("state"), item.get("attempt"),
-                                       int(20 * item.get("bytes", 0) / item["total"]) if item.get("total") else 0)
-                                      for node, item in sorted(job["devices"].items())))
-        if progress != previous and not quiet:
-            print(f"  {job['state']}", flush=True)
-            for node, item in job["devices"].items():
-                detail = item.get("error") or item.get("message") or ""
-                if item.get("total"):
-                    detail = f"{min(100, int(100 * item.get('bytes', 0) / item['total']))}% bytes served" + (f" · {detail}" if detail else "")
-                print(f"    {node}: {item['state']} {detail}".rstrip(), flush=True)
-            previous = progress
-        if job["state"] in {"completed", "failed", "interrupted"}:
-            if job["state"] != "completed":
-                raise RuntimeError(job.get("error", job["state"]))
-            return job
-        time.sleep(2)
-        job = request(url, "/jobs/" + job["id"])["job"]
+    with ProgressDisplay(enabled=not quiet) as display:
+        while True:
+            devices = {node: {"state": "queued"} for node in job.get("device_ids") or []}
+            devices.update(job["devices"])
+            done = sum(item.get("state") in {"confirmed", "skipped"} for item in devices.values())
+            failed = sum(item.get("state") == "failed" for item in devices.values())
+            title = f"Job {job['id']} | {job['state']}"
+            if devices:
+                title += f" | {done}/{len(devices)} complete | {failed} failed"
+            note = "Bar = bytes served; reboot verification is a separate stage." if devices else "Waiting for device discovery or job results."
+            display.draw(title, devices, job.get("error") or note)
+            if job["state"] in {"completed", "failed", "interrupted"}:
+                if job["state"] != "completed":
+                    raise RuntimeError(job.get("error", job["state"]))
+                return job
+            time.sleep(2)
+            try:
+                job = request(url, "/jobs/" + job["id"])["job"]
+            except (OSError, ValueError, RuntimeError) as exc:
+                display.draw(title, devices, f"Status unavailable: {exc}; the OTA job may still be running.")
+                raise
 
 
 def upload_and_queue(url, path, manifest, rows, *, wait=True):
@@ -249,9 +253,24 @@ def upload_and_queue(url, path, manifest, rows, *, wait=True):
             raise ValueError(f"{env}: binary does not match manifest")
         files[env] = data
     release_id = request(url, "/releases", manifest)["release"]["id"]
-    for env, data in sorted(files.items()):
-        request(url, f"/releases/{release_id}/{env}", data, binary=True)
-        print(f"Uploaded {env}: {len(data):,} bytes", flush=True)
+    uploads = {env: {"state": "queued", "bytes": 0, "total": len(data)} for env, data in sorted(files.items())}
+    with ProgressDisplay() as display:
+        for env, data in sorted(files.items()):
+            item = uploads[env]
+            item["state"] = "uploading"
+            def progress(sent, total):
+                item.update(bytes=sent, total=total, state="validating" if sent >= total else "uploading")
+                note = "100% sent; waiting for Overlord to validate the image." if sent >= total else "Percent = image bytes sent to Overlord."
+                display.draw("Uploading images to Overlord", uploads, note)
+            display.draw("Uploading images to Overlord", uploads, "Sending firmware images to Overlord.")
+            try:
+                request(url, f"/releases/{release_id}/{env}", data, binary=True, progress=progress)
+            except (OSError, ValueError, RuntimeError) as exc:
+                item.update(state="failed", error=str(exc))
+                display.draw("Image upload failed", uploads)
+                raise
+            item.update(state="uploaded", bytes=len(data))
+            display.draw("Uploading images to Overlord", uploads, "Uploaded images are validated before a device update is queued.")
     # Freeze resolved IDs, not a broad environment selector that could include
     # another board appearing while the build was running.
     ids = list(dict.fromkeys(row["id"] for row in rows))
@@ -282,12 +301,42 @@ def flash_usb(rows, manifest):
 
 
 def parser():
-    result = argparse.ArgumentParser(description="Build, inspect and flash Pulleys firmware. OTA through Overlord is the default.")
+    result = argparse.ArgumentParser(
+        description="Build, inspect and flash Pulleys firmware. OTA through Overlord is the default.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Update only one type of node:
+  ./fw flash --type arbiter       Build and update just the arbiter node(s)
+  ./fw flash --type sensor        Build and update just the sensors
+  ./fw flash --type screen        Update screens, including their display variants
+  ./fw flash --type bridge        Update bridges, including both chip variants
+
+Inspect or build before updating:
+  ./fw list --type arbiter --scan       Refresh inventory and list arbiters
+  ./fw flash --type arbiter --dry-run   Show targets without building or flashing
+  ./fw build --type arbiter             Build arbiter firmware without flashing
+
+Other ways to select nodes:
+  ./fw flash --id 6C37                  Update one specific device
+  ./fw flash --env arbiter_mesh         Select an exact firmware environment
+  ./fw flash --type sensor,screen       Select multiple node types
+
+Filters work with list, build, and flash. Values within a filter are alternatives;
+--type, --env, and --id are intersected when combined. Flash builds only the
+selected environments and updates matching known nodes, preserving each node's
+firmware profile. Without filters, flash selects all known nodes.
+
+Add --usb to use attached USB boards. Run ./fw flash --help for all flash options.
+Run ./fw envs to see production firmware environments and their node types.
+
+Interactive terminals show updating upload/device bars with percentages on the
+right. Redirected output uses plain progress lines. Transfer reaching 100% is
+followed by reboot/hash verification before a device is confirmed.""")
     def transport_options(target, *, inherited=False):
         target.add_argument("--url", default=argparse.SUPPRESS if inherited else os.environ.get("OVERLORD_URL", "http://overlord.local:8080"), help="Overlord URL (or OVERLORD_URL)")
         target.add_argument("--usb", action="store_true", default=argparse.SUPPRESS if inherited else False, help="use attached USB boards instead of Overlord OTA")
     transport_options(result)
     commands = result.add_subparsers(dest="command")
+    commands.add_parser("help", help="show usage and node-type filtering examples")
     for name, help_text in (("list", "list visible devices and their firmware versions"),
                             ("build", "build selected firmware without flashing; uncommitted changes allowed"),
                             ("flash", "build once per selected env, then flash matching devices")):
@@ -316,7 +365,7 @@ def parser():
 def main(argv=None):
     cli = parser()
     args = cli.parse_args(argv)
-    if not args.command:
+    if not args.command or args.command == "help":
         cli.print_help()
         return 0
     try:
