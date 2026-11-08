@@ -4,7 +4,8 @@
 #   envs: station_wroom  station  traveler
 set -euo pipefail
 
-PIO="/Users/sam/.platformio/penv/bin/pio"
+PIO="${PLATFORMIO_CMD:-$(command -v pio || true)}"
+[[ -n "$PIO" ]] || PIO="${PLATFORMIO_CORE_DIR:-$HOME/.platformio}/penv/bin/pio"
 
 ENV="${1:-station_wroom}"
 echo "▶ Building $ENV..."

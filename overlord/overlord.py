@@ -46,7 +46,7 @@ from ambient import Ambient, load as load_ambient
 import gain as gain_config
 from control import ControlServer
 from serial_reader import SerialReader
-from firmware import FirmwareUpdater
+from firmware_manager import FirmwareManager
 
 # On the Pi, media is synced into a directory outside the git checkout (see deploy/).
 MEDIA = Path(os.environ.get("OVERLORD_MEDIA") or Path(__file__).resolve().parent / "media")
@@ -68,9 +68,8 @@ def main():
     ap.add_argument("--serial-port", help="explicit serial port path")
     ap.add_argument("--control-port", type=int, default=8080,
                     help="port for the REST control API (0 = off; default 8080)")
-    ap.add_argument("--control-bind", default="127.0.0.1",
-                    help="address the control API listens on; it has no authentication,\n"
-                         "so the default is this machine only (use 0.0.0.0 for the network)")
+    ap.add_argument("--control-bind", default=os.environ.get("OVERLORD_CONTROL_BIND", "0.0.0.0"),
+                    help="dashboard/API bind address (default: all LAN interfaces, no login)")
     ap.add_argument("--game", nargs="?", const="", metavar="YAML",
                     help="run a game state machine (default: game_state_machine/state_config.yaml)")
     ap.add_argument("--simulate", action="store_true",
@@ -427,7 +426,7 @@ def main():
     )
     serial.start()
     if not args.test:
-        firmware_updater = FirmwareUpdater(serial)
+        firmware_updater = FirmwareManager(serial)
         firmware_updater.start()
 
     # Goals over the video, for a game that wants them seen (show_goals: true).
@@ -488,7 +487,7 @@ def main():
     api = None
     if args.control_port:
         try:
-            api = ControlServer(control, args.control_bind, args.control_port)
+            api = ControlServer(control, args.control_bind, args.control_port, firmware=firmware_updater)
             api.start()
             print(f"control: http://{api.address[0]}:{api.address[1]}/status", flush=True)
         except OSError as e:  # the player matters more than its remote control
@@ -519,6 +518,8 @@ def main():
             ambient.stop()
         if api:
             api.stop()
+        if firmware_updater:
+            firmware_updater.stop()
         serial.stop()
         shutdown()
 

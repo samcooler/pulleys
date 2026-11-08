@@ -66,6 +66,18 @@
 
 set -euo pipefail
 
+PIO_CORE="${PLATFORMIO_CORE_DIR:-$HOME/.platformio}"
+PIO="${PLATFORMIO_CMD:-$(command -v pio || true)}"
+[[ -n "$PIO" ]] || PIO="$PIO_CORE/penv/bin/pio"
+PYTHON="${PLATFORMIO_PYTHON:-}"
+if [[ -z "$PYTHON" ]]; then
+  if [[ -x "$PIO_CORE/penv/bin/python" ]]; then
+    PYTHON="$PIO_CORE/penv/bin/python"
+  else
+    PYTHON="$(command -v python3)"
+  fi
+fi
+
 RESET_ONLY=false
 LIST_ONLY=false
 SKIP_CLASS_CHECK=false
@@ -88,7 +100,7 @@ if [[ " $* " == *" --survey "* ]]; then
   for arg in "$@"; do
     [[ "$arg" == "--survey" ]] || survey_args+=("$arg")
   done
-  exec "/Users/sam/.platformio/penv/bin/python" "${0:A:h}/tools/survey.py" "${survey_args[@]}"
+  exec "$PYTHON" "${0:A:h}/tools/survey.py" "${survey_args[@]}"
 fi
 
 if [[ " $* " == *" --ota "* ]]; then
@@ -146,12 +158,10 @@ if [[ "$PROVISION_ASKED" == true && "$ENV_GIVEN" == true ]]; then
   exit 1
 fi
 
-PYTHON="/Users/sam/.platformio/penv/bin/python"
-PIO="/Users/sam/.platformio/penv/bin/pio"
 ASSIGN="${0:A:h}/tools/install_map.py"
-ESPTOOL="/Users/sam/.platformio/packages/tool-esptoolpy/esptool.py"
+ESPTOOL="$PIO_CORE/packages/tool-esptoolpy/esptool.py"
 
-BOOT_APP="/Users/sam/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
+BOOT_APP="$PIO_CORE/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
 IDENTIFY="${0:A:h}/tools/identify.py"
 
 # Per-env flash geometry, and the hardware class the env may be written to.

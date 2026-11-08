@@ -34,6 +34,83 @@ pio run -e station_wroom     # build one env
 
 Note: PlatformIO CLI is at `~/.platformio/penv/bin/pio` if not on your PATH.
 
+## Firmware CLI (recommended)
+
+Run `./fw` for help. The default transport is **OTA through the Overlord**, using
+`http://overlord.local:8080` or `$OVERLORD_URL`. `--url` overrides the server and
+`--usb` selects attached USB boards. These commands work from any directory.
+
+```sh
+./fw list                                      # known devices and running firmware
+./fw list --scan                               # queue/wait for a fresh mesh census
+./fw list --type sensor,bridge --json           # filtered, machine-readable inventory
+./fw envs                                      # production environments and broad roles
+./fw build --env sensor,bridge_esp32            # build only; no device writes
+./fw build --id E857,EC52                       # infer the needed image(s) from devices
+./fw flash --id E857,EC52                       # build sensor once, upload, flash both, wait
+./fw flash --type sensor,screen                # all known nodes of these broad roles
+./fw flash --env component_state_display       # exact running firmware environment
+./fw flash --id E857,EC52 --dry-run             # inspect targets without building/flashing
+./fw flash --id 59A4 --no-wait                  # return after queueing; follow the dashboard
+./fw flash --id 59A4 --manifest dist/v0.2.0/manifest.json # reuse a bundle without rebuilding
+./fw list --usb                                # attached boards, timestamps and identities
+./fw flash --usb --id 59A4                      # build and upload over USB, verify reboot
+./fw flash --usb --port /dev/cu.usbserial-0001 --env bridge_esp32 # first flash / reassignment
+```
+
+`--id`, `--type`, and `--env` accept comma-separated lists and repeated flags.
+Values within one filter are alternatives; different filters are intersected.
+IDs are case-insensitive and accept a name such as `N-E857` or `0xE857`.
+An unknown requested ID or an empty selection stops before any build or flash.
+Broad roles are `sensor`, `screen`, `bridge`, and `arbiter`: `screen` includes the
+component, extractor, diorama and party profiles; `bridge` includes C3 and classic
+ESP32 variants. A filter preserves each board's existing environment. Only an
+explicit USB port plus a single `--env` assigns a different profile to a board.
+
+Without filters, `flash` targets all known Overlord devices (or all attached USB
+boards with `--usb`) and builds only their distinct environments. `build` with no
+filters builds the full production set; role/env-only builds need no network or
+attached devices. `build --id` resolves environments from inventory first.
+
+Development builds allow uncommitted changes. Each invocation gets a new embedded
+build identity and a schema-1 manifest under `dist/dev-…/`, including binary size,
+SHA-256, MD5, and build identity. This also makes a deliberate repeat development
+flash eligible for OTA instead of being skipped as the same build. Each environment
+is built once per command, even when many boards share it. USB uploads reuse that
+built image; OTA uploads send only needed binaries and queue **the resolved IDs**,
+so another device appearing during the build cannot silently join the selection.
+
+`list` shows the Overlord's last-known inventory and age of each report;
+`list --scan` waits for a scan in the shared firmware queue. OTA `flash` waits for
+the job and reboot/hash verification by default, returns nonzero on failure, and
+supports `--no-wait` for background work. Interrupting the CLI does not cancel an
+already queued Overlord job. USB requires pyserial in the Python environment
+running `fw`; PlatformIO is discovered on PATH or under `~/.platformio/penv/`, or
+can be selected with `PLATFORMIO_CMD`.
+
+### Release bundle
+
+```sh
+./fw release --tag v0.3.0                     # all production images + manifest; no publish
+./fw release --publish                       # next minor GitHub Release
+./fw release --tag v0.3.0 --publish           # explicit published version
+```
+
+Release builds require a clean Git working tree, use identities tied to the tag
+and source commit, and always include every production environment. Push the
+source commit before publishing. GitHub publishing additionally requires `gh`
+and an authenticated account. `release` does not apply device filters.
+
+The older scripts remain available:
+
+| Script | Purpose |
+| --- | --- |
+| `tools/release_firmware.py` | Legacy release entry point; shares the CLI's bundle builder and publisher |
+| `tools/push_firmware.py` | Upload an already-built manifest/binaries and queue selected API updates |
+| `flash_all.sh` | Legacy USB flashing plus install-map provisioning, reset and mesh survey workflows |
+| `go.sh` | Legacy build → USB flash → serial monitor workflow |
+| `tools/identify.py`, `tools/survey.py` | Lower-level USB identity and mesh census helpers |
+
 ## Firmware releases and updates
 
 The Overlord checks the latest GitHub Release in the background at startup,

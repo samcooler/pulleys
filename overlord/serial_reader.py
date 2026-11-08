@@ -48,6 +48,10 @@ class SerialReader:
         self._serial = None
         self._write_lock = threading.Lock()
 
+    @property
+    def connected(self):
+        return self._serial is not None and self._serial.is_open
+
     def write_line(self, line):
         """Write one control line to the connected bridge UART, if available."""
         with self._write_lock:

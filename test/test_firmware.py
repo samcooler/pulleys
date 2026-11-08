@@ -68,6 +68,7 @@ class FirmwareTests(unittest.TestCase):
         updater = fw.FirmwareUpdater(Serial())
         updater._release = {"tag": "v0.2.0", "manifest": {
             "bridge_esp32": {"build_hash": expected, "sha256": "b" * 64, "size": 1000000}}}
+        updater._assets["b" * 64] = Path("unused-test-image.bin")
         with patch.object(updater, "_fetch_latest"), patch.object(fw.time, "sleep"), \
              patch("builtins.print"):
             updater._boot_run()

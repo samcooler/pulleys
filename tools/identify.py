@@ -47,57 +47,68 @@ def parse(line):
     return fields
 
 
-def probe(port, out):
+def probe(port, out, versions=False):
+    """Identify one port; optionally collect its own census build identity.
+
+    The legacy TSV output remains unchanged. Callers requesting versions get
+    extra build/sha256 fields in the returned dictionary.
+    """
     row = dict(port=port, cls=UNKNOWN, role=UNKNOWN, env=UNKNOWN,
                id=UNKNOWN, label=UNKNOWN, name=UNKNOWN, mac=UNKNOWN,
-               source="silent")
+               source="silent", build=UNKNOWN, sha256="unknown")
     s = None
+    identified = False
     try:
         s = serial.Serial()
         s.port = port
         s.baudrate = BAUD
         s.timeout = 0.2
-        # The CH340 boards print nothing while DTR/RTS are asserted -- they sit
-        # in reset. Deassert before and after open.
         s.dtr = False
         s.rts = False
         s.open()
         s.dtr = False
         s.rts = False
         s.reset_input_buffer()
-
-        deadline = time.time() + TIMEOUT
+        deadline = time.monotonic() + TIMEOUT
+        version_deadline = None
         buf = b""
         asked = 0.0
-        while time.time() < deadline:
-            # Re-ask periodically: a board still booting will miss the first
-            # request, and the reply is one line so extra asks are cheap.
-            if time.time() - asked > 0.7:
-                try:
-                    s.write(b"?\n")
-                    s.flush()
-                except Exception:
-                    pass
-                asked = time.time()
-
+        while time.monotonic() < (version_deadline or deadline):
+            if not identified and time.monotonic() - asked > 0.7:
+                s.write(b"?\n")
+                s.flush()
+                asked = time.monotonic()
             chunk = s.read(512)
             if not chunk:
                 continue
             buf += chunk
             while b"\n" in buf:
                 raw, buf = buf.split(b"\n", 1)
-                text = raw.decode("utf-8", "replace").strip()
-                if PREFIX not in text:
-                    continue
-                f = parse(text[text.index(PREFIX):])
-                row.update(cls=f.get("class", UNKNOWN), role=f.get("role", UNKNOWN),
-                           env=f.get("env", UNKNOWN), id=f.get("id", UNKNOWN),
-                           label=f.get("label", UNKNOWN), name=f.get("name", UNKNOWN),
-                           mac=f.get("mac", UNKNOWN), source="id")
-                out.append(row)
-                return
-    except Exception:
+                line = raw.decode("utf-8", "replace").strip()
+                if PREFIX in line:
+                    fields = parse(line[line.index(PREFIX):])
+                    row.update(cls=fields.get("class", UNKNOWN), role=fields.get("role", UNKNOWN),
+                               env=fields.get("env", UNKNOWN), id=fields.get("id", UNKNOWN),
+                               label=fields.get("label", UNKNOWN), name=fields.get("name", UNKNOWN),
+                               mac=fields.get("mac", UNKNOWN), build=fields.get("build", UNKNOWN),
+                               sha256=fields.get("sha256", "unknown"), source="id")
+                    identified = True
+                    if not versions or len(row["sha256"]) == 64:
+                        out.append(row)
+                        return
+                    if version_deadline is None:
+                        s.write(b"CENSUS 500\n")
+                        s.flush()
+                        version_deadline = time.monotonic() + 1.5
+                elif identified and "PULLEYS-CENSUS " in line:
+                    fields = parse(line[line.index("PULLEYS-CENSUS "):])
+                    if fields.get("id", "").upper() == row["id"].upper() and fields.get("self") == "1":
+                        row["sha256"] = fields.get("sha256", "unknown")
+                        out.append(row)
+                        return
+    except Exception as exc:
         row["source"] = "error"
+        row["error"] = str(exc)
     finally:
         if s is not None:
             try:

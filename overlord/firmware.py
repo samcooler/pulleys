@@ -50,8 +50,12 @@ class FirmwareUpdater:
     on demand in bounded Base64 chunks using FW-READ / FW-DATA records.
     """
 
-    def __init__(self, serial_reader):
+    def __init__(self, serial_reader, observer=None, cache=None):
         self.serial = serial_reader
+        self.observer = observer
+        self.cache = Path(cache) if cache is not None else CACHE
+        self._last_seen = {}
+        self._transfer_target = None
         self._lock = threading.RLock()
         self._inventory = {}
         self._statuses = {}
@@ -76,7 +80,10 @@ class FirmwareUpdater:
             node_id = fields.get("id")
             if node_id:
                 with self._condition:
-                    self._inventory[node_id.upper()] = fields
+                    key = node_id.upper()
+                    self._inventory[key] = {**self._inventory.get(key, {}), **fields}
+                    self._last_seen[key] = time.time()
+                    self._emit("inventory", node_id=key)
                     self._condition.notify_all()
             return True
         if line.startswith("FW-NODE ") or line.startswith("FW-BRIDGE "):
@@ -86,7 +93,10 @@ class FirmwareUpdater:
                 with self._condition:
                     if line.startswith("FW-BRIDGE "):
                         self._bridge_id = node_id.upper()
-                    self._inventory[node_id.upper()] = fields
+                    key = node_id.upper()
+                    self._inventory[key] = {**self._inventory.get(key, {}), **fields}
+                    self._last_seen[key] = time.time()
+                    self._emit("inventory", node_id=key)
                     self._condition.notify_all()
             return True
         if line.startswith("FW-STATUS "):
@@ -94,6 +104,7 @@ class FirmwareUpdater:
             node_id = fields.get("id", "").upper()
             with self._condition:
                 self._statuses[node_id] = fields
+                self._emit("status", node_id=node_id, **{k: v for k, v in fields.items() if k != "node_id"})
                 self._condition.notify_all()
             return True
         if line.startswith("FW-READ "):
@@ -114,7 +125,7 @@ class FirmwareUpdater:
         table = manifest.get("firmware", {})
         if not ACTIVE_ENVS.issubset(table):
             raise RuntimeError("release manifest is missing active firmware environments")
-        CACHE.mkdir(parents=True, exist_ok=True)
+        self.cache.mkdir(parents=True, exist_ok=True)
         local = {}
         for env in sorted(ACTIVE_ENVS | (OPTIONAL_ENVS & table.keys())):
             entry = table[env]
@@ -136,12 +147,13 @@ class FirmwareUpdater:
                 raise RuntimeError(f"download integrity check failed for {env}")
             if hashlib.md5(data, usedforsecurity=False).hexdigest() != md5:
                 raise RuntimeError(f"download MD5 check failed for {env}")
-            path = CACHE / f"{tag}-{env}-{digest}.bin"
+            path = self.cache / f"{tag}-{env}-{digest}.bin"
             path.write_bytes(data)
             local[digest] = path
             table[env]["sha256"] = digest
-        self._release = {"tag": tag, "manifest": table}
-        self._assets = local
+        with self._condition:
+            self._release = {"tag": tag, "manifest": table}
+            self._assets.update(local)
 
     def _boot_run(self):
         for attempt in range(1, 4):
@@ -154,37 +166,46 @@ class FirmwareUpdater:
                     return
                 time.sleep(attempt * 3)
 
-        # Let the normal Overlord stay online; this thread waits briefly for the
-        # bridge and then performs one boot-scoped inventory/update pass.
+        self.update_release(self._release)
+
+    def _emit(self, kind, **fields):
+        if self.observer:
+            self.observer(kind, fields)
+
+    def discover(self, timeout=25):
+        started = time.time()
         with self._condition:
-            self._inventory.clear()
             self._bridge_id = None
-        deadline = time.monotonic() + 25
-        bridge_seen = False
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            # The first FW- line is also what makes our bridge raise the
-            # firmware AP (src/bridge), so this has to come before any offer.
             self.serial.write_line("FW-PING")
             with self._condition:
-                bridge_seen = self._bridge_id is not None
-                if bridge_seen:
+                if self._bridge_id is not None:
                     break
-                self._condition.wait(1)
-        if not bridge_seen:
-            print("firmware: bridge unavailable; skipping until next boot", flush=True)
-            return
+                self._condition.wait(min(1, max(0, deadline - time.monotonic())))
+        if self._bridge_id is None:
+            raise RuntimeError("bridge unavailable")
+        # Merge two rounds: one radio census regularly misses a few replies.
+        for _ in range(2):
+            self.serial.write_line("FW-CENSUS spread=3000")
+            time.sleep(3.5)
         with self._condition:
-            self._inventory.clear()
-            self._statuses.clear()
-        self.serial.write_line("FW-CENSUS spread=3000")
-        time.sleep(4.5)
-        if not self._inventory:
-            print("firmware: no nodes found; skipping until next boot", flush=True)
-            return
+            return {key: dict(value) for key, value in self._inventory.items()
+                    if self._last_seen.get(key, 0) >= started}
 
-        table = self._release["manifest"]
-        nodes = list(self._inventory.items())
-        print(f"firmware: release {self._release['tag']} inventory: {len(nodes)} nodes", flush=True)
+    def update_release(self, release, device_ids=None, env=None):
+        fresh = self.discover()
+        table = release["manifest"]
+        requested = set(device_ids) if device_ids is not None else None
+        nodes = [(key, value) for key, value in fresh.items()
+                 if (requested is None and value.get("env") in table or requested is not None and key in requested) and
+                    (env is None or value.get("env") == env)]
+        results = {}
+        for missing in (requested or set()) - fresh.keys():
+            results[missing] = {"state": "failed", "error": "device did not answer census"}
+            self._emit("device", node_id=missing, **results[missing])
+        table = release["manifest"]
+        print(f"firmware: release {release['tag']} inventory: {len(nodes)} nodes", flush=True)
         for node_id, node in nodes:
             print(f"firmware: node {node_id} env={node.get('env', '?')} "
                   f"build_hash={node.get('sha256', 'unknown')}", flush=True)
@@ -195,12 +216,18 @@ class FirmwareUpdater:
                           2 if item[0] == own else 1)
         for node_id, node in nodes:
             env = node.get("env")
-            if env not in table:
+            if env not in table or table[env]["sha256"] not in self._assets:
+                results[node_id] = {"state": "failed", "error": "no uploaded image for this environment"}
+                self._emit("device", node_id=node_id, **results[node_id])
                 continue
             expected = table[env]["sha256"]
             expected_build = table[env]["build_hash"]
             if node.get("sha256") == expected_build:
+                results[node_id] = {"state": "skipped", "message": "already current"}
+                self._emit("device", node_id=node_id, **results[node_id])
                 continue
+            self._transfer_target = node_id
+            self._emit("device", node_id=node_id, state="queued", total=table[env]["size"])
             is_own_bridge = node_id == own
             if is_own_bridge:
                 command = (f"FW-BRIDGE-UPDATE env={env} build_hash={expected_build} "
@@ -211,7 +238,11 @@ class FirmwareUpdater:
             for attempt in range(1, 4):
                 with self._condition:
                     self._statuses.pop(node_id, None)
+                self._emit("device", node_id=node_id, state="offering", attempt=attempt,
+                           bytes=0, total=table[env]["size"])
                 if not self.serial.write_line(command):
+                    results[node_id] = {"state": "failed", "error": "bridge disconnected"}
+                    self._emit("device", node_id=node_id, **results[node_id])
                     break
                 print(f"firmware: {env} {node_id} attempt {attempt}/3", flush=True)
                 # USB-UART bridges carry Base64 records at 115200 baud. Budget
@@ -219,11 +250,11 @@ class FirmwareUpdater:
                 timeout = max(180, table[env]["size"] / 4000 + 60)
                 status = self._wait_status(node_id, timeout)
                 if status and status.get("state") == "ok":
+                    self._emit("device", node_id=node_id, state="verifying")
                     # Require a newly requested census report with the expected
                     # hash rather than accepting the install ACK alone.
                     time.sleep(8)  # allow the target to restart and rejoin ESP-NOW
-                    with self._condition:
-                        self._inventory.pop(node_id, None)
+                    confirmed_after = time.time()
                     if is_own_bridge:
                         refreshed = None
                         reconnect_deadline = time.monotonic() + 90
@@ -231,21 +262,35 @@ class FirmwareUpdater:
                             self.serial.write_line("FW-PING")
                             with self._condition:
                                 value = self._inventory.get(node_id)
-                                if value and value.get("sha256") == expected_build:
+                                if (value and value.get("sha256") == expected_build and
+                                        self._last_seen.get(node_id, 0) >= confirmed_after):
                                     refreshed = value
                                     break
                                 self._condition.wait(1)
                     else:
-                        self.serial.write_line(f"FW-QUERY id={node_id}")
-                        refreshed = self._wait_inventory(node_id, 90, expected_build)
+                        refreshed = None
+                        for _ in range(18):
+                            self.serial.write_line(f"FW-QUERY id={node_id}")
+                            refreshed = self._wait_inventory(node_id, 5, expected_build, confirmed_after)
+                            if refreshed:
+                                break
                     if refreshed:
                         print(f"firmware: {env} {node_id} confirmed", flush=True)
+                        results[node_id] = {"state": "confirmed"}
+                        self._emit("device", node_id=node_id, state="confirmed")
                         break
                     print(f"firmware: {node_id} hash not confirmed after reboot", flush=True)
                 else:
                     print(f"firmware: {node_id} update attempt failed", flush=True)
+                results[node_id] = {"state": "failed", "error":
+                                    "reboot identity not confirmed" if status and status.get("state") == "ok"
+                                    else f"update failed ({status.get('err', 'unknown')})" if status
+                                    else "update timed out"}
+                self._emit("device", node_id=node_id, **results[node_id])
                 if attempt < 3:
                     time.sleep(2)
+        self._transfer_target = None
+        return results
 
     def _wait_status(self, node_id, seconds):
         end = time.monotonic() + seconds
@@ -257,12 +302,13 @@ class FirmwareUpdater:
                 self._condition.wait(max(0, end - time.monotonic()))
         return None
 
-    def _wait_inventory(self, node_id, seconds, expected=None):
+    def _wait_inventory(self, node_id, seconds, expected=None, after=0):
         end = time.monotonic() + seconds
         with self._condition:
             while time.monotonic() < end:
                 value = self._inventory.get(node_id)
-                if value and (expected is None or value.get("sha256") == expected):
+                if (value and (expected is None or value.get("sha256") == expected) and
+                        self._last_seen.get(node_id, 0) >= after):
                     return value
                 self._condition.wait(max(0, end - time.monotonic()))
         return None
@@ -275,11 +321,14 @@ class FirmwareUpdater:
             offset = int(fields["offset"])
             length = min(384, int(fields.get("length", 384)))
             path = self._assets[digest]
+            if offset < 0 or length <= 0 or offset >= path.stat().st_size:
+                raise ValueError("invalid chunk range")
             with path.open("rb") as stream:
                 stream.seek(offset)
                 chunk = stream.read(length)
             encoded = base64.b64encode(chunk).decode("ascii")
-            self.serial.write_line(f"FW-DATA sha256={digest} offset={offset} b64={encoded}")
+            if self.serial.write_line(f"FW-DATA sha256={digest} offset={offset} b64={encoded}"):
+                self._emit("progress", node_id=self._transfer_target, bytes=offset + len(chunk), sha256=digest)
         except Exception as exc:
             self.serial.write_line(f"FW-ERROR sha256={digest} offset={fields.get('offset','?')} reason=unavailable")
             print(f"firmware: cannot serve requested chunk: {exc}", flush=True)

@@ -14,6 +14,14 @@ node downloads by requesting chunks over its USB link to the Overlord. GitHub
 or bridge unavailability does not stop media playback; update checks are retried
 on the next Overlord reboot.
 
+## Firmware dashboard
+
+Open `http://overlord.local:8080/` on the local network for device versions,
+update progress, per-device activity, release selection and update controls.
+Startup updates remain enabled; manual and API updates share the same queue.
+Local firmware uploads use the release manifest format. See
+[FIRMWARE_API.md](FIRMWARE_API.md) for selective upload/update scripts and API examples.
+
 ## The machine
 
 Overlord runs on a mini PC (it started on a Raspberry Pi, which was too slow;
@@ -487,9 +495,9 @@ overlord's own engine. Only params with a `min` and `max` can be set.
 
 Volume is 0-100, applied live and remembered across restarts like the menu's.
 Answers are JSON; an error comes back as `{"error": ...}` with a 4xx status. The
-API has no authentication, which is why it stays on localhost. To reach it from
-another machine anyway, pass `--control-bind 0.0.0.0` (in `OVERLORD_ARGS` in
-`/etc/overlord.env`) and keep it off networks you don't trust. `--control-port N`
+API shares the dashboard's LAN-accessible default. Use `--control-bind 127.0.0.1`
+(in `OVERLORD_ARGS` in `/etc/overlord.env`) to restrict it to localhost.
+`--control-port N`
 moves it and `--control-port 0` turns it off. If the port is taken overlord logs
 that and carries on without the API.
 
