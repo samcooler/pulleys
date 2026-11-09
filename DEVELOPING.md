@@ -11,7 +11,7 @@
 | **Component state display** | D1 Mini ESP32-WROOM-32 | 8×32 WS2812B matrix, 256 LEDs (GPIO 16) | a Screen running its `components` display: one bar per game component |
 | **Extractor** | D1 Mini ESP32-WROOM-32 | two 32×8 panels as a 64×8 ring + a hanging strip, one chain (GPIO 16) | a Screen running an `extractor_<colour>` display: that colour's score as liquid, filling up the strip into the tank; the ring's top and bottom rows outlined at half brightness while a round wants its colour |
 | **Party lights** | ESP32 DevKit, 30-pin (classic) | none: four outputs (GPIO 32/33/25/26) to the AC light switches | a Screen running its `party` display: the room's lights, on for the victories |
-| **Diorama** | D1 Mini ESP32-WROOM-32 | LED strip (GPIO 16), door-latch SSR (GPIO 18, HIGH unlocks), door switch with pull-up (GPIO 27), "free the spirits" button to ground (GPIO 25) | a Screen running its `diorama` display: fluorescent tubes, the door latch and sensor, and the button, which flashes the tubes purple and tells the game |
+| **Diorama** | D1 Mini ESP32-WROOM-32 | LED strip (GPIO 13), door-latch SSR (GPIO 18, HIGH unlocks), door switch with pull-up (GPIO 27), "free the spirits" button to ground (GPIO 25) | a Screen running its `diorama` display: fluorescent tubes, the door latch and sensor, and the button, which flashes the tubes purple and tells the game |
 
 ## Build Environments
 
@@ -501,13 +501,15 @@ now and then; one is the bad tube and flickers far more. The tube model is
 `src/screen/main.cpp`.
 
 The game drives it through device settings (see Device settings below):
-`diorama.lights` (`dark` | `creepy`) and `diorama.latch` (`locked` | `open`).
-Today's game turns both on 10 s into `party` (game 1 won), with an `at:` step,
-and back off on entering `victory2` (game 2 won) or `passive` (back at the
-start). It hears `diorama.door_opened` and `diorama.door_closed` back.
+`diorama.lights` (`dark` | `creepy` | `paradise`) and `diorama.latch`
+(`locked` | `open`). Today's game turns both on 10 s into `party` (game 1 won),
+with an `at:` step. On entering `victory2` (game 2 won) the latch locks and the
+lights go to `paradise`: the same tube spacing, but slow rainbow fades that
+overlap, each tube breathing on its own phase. `kickout` and `passive` turn
+them dark and locked. It hears `diorama.door_opened` and `diorama.door_closed` back.
 
-Opening the door while the lights are on also turns the tubes to a running
-rainbow for 2 s, on the board so it is instant, then they shudder back to
+Opening the door while the lights are creepy also makes the tubes stutter a
+dim red for 2 s, on the board so it is instant, then they shudder back to
 their flicker. The latch is driven locked from the first line of `setup()`.
 
 Wiring and polarity are build flags in `[env:screen_diorama]`: `DIORAMA_LEDS`
@@ -516,7 +518,8 @@ Wiring and polarity are build flags in `[env:screen_diorama]`: `DIORAMA_LEDS`
 maglock) and `DIORAMA_DOOR_OPEN` (HIGH: the switch closes to ground when the
 door is shut). On the console, `d` toggles a bench override (lit and unlatched
 whatever the game says), `o` acts as if the door opened, `t r,g,b` tunes the
-tint live, and `S diorama.lights=creepy` behaves as if the arbiter had set it.
+tint live, and `S diorama.lights=creepy` (or `=paradise`) behaves as if the arbiter had set
+it.
 
 ## Party lights
 

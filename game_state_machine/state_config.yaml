@@ -81,7 +81,7 @@ components:
 devices:
   diorama:                          # its tubes, door latch, door switch, and the button inside
     set:
-      lights: [dark, creepy]
+      lights: [dark, creepy, paradise]   # paradise: slow rainbow fades, for the spirits freed
       latch: [locked, open]
     emits: [door_opened, door_closed, button_pressed]
   party:                            # the four AC light switches
@@ -522,7 +522,7 @@ states:
     on:
       enter:
         set:
-          diorama.lights: dark
+          diorama.lights: paradise    # the spirits have made it to paradise
           diorama.latch: locked
           party.lights: lit
         cue:
@@ -535,6 +535,8 @@ states:
     on:
       enter:
         set:
+          diorama.lights: dark
+          diorama.latch: locked
           party.lights: dark
         cue:
           - audio_loop_off

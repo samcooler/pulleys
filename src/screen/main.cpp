@@ -37,8 +37,9 @@
 //             ring, filling bottom to top with a sloshing surface. Five of
 //             them, one per colour but purple, on their own LED surface
 //   DIORAMA   — a strip of failing hospital fluorescents, dark until the game
-//             says so; it also unlatches the diorama's door and turns to
-//             rainbow when someone opens it. One board, built for it
+//             says so; it also unlatches the diorama's door, stutters dim
+//             red when someone opens it, and fades through rainbows once the
+//             spirits reach paradise. One board, built for it
 //   PARTY     — no LEDs at all: four outputs switching the room's AC lights,
 //             on while the game is in a victory. One board, built for it
 //
@@ -737,7 +738,9 @@ static void renderExtractor(uint32_t now, float dt) {
 // flicker), a latch on the diorama's door, and a switch that says whether the
 // door is open. The game drives it through two settings (pulleys_settings):
 //
-//   diorama.lights  dark | creepy     the tubes off, or striking up and flickering
+//   diorama.lights  dark | creepy | paradise
+//                     the tubes off; striking up and flickering; or, once the
+//                     spirits are free, slow rainbow fades drifting along them
 //   diorama.latch   locked | open     the door held, or released
 //
 // and sends three inputs back: diorama.door_opened, diorama.door_closed and
@@ -745,9 +748,14 @@ static void renderExtractor(uint32_t now, float dt) {
 // business (state_config.yaml), not this board's. Unset -- no game, or the arbiter silent past the lease -- is
 // dark and locked.
 //
-// Opening the door while the tubes are lit also turns them to a running
-// rainbow for DIORAMA_RAINBOW_MS, here on the board, so it is instant; the
-// room then jolts back to its flicker. The game hears the door all the same.
+// Opening the door while the tubes are lit (creepy) also makes them stutter a
+// dim red for DIORAMA_SCARE_MS, here on the board, so it is instant; the room
+// then jolts back to its flicker. The game hears the door all the same.
+//
+// Paradise keeps the tube-and-gap spacing but drops the failing-fluorescent
+// model: every tube breathes on its own phase while two hues cross-fade along
+// it, so the colours overlap and drift. It fades in and out over
+// DIORAMA_PARADISE_FADE_MS rather than striking.
 //
 // Inside is a button marked "free the spirits". It does not: pressed, the
 // tubes flash purple a few times, unevenly, for DIORAMA_PURPLE_MS -- here on
@@ -781,8 +789,14 @@ static void renderExtractor(uint32_t now, float dt) {
 #ifndef DIORAMA_BOOT_OPEN_MS
   #define DIORAMA_BOOT_OPEN_MS 3000    // unlatched this long at boot, then the game decides
 #endif
-#ifndef DIORAMA_RAINBOW_MS
-  #define DIORAMA_RAINBOW_MS   2000
+#ifndef DIORAMA_SCARE_MS
+  #define DIORAMA_SCARE_MS     2000    // the dim red stutter when the door opens
+#endif
+#ifndef DIORAMA_SCARE_LEVEL
+  #define DIORAMA_SCARE_LEVEL  90      // of 255: the red's brightest, before flicker
+#endif
+#ifndef DIORAMA_PARADISE_FADE_MS
+  #define DIORAMA_PARADISE_FADE_MS 3000
 #endif
 #ifndef DIORAMA_BUTTON_PIN
   #define DIORAMA_BUTTON_PIN   25      // "free the spirits"
@@ -805,7 +819,9 @@ static CRGB     dioramaTint     = CRGB(150, 255, 215);   // 't r,g,b' on serial 
 static bool     dioramaBench    = false;   // 'd': lit and open regardless of the game
 static bool     latchOpen       = false;
 static uint32_t bootOpenUntil   = 0;       // the boot unlatch; 0 once it is over
-static uint32_t rainbowUntil    = 0;       // 0 = not showing it
+static uint32_t scareUntil      = 0;       // 0 = not showing the red
+static float    paradiseLevel   = 0.0f;    // 0..1, the paradise fade
+static bool     paradiseOn      = false;
 static bool     doorOpen        = false;   // debounced
 static bool     doorRaw         = false;
 static uint32_t doorRawSince    = 0;
@@ -821,7 +837,7 @@ static void dioramaLatch(bool open) {
 }
 
 static void dioramaDoorOpened(uint32_t now) {
-    if (diorama.on) rainbowUntil = (now + DIORAMA_RAINBOW_MS) | 1;
+    if (diorama.on) scareUntil = (now + DIORAMA_SCARE_MS) | 1;
 }
 
 // "Free the spirits": the purple flash, and the game told. False if it was
@@ -830,7 +846,7 @@ static bool dioramaButtonPressed(uint32_t now) {
     if (purpleUntil && (int32_t)(purpleUntil - now) > 0) return false;
     purpleFrom  = now;
     purpleUntil = (now + DIORAMA_PURPLE_MS) | 1;
-    rainbowUntil = 0;
+    scareUntil = 0;
     pulleys::device_emit("diorama.button_pressed");
     Serial.println("  [DIORAMA] free the spirits: pressed");
     return true;
@@ -856,18 +872,23 @@ static void dioramaInit() {
 // all land here the same way.
 static void dioramaPoll(uint32_t now) {
     bool lit  = dioramaBench || pulleys::setting_is("diorama.lights", "creepy");
+    bool paradise = !lit && pulleys::setting_is("diorama.lights", "paradise");
+    if (paradise != paradiseOn) {
+        paradiseOn = paradise;
+        Serial.printf("  [DIORAMA] paradise %s\n", paradise ? "fading in" : "fading out");
+    }
     if (bootOpenUntil && (int32_t)(bootOpenUntil - now) <= 0) bootOpenUntil = 0;
     bool open = dioramaBench || bootOpenUntil || pulleys::setting_is("diorama.latch", "open");
     if (lit != diorama.on) {
         pulleys::diorama_switch(diorama, lit);
-        if (!lit) rainbowUntil = 0;
+        if (!lit) scareUntil = 0;
         Serial.printf("  [DIORAMA] lights %s\n", lit ? "on: striking" : "out");
     }
     if (open != latchOpen) {
         dioramaLatch(open);
         Serial.printf("  [DIORAMA] door %s\n", open ? "unlatched" : "latched");
     }
-    pulleys::device_report("diorama.lights", lit ? "creepy" : "dark");
+    pulleys::device_report("diorama.lights", lit ? "creepy" : paradise ? "paradise" : "dark");
     pulleys::device_report("diorama.latch",  open ? "open" : "locked");
 
     bool raw = digitalRead(DIORAMA_DOOR_PIN) == DIORAMA_DOOR_OPEN;
@@ -917,36 +938,78 @@ static bool dioramaPurple(uint32_t now) {
     return true;
 }
 
+// One tube's pixels, painted by `color(k)` with the dim cathode ends.
+template <typename F>
+static void dioramaPaintTube(uint8_t i, F color) {
+    uint16_t p0 = pulleys::diorama_tube_start(i);
+    for (uint8_t k = 0; k < pulleys::DIORAMA_TUBE_PX && p0 + k < DIORAMA_LEDS; k++) {
+        CRGB c = color(k);
+        if (k == 0 || k == pulleys::DIORAMA_TUBE_PX - 1) c.nscale8(DIORAMA_TUBE_END);
+        leds[p0 + k] = c;
+    }
+}
+
+// The door opened: each tube stutters a dim red, on and off at its own ragged
+// beat, a new roll every ~55 ms.
+static void renderDioramaScare(uint32_t now) {
+    uint32_t frame = now / 55;
+    for (uint8_t i = 0; i < diorama.tubes; i++) {
+        uint32_t h = (i + 1) * 2654435761u ^ frame * 2246822519u;
+        h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+        if (h % 10 < 4) continue;                                   // dark this beat
+        uint8_t level = DIORAMA_SCARE_LEVEL / 3 + (h >> 8) % (DIORAMA_SCARE_LEVEL * 2 / 3 + 1);
+        dioramaPaintTube(i, [&](uint8_t) { CRGB c(255, 6, 0); c.nscale8(level); return c; });
+    }
+}
+
+// Paradise: two hues cross-fading along each tube, the pair turning slowly
+// round the wheel, and every tube breathing on its own phase -- fades that
+// overlap rather than march in step.
+static void renderDioramaParadise(uint32_t now, float fade) {
+    float t = now / 1000.0f;
+    for (uint8_t i = 0; i < diorama.tubes; i++) {
+        float breath = 0.55f + 0.45f * sinf(t * 0.7f + i * 1.9f);
+        uint8_t v = (uint8_t)(DIORAMA_BRIGHTNESS * breath * fade);
+        uint8_t hueA = (uint8_t)(t * 9.0f + i * 23);
+        dioramaPaintTube(i, [&](uint8_t k) {
+            float w = 0.5f + 0.5f * sinf(t * 0.45f + i * 0.8f + k * 0.35f);
+            CRGB a = CHSV(hueA, 230, v);
+            CRGB b = CHSV(hueA + 85, 230, v);
+            return blend(a, b, (uint8_t)(w * 255));
+        });
+    }
+}
+
 static void renderDiorama(uint32_t now, float dt) {
     fill_solid(leds, LED_COUNT, CRGB::Black);   // the gaps between fixtures
     if (dioramaPurple(now)) {
         pulleys::diorama_step(diorama, dt);      // the tubes keep their own time underneath
         return;
     }
-    bool rainbow = rainbowUntil && (int32_t)(rainbowUntil - now) > 0;
-    if (rainbowUntil && !rainbow) {
-        rainbowUntil = 0;
+    float step = dt * 1000.0f / DIORAMA_PARADISE_FADE_MS;
+    paradiseLevel = paradiseOn ? fminf(1.0f, paradiseLevel + step) : fmaxf(0.0f, paradiseLevel - step);
+    pulleys::diorama_step(diorama, dt);
+    if (paradiseLevel > 0.0f) {
+        renderDioramaParadise(now, paradiseLevel);
+        return;
+    }
+    bool scare = scareUntil && (int32_t)(scareUntil - now) > 0;
+    if (scareUntil && !scare) {
+        scareUntil = 0;
         pulleys::diorama_jolt(diorama);   // and back to the flicker, with a shudder
     }
-    pulleys::diorama_step(diorama, dt);
-
-    uint8_t hue0 = (uint8_t)(now / 4);   // a full turn of the wheel each second
+    if (scare) {
+        renderDioramaScare(now);
+        return;
+    }
     for (uint8_t i = 0; i < diorama.tubes; i++) {
-        uint16_t p0 = pulleys::diorama_tube_start(i);
         float level = diorama.tube[i].level;
-        if (!rainbow && level <= 0.0f) continue;
-        for (uint8_t k = 0; k < pulleys::DIORAMA_TUBE_PX && p0 + k < DIORAMA_LEDS; k++) {
-            uint16_t p = p0 + k;
-            CRGB c;
-            if (rainbow) {
-                c = CHSV(hue0 + p * 6, 255, DIORAMA_BRIGHTNESS);
-            } else {
-                c = dioramaTint;
-                c.nscale8((uint8_t)(level * DIORAMA_BRIGHTNESS));
-                if (k == 0 || k == pulleys::DIORAMA_TUBE_PX - 1) c.nscale8(DIORAMA_TUBE_END);
-            }
-            leds[p] = c;
-        }
+        if (level <= 0.0f) continue;
+        dioramaPaintTube(i, [&](uint8_t) {
+            CRGB c = dioramaTint;
+            c.nscale8((uint8_t)(level * DIORAMA_BRIGHTNESS));
+            return c;
+        });
     }
 }
 #endif
