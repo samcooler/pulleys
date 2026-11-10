@@ -23,6 +23,10 @@ namespace pulleys {
 static constexpr uint8_t PCF85063_ADDR    = 0x51;
 static constexpr uint8_t PCF85063_CTRL1   = 0x00;
 static constexpr uint8_t PCF85063_SECONDS = 0x04;   // bit7 = OS (oscillator stopped)
+// PCF8563 / BM8563 (Elecrow CrowPanel Advance): same address, same seven-byte
+// sec..year layout with the stop flag (VL) in seconds bit 7 — it just starts
+// at 0x02. The month register's bit 7 is a century flag, already masked off.
+static constexpr uint8_t PCF8563_SECONDS  = 0x02;
 
 struct RtcTime {
     uint16_t year   = 2000;
@@ -35,6 +39,9 @@ struct RtcTime {
 
 class RTC {
 public:
+    // Where the seconds register lives; call before begin() for a PCF8563.
+    void setSecondsReg(uint8_t reg) { _sec = reg; }
+
     // Wire must already be begun.
     bool begin() {
         Wire.beginTransmission(PCF85063_ADDR);
@@ -48,13 +55,13 @@ public:
     // not to be believed.
     bool valid() {
         uint8_t s;
-        if (!readReg(PCF85063_SECONDS, s)) return false;
+        if (!readReg(_sec, s)) return false;
         return (s & 0x80) == 0;
     }
 
     bool now(RtcTime& t) {
         uint8_t b[7];
-        if (!readRegs(PCF85063_SECONDS, b, 7)) return false;
+        if (!readRegs(_sec, b, 7)) return false;
         t.second = bcd2dec(b[0] & 0x7F);
         t.minute = bcd2dec(b[1] & 0x7F);
         t.hour   = bcd2dec(b[2] & 0x3F);
@@ -76,7 +83,7 @@ public:
             dec2bcd(t.month),
             dec2bcd((uint8_t)(t.year % 100)),
         };
-        return writeRegs(PCF85063_SECONDS, b, 7);
+        return writeRegs(_sec, b, 7);
     }
 
     // "2026-08-30 22:58:27" — sorts correctly as text, which matters for a log.
@@ -87,6 +94,7 @@ public:
 
 private:
     bool _present = false;
+    uint8_t _sec = PCF85063_SECONDS;
 
     static uint8_t bcd2dec(uint8_t v) { return (uint8_t)((v >> 4) * 10 + (v & 0x0F)); }
     static uint8_t dec2bcd(uint8_t v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }

@@ -30,6 +30,49 @@
 #include "installui.h"
 #include "ui.h"
 
+// Two boards run this firmware:
+//   default                    Waveshare ESP32-S3-Touch-LCD-4.3 (CH422G expander,
+//                              PCF85063 RTC, microSD behind the expander)
+//   ARBITER_BOARD_CROWPANEL7   Elecrow CrowPanel Advance 7.0" (V1.2+): an STC8
+//                              microcontroller at I2C 0x30 owns the backlight
+//                              and touch power; BM8563 RTC; SD not used.
+#if defined(ARBITER_BOARD_CROWPANEL7)
+// From Elecrow's LovyanGFX_Driver.h for the Advance 7" (V1.2 through V1.5).
+#define LCD_DE    42
+#define LCD_VSYNC 41
+#define LCD_HSYNC 40
+#define LCD_PCLK  39
+#define LCD_D0  21   // B0
+#define LCD_D1  47   // B1
+#define LCD_D2  48   // B2
+#define LCD_D3  45   // B3
+#define LCD_D4  38   // B4
+#define LCD_D5   9   // G0
+#define LCD_D6  10   // G1
+#define LCD_D7  11   // G2
+#define LCD_D8  12   // G3
+#define LCD_D9  13   // G4
+#define LCD_D10 14   // G5
+#define LCD_D11  7   // R0
+#define LCD_D12 17   // R1
+#define LCD_D13 18   // R2
+#define LCD_D14  3   // R3
+#define LCD_D15 46   // R4
+#define LCD_FREQ       18000000
+#define LCD_SYNC_POL   1
+#define LCD_PCLK_IDLE  1
+
+#define TOUCH_SDA 15
+#define TOUCH_SCL 16
+
+// The STC8 takes a single command byte: 0 = full backlight ... 245 = off,
+// 250 = power up the touch controller.
+#define PANEL_MCU_ADDR     0x30
+#define PANEL_MCU_TOUCH_ON 250
+#ifndef ARBITER_BACKLIGHT
+#define ARBITER_BACKLIGHT  0
+#endif
+#else
 // ── Display pin mapping — from board schematic ────────────────────────────────
 // Control
 #define LCD_DE     5    // Data Enable
@@ -61,6 +104,12 @@
 #define LCD_D13 42   // R5
 #define LCD_D14 41   // R6
 #define LCD_D15 40   // R7
+// 16 MHz. Dropping to 12 to ease PSRAM contention blanked the panel to solid
+// white: this glass has a minimum pixel clock and loses sync below it, so
+// bandwidth has to be won elsewhere.
+#define LCD_FREQ       16000000
+#define LCD_SYNC_POL   0
+#define LCD_PCLK_IDLE  0
 
 // Touch (GT911) — RST is on CH422G GPIO expander (handled separately)
 #define TOUCH_SDA  8
@@ -78,6 +127,7 @@
 // enters SPI mode by seeing CS low during CMD0, so a permanently asserted
 // select is what the card wants anyway.
 #define SD_CS_DUMMY 15
+#endif
 
 #define LCD_WIDTH    800
 #define LCD_HEIGHT   480
@@ -117,21 +167,18 @@ public:
             cfg.pin_vsync         = LCD_VSYNC;
             cfg.pin_hsync         = LCD_HSYNC;
             cfg.pin_pclk          = LCD_PCLK;
-            // 16 MHz. Dropping to 12 to ease PSRAM contention blanked the
-            // panel to solid white: this glass has a minimum pixel clock and
-            // loses sync below it, so bandwidth has to be won elsewhere.
-            cfg.freq_write        = 16000000;
-            cfg.hsync_polarity    = 0;
+            cfg.freq_write        = LCD_FREQ;
+            cfg.hsync_polarity    = LCD_SYNC_POL;
             cfg.hsync_front_porch = 8;
             cfg.hsync_pulse_width = 4;
             cfg.hsync_back_porch  = 8;
-            cfg.vsync_polarity    = 0;
+            cfg.vsync_polarity    = LCD_SYNC_POL;
             cfg.vsync_front_porch = 8;
             cfg.vsync_pulse_width = 4;
             cfg.vsync_back_porch  = 8;
             cfg.pclk_active_neg   = 1;
             cfg.de_idle_high      = 0;
-            cfg.pclk_idle_high    = 0;
+            cfg.pclk_idle_high    = LCD_PCLK_IDLE;
             _bus_instance.config(cfg);
             _panel_instance.setBus(&_bus_instance);
         }
@@ -285,15 +332,49 @@ void setup() {
         Serial.println(found ? "" : " none");
     }
 
+#if defined(ARBITER_BOARD_CROWPANEL7)
+    // ── Panel microcontroller ─────────────────────────────────────────────────
+    // The STC8 holds the touch controller unpowered until it is told otherwise;
+    // Elecrow's bring-up also pulses GPIO1 low to latch the GT911 address.
+    {
+        auto mcu = [](uint8_t cmd) {
+            Wire.beginTransmission(PANEL_MCU_ADDR);
+            Wire.write(cmd);
+            return Wire.endTransmission() == 0;
+        };
+        auto present = [](uint8_t a) {
+            Wire.beginTransmission(a);
+            return Wire.endTransmission() == 0;
+        };
+        for (int tries = 0; tries < 20 && !(present(PANEL_MCU_ADDR) && present(pulleys::GT911_ADDR)); tries++) {
+            mcu(PANEL_MCU_TOUCH_ON);
+            pinMode(1, OUTPUT);
+            digitalWrite(1, LOW);
+            delay(120);
+            pinMode(1, INPUT);
+            delay(100);
+        }
+        bool bl = mcu(ARBITER_BACKLIGHT);
+        Serial.printf("  [PANEL] MCU 0x%02X %s, backlight=%d %s\n", PANEL_MCU_ADDR,
+                      present(PANEL_MCU_ADDR) ? "present" : "MISSING",
+                      ARBITER_BACKLIGHT, bl ? "set" : "FAILED");
+    }
+    // BM8563 (PCF8563-compatible) at the same 0x51 address.
+    s_rtc.setSecondsReg(pulleys::PCF8563_SECONDS);
+    s_rtc.begin();
+    clocksrc_init(&s_rtc);
+#else
     // ── Real-time clock ───────────────────────────────────────────────────────
     // Confirmed a PCF85063 by watching register 0x04 tick in BCD. Seconds at
     // 0x04 rather than 0x02 is what tells it apart from a PCF8563.
     s_rtc.begin();
     clocksrc_init(&s_rtc);
+#endif
 
     s_touch.setBounds(LCD_WIDTH, LCD_HEIGHT);
     if (!s_touch.begin()) Serial.println("  [TOUCH] GT911 not found — clock UI unusable");
 
+#if !defined(ARBITER_BOARD_CROWPANEL7)
     // ── microSD ───────────────────────────────────────────────────────────────
     // Must run before display.init(): LovyanGFX's GT911 driver takes over I2C
     // port 0, after which Arduino's Wire can no longer reach the expander.
@@ -373,6 +454,7 @@ void setup() {
             }
         }
     }
+#endif
 
     bool ok = display.init();
     Serial.printf("  display.init(): %s  (%dx%d)\n",
@@ -430,7 +512,9 @@ void setup() {
     monitor_init();
     installcfg_init();
     installation_init();
+#if !defined(ARBITER_BOARD_CROWPANEL7)   // no SD card on this board
     eventlog_init(&s_rtc);
+#endif
     // The monitor has one hook slot; the SD log, the mapping screen and the
     // game all want every event. The log keeps every pull, mapping or not; the
     // game gets none while the mapping screen holds the ropes. Remap acks are

@@ -196,7 +196,7 @@ class_env() {
 # its hardware class calls for instead.
 is_current_env() {
   case "$1" in
-    sensor|screen|component_state_display|screen_extractor|screen_diorama|screen_party|bridge|bridge_esp32|arbiter_mesh) return 0 ;;
+    sensor|screen|component_state_display|screen_extractor|screen_diorama|screen_party|bridge|bridge_esp32|arbiter_mesh|arbiter_crowpanel7) return 0 ;;
     *)                          return 1 ;;
   esac
 }
@@ -214,7 +214,7 @@ role_for() {
 
 class_roles() {
   case "$1" in
-    s3_16mb) echo "arbiter_mesh"           ;;
+    s3_16mb) echo "arbiter_mesh or arbiter_crowpanel7" ;;
     s3_4mb)  echo "sensor (traveler dep.)" ;;
     c3)      echo "bridge (station dep.)"  ;;
     esp32)   echo "screen, component_state_display, screen_extractor, screen_diorama or screen_party (st_wroom dep.)" ;;

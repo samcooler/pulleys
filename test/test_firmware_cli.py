@@ -31,7 +31,7 @@ def snapshot():
 def image_fixture(directory, env="sensor"):
     data = bytearray(128)
     data[0] = 0xe9
-    data[12:14] = (9 if env in {"sensor", "arbiter_mesh"} else 5 if env == "bridge" else 0).to_bytes(2, "little")
+    data[12:14] = (9 if env == "sensor" or env.startswith("arbiter") else 5 if env == "bridge" else 0).to_bytes(2, "little")
     data[32:96] = b"a" * 64
     data = bytes(data)
     item = {"asset": env + "-firmware.bin", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
@@ -94,7 +94,7 @@ class CLITests(unittest.TestCase):
         with patch.object(cli, "build_development") as build, patch.object(cli, "request") as request:
             code, _, _ = self.invoke(["build", "--type", "screen,bridge"])
             self.assertEqual(code, 0)
-            self.assertEqual(set(build.call_args.args[0]), set(bundles.ENVS) - {"sensor", "arbiter_mesh"})
+            self.assertEqual(set(build.call_args.args[0]), set(bundles.ENVS) - {"sensor", "arbiter_mesh", "arbiter_crowpanel7"})
             request.assert_not_called()
 
     def test_ids_build_shared_environment_only_once(self):

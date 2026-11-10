@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-ENVS = ("sensor", "screen", "component_state_display", "screen_extractor", "screen_diorama", "screen_party", "arbiter_mesh", "bridge", "bridge_esp32")
+ENVS = ("sensor", "screen", "component_state_display", "screen_extractor", "screen_diorama", "screen_party", "arbiter_mesh", "arbiter_crowpanel7", "bridge", "bridge_esp32")
 
 
 def pio_path():

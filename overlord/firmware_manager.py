@@ -250,7 +250,7 @@ class FirmwareManager:
             raise ValueError("image size or SHA-256 does not match manifest")
         if hashlib.md5(data).hexdigest() != image["md5"]:
             raise ValueError("image MD5 does not match manifest")
-        chip = 9 if env in {"sensor", "arbiter_mesh"} else 5 if env == "bridge" else 0
+        chip = 9 if env == "sensor" or env.startswith("arbiter") else 5 if env == "bridge" else 0
         if data[0] != 0xE9 or int.from_bytes(data[12:14], "little") != chip:
             raise ValueError("binary chip type does not match firmware environment")
         if image["build_hash"].encode() not in data:
