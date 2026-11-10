@@ -282,8 +282,21 @@ if [[ ${#ONLY_PORTS[@]} -gt 0 ]]; then
   ports=("${ONLY_PORTS[@]}")
   if [[ "$LIST_ONLY" == true ]]; then echo "Ports: ${ports[*]}"; exit 0; fi
 else
-  candidates=(/dev/cu.usbmodem*(N) /dev/cu.usbserial*(N))
-  if [[ ${#candidates[@]} -eq 0 ]]; then echo "No USB serial ports found."; exit 1; fi
+  candidates=(/dev/cu.usbmodem*(N) /dev/cu.usbserial*(N) /dev/cu.wchusbserial*(N))
+  if [[ ${#candidates[@]} -eq 0 ]]; then
+    echo "No USB serial ports found."
+    # A CrowPanel's CH340K (1a86:7522) gets no port without WCH's driver, which
+    # a managed Mac may refuse. tools/ch340_flash.py reaches it over libusb.
+    if ioreg -p IOUSB -l 2>/dev/null | grep -q '"idProduct" = 29986'; then
+      echo "A CH340K (CrowPanel arbiter) is on USB with no port: going through libusb."
+      if [[ "$ENV" == "arbiter_crowpanel7" && "$LIST_ONLY" == false && "$RESET_ONLY" == false ]]; then
+        exec "$PYTHON" "${0:A:h}/tools/ch340_flash.py" flash "$ENV"
+      fi
+      echo "  flash:  $PYTHON tools/ch340_flash.py flash arbiter_crowpanel7"
+      echo "  whoami: $PYTHON tools/ch340_flash.py whoami"
+    fi
+    exit 1
+  fi
   echo "Identifying ${#candidates[@]} board(s) over serial…"
   gather "${candidates[@]}"
   print_header
