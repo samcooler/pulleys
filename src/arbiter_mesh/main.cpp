@@ -58,7 +58,11 @@
 #define LCD_D13 18   // R2
 #define LCD_D14  3   // R3
 #define LCD_D15 46   // R4
-#define LCD_FREQ       18000000
+// Elecrow's examples say 18 MHz, but LovyanGFX divides PCLK from 240 MHz and
+// 240/18 needs a fractional divider: uneven pixel clock periods made the whole
+// image jitter left and right. 16 MHz (exact 240/15) still shook slightly —
+// PSRAM scan-out pressure — and 15 MHz (240/16) is steady.
+#define LCD_FREQ       15000000
 #define LCD_SYNC_POL   1
 #define LCD_PCLK_IDLE  1
 
