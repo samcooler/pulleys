@@ -32,7 +32,7 @@ static LGFX_Sprite*         s_frame   = nullptr;
 static pulleys::CardPlayer* s_player  = nullptr;
 static lv_obj_t*            s_btn     = nullptr;
 
-static bool     s_showing      = true;    // the sign, from boot, if the game has one
+static bool     s_showing      = false;   // boots on the monitor; the idle timer brings the sign
 static bool     s_available    = false;   // this game has a queue.sign
 static bool     s_toMonitor    = false;   // unlocked: hand over once the finger lifts
 static bool     s_down         = false;

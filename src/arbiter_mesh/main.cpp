@@ -473,7 +473,7 @@ void setup() {
     ui_init();
     clockui_init(&s_rtc);
     installui_init();
-    signui_init(&display, &s_touch);   // the sign is up from boot, if the game has one
+    signui_init(&display, &s_touch);   // the monitor first; the sign after 5 min untouched
     // Last, so the game's opening cues go out onto a mesh that is up.
     devices_init();
     components_init();

@@ -6,6 +6,9 @@
 
 // ── Queue sign — the arbiter's screen as a sign for the line outside ─────────
 //
+// The arbiter boots on the monitor, for whoever is setting up, and the sign
+// comes up once the monitor has gone 5 minutes untouched.
+//
 // The game says what the sign shows with the device setting `queue.sign`
 // (sign_messages.h has the words for each value). While the sign is up it has
 // the whole screen: LVGL is paused and the cards are drawn straight to the

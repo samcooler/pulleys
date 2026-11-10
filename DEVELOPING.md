@@ -618,9 +618,11 @@ back one, `h` holds on the current one, `c` lists the channels, and
 
 ## Queue sign
 
-The arbiter's screen doubles as the sign at the front of the installation.
-From boot it shows a text card for the queue instead of the monitor: words on
-a solid colour, drawn the same way as the television's (`lib/pulleys_textcard`).
+The arbiter's screen doubles as the sign at the front of the installation: a
+text card for the queue in place of the monitor, words on a solid colour,
+drawn the same way as the television's (`lib/pulleys_textcard`). It boots on
+the monitor, for whoever is setting up, and the sign comes up once the monitor
+has gone 5 minutes untouched (`ARBITER_SIGN_IDLE_MS`).
 The game picks what it says with the device setting `queue.sign`, a setting of
 the arbiter itself rather than of a device on the mesh; today's game sets
 `enter` in `passive` and `wait` from the start of `easy_round` until it is back
@@ -634,8 +636,8 @@ the screen's four quadrants in the secret order -- by default top left, bottom
 right, bottom left, top right, each within 3 s of the last
 (`ARBITER_SIGN_UNLOCK` in `src/arbiter_mesh/signui.cpp`). Nothing on screen
 answers a tap. The monitor has a red SIGN button at the top right to put the
-sign back, and the sign returns by itself after 5 minutes with no touch and no
-install screen open. `Q` on the serial console swaps them without the taps.
+sign back at once; otherwise it returns by itself after 5 minutes with no touch
+and no install screen open. `Q` on the serial console swaps them without the taps.
 A game with no `queue.sign` has no sign: the monitor stays up.
 
 ## Device settings
