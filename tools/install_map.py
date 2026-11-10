@@ -63,7 +63,7 @@ COLUMNS = {
                                    "SCREEN_EXTRACTOR_RED", "SCREEN_EXTRACTOR_BLUE",
                                    "SCREEN_EXTRACTOR_GREEN", "SCREEN_EXTRACTOR_YELLOW",
                                    "SCREEN_EXTRACTOR_ORANGE", "SCREEN_DIORAMA",
-                                   "SCREEN_PARTY"], "spread", 0)],
+                                   "SCREEN_PARTY", "SCREEN_TELEVISION"], "spread", 0)],
 }
 
 KINDS = {

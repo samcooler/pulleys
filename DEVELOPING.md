@@ -26,6 +26,7 @@
 | `screen_extractor` | D1 Mini ESP32-WROOM-32 | the screen image on the extractor surface (ring + strip), default env |
 | `screen_party` | ESP32 DevKit, 30-pin (`esp32dev`) | the screen image pinned to PARTY: four AC light switches, no LEDs, default env |
 | `screen_diorama` | D1 Mini ESP32-WROOM-32 | the screen image pinned to DIORAMA, on its strip, latch and door switch, default env |
+| `screen_television` | Waveshare ESP32-S3-Touch-LCD-4.3 (the `arbiter_mesh` board) | its own image, not the screen's: a Screen on the mesh showing text messages on solid colours, default env |
 
 ```sh
 pio run                      # build traveler + station (defaults)
@@ -536,6 +537,36 @@ build with `-D PARTY_ON=LOW`; the pins are `PARTY_PINS` in
 `[env:screen_party]`. On the console, `p` toggles a bench override (lit
 whatever the game says) and `S party.lights=lit` behaves as if the arbiter had
 set it.
+
+## Television
+
+One board: the TV set inside the diorama, built as `screen_television` on the
+same Waveshare 4.3" LCD board the arbiter uses. It is a Screen on the mesh --
+it relays, answers census as `television`, and takes firmware updates -- but
+it is its own firmware (`src/television`), not the screen image, because its
+surface is an 800x480 LCD rather than LEDs. The panel driver is
+`lib/pulleys_lcd`, shared with the arbiter.
+
+It shows one message at a time: text, wrapped, centred and as large as fits,
+on a solid colour. The messages are the `TV_MESSAGES` table in
+`src/television/messages.h`, and each is on a channel: text (`\n` forces a line
+break), background and text colour as `0xRRGGBB`, and seconds to hold. The set
+plays its channel's messages in order, fading through black between them, and
+starts over at the end; a channel of one message just holds it.
+
+The game picks the channel with one device setting (see Device settings
+below), `television.channel`: a channel name, or `dark` for the screen off,
+backlight and all. A change fades straight to the new channel's first message.
+Unset -- no game yet, or the arbiter silent past the lease -- it plays
+`TV_DEFAULT_CHANNEL` (`idle`). It reports the channel it is showing back to the
+arbiter. The values listed for `television.channel` in the game file must be
+exactly the firmware's channels plus `dark`; `test/test_television.py` checks
+that, so adding a channel means adding it in both places.
+
+On the console, `n` changes to the next message on the channel now, `b` goes
+back one, `h` holds on the current one, `c` lists the channels, and
+`S television.channel=janis` behaves as if the arbiter had set it.
+`-D TV_FADE_MS=0` makes every change a hard cut.
 
 ## Device settings
 

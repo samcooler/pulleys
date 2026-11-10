@@ -87,6 +87,9 @@ devices:
   party:                            # the four AC light switches
     set:
       lights: [dark, lit]
+  television:                       # the TV set in the diorama: text on colour (src/television)
+    set:
+      channel: [idle, dark, janis, paradise]   # a channel of messages.h; dark = screen off
 
 # The values the game is tuned by. A state uses one as $name wherever a delay or
 # a count goes. One with a min and a max is a knob: the playtest tuner and the

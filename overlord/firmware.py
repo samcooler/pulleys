@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 
 ACTIVE_ENVS = {"sensor", "screen", "component_state_display", "arbiter_mesh", "bridge"}
-OPTIONAL_ENVS = {"screen_extractor", "screen_diorama", "screen_party", "bridge_esp32", "arbiter_crowpanel7"}
+OPTIONAL_ENVS = {"screen_extractor", "screen_diorama", "screen_party", "screen_television", "bridge_esp32", "arbiter_crowpanel7"}
 CACHE = Path(os.environ.get("OVERLORD_FIRMWARE_CACHE",
                             str(Path.home() / ".cache" / "overlord" / "firmware")))
 
