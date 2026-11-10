@@ -230,7 +230,23 @@ ls /dev/cu.usb*
 Common patterns:
 - `/dev/cu.usbmodem*` — ESP32-S3 in USB CDC mode (traveler)
 - `/dev/cu.usbserial-*` — UART bridge boards (some stations)
-- `/dev/cu.wchusbserial*` — CH340 UART (XIAO C3)
+- `/dev/cu.wchusbserial*` — CH340 UART (XIAO C3; the CrowPanel arbiter, with WCH's driver)
+
+The CrowPanel arbiter (`arbiter_crowpanel7`) is a CH340K (USB `1a86:7522`),
+which macOS's own driver does not take, so it has no port until WCH's
+CH34xVCPDriver is installed and enabled (System Settings → General → Login
+Items & Extensions → Driver Extensions; a managed Mac may refuse it). Without
+the driver, `tools/ch340_flash.py` reaches the board over libusb instead, and
+`./flash_all.sh arbiter_crowpanel7` hands off to it when it finds no port:
+
+```bash
+~/.platformio/penv/bin/python -m pip install pyusb    # once; needs brew install libusb
+~/.platformio/penv/bin/python tools/ch340_flash.py flash      # build + flash arbiter_crowpanel7
+~/.platformio/penv/bin/python tools/ch340_flash.py whoami     # the PULLEYS-ID line
+~/.platformio/penv/bin/python tools/ch340_flash.py monitor --reset --seconds 15
+```
+
+With the driver enabled it owns the chip and the tool cannot claim it: use the port.
 
 ### Pinning Upload Ports
 
