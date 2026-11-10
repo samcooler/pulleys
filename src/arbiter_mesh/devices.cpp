@@ -2,6 +2,7 @@
 #include "gamestate.h"
 #include <pulleys_mesh.h>
 #include <pulleys_settings.h>
+#include <pulleys_identity.h>
 
 #define DEV_PREFIX "  [DEVICES]"
 
@@ -219,6 +220,21 @@ void devices_set(const char* key, const char* value) {
             publish(true);
             return;
         }
+    }
+}
+
+const char* devices_want(const char* key) {
+    for (uint8_t i = 0; i < s_setCount; i++)
+        if (strcmp(s_set[i].key, key) == 0) return s_set[i].values[s_set[i].want].as<const char*>();
+    return nullptr;
+}
+
+void devices_report_local(const char* key, const char* value) {
+    for (uint8_t i = 0; i < s_setCount; i++) {
+        if (strcmp(s_set[i].key, key) != 0) continue;
+        s_set[i].isHash = pulleys::settings_hash(value);
+        s_set[i].isAt   = millis();
+        s_set[i].isFrom = pulleys::identity_id();
     }
 }
 

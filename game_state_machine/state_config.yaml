@@ -90,6 +90,9 @@ devices:
   television:                       # the TV set in the diorama: text on colour (src/television)
     set:
       channel: [idle, dark, janis, paradise]   # a channel of messages.h; dark = screen off
+  queue:                            # the arbiter's own screen, as a sign for the line outside
+    set:
+      sign: [enter, wait, closed]   # a channel of src/arbiter_mesh/sign_messages.h
 
 # The values the game is tuned by. A state uses one as $name wherever a delay or
 # a count goes. One with a min and a max is a knob: the playtest tuner and the
@@ -336,6 +339,7 @@ states:
           diorama.lights: dark
           diorama.latch: locked
           party.lights: dark
+          queue.sign: enter           # nobody inside: let the next group in
         cue:
           - audio_loop_idle
           - video_loop_idle
@@ -357,6 +361,7 @@ states:
   easy_round:
     on:
       enter:
+        set: { queue.sign: wait }     # a group is in; it stays wait until passive
         goals: $easy_goals            # deal this many goal colours
         cue:
           - game_reset_components

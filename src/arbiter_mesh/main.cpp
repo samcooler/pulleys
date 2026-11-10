@@ -26,6 +26,7 @@
 #include "installmap.h"
 #include "installui.h"
 #include "ui.h"
+#include "signui.h"
 
 // Two boards run this firmware:
 //   default                    Waveshare ESP32-S3-Touch-LCD-4.3 (CH422G expander,
@@ -76,9 +77,10 @@ static pulleys::RTC   s_rtc;
 static pulleys::GT911 s_touch;
 static bool           s_touchDebug = false;
 
-// Serial console: T<YYYYMMDDHHMMSS> sets the clock. Fixed width so there is no
-// ambiguity about field order, and local wall time rather than epoch because
-// time-of-day is the question the log exists to answer. V lists every device
+// Serial console: Q swaps the queue sign and the monitor (signui.h).
+// T<YYYYMMDDHHMMSS> sets the clock. Fixed width so there is no ambiguity about
+// field order, and local wall time rather than epoch because time-of-day is
+// the question the log exists to answer. V lists every device
 // setting, wanted against reported; "g diorama.door_opened" injects a device's
 // input the way "g <event>" injects a game event.
 static void handleSerial() {
@@ -142,6 +144,9 @@ static void handleSerial() {
                 float value = 0;
                 if (sscanf(buf + 6, "%23s %f", name, &value) != 2 || !gamestate_set_param(name, value))
                     Serial.println("  [GAME] usage: PARAM <name> <value>  (a param with a min and max)");
+            } else if (buf[0] == 'Q') {
+                // The queue sign, or the monitor behind it, without the secret taps
+                signui_show(!signui_showing());
             } else if (buf[0] == 'V') {
                 devices_print();
             } else if (buf[0] == 'D') {
@@ -165,6 +170,7 @@ static lv_color_t         buf1[LCD_WIDTH * LCD_BUF_LINES];
 static void lvgl_touch_read(lv_indev_drv_t* /*drv*/, lv_indev_data_t* data) {
     uint16_t tx, ty;
     if (s_touch.readSticky(tx, ty)) {
+        signui_note_touch();
         data->point.x = (lv_coord_t)tx;
         data->point.y = (lv_coord_t)ty;
         data->state   = LV_INDEV_STATE_PR;
@@ -399,6 +405,7 @@ void setup() {
     ui_init();
     clockui_init(&s_rtc);
     installui_init();
+    signui_init(&display, &s_touch);   // the sign is up from boot, if the game has one
     // Last, so the game's opening cues go out onto a mesh that is up.
     devices_init();
     components_init();
@@ -443,7 +450,8 @@ void loop() {
     installui_tick();
     bool modal = clockui_is_open() || installui_is_open();
     if (!modal) ui_tick();
-    lv_timer_handler();
+    // The queue sign draws itself; LVGL must not paint over it meanwhile.
+    if (!signui_tick(now, modal)) lv_timer_handler();
 
     if (now - last_ui >= 750 && !modal) {
         last_ui = now;

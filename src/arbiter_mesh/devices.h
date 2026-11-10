@@ -29,6 +29,12 @@ void devices_init();                       // once, after mesh_init
 void devices_load(JsonDocument& doc);      // the adopted game: every setting at its first value
 void devices_set(const char* key, const char* value);   // validated on load
 void devices_tick();                       // every loop: the once-a-second repeat
+// What the game wants a setting to be, or nullptr if this game has no such
+// setting. For a device that is the arbiter itself (the queue sign).
+const char* devices_want(const char* key);
+// The arbiter's own device saying what it is doing, as a mesh device's
+// report would: so the panel and /state see it as fact, not as silent.
+void devices_report_local(const char* key, const char* value);
 void devices_print();                      // console: wanted vs reported, per setting
 String devices_json();                     // {"diorama.lights":{"want":"creepy","is":"creepy","ageS":3}, ...}
 // One line for the panel: "devices: 3/3 as set", or the first that is not

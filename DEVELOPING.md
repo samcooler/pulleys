@@ -568,6 +568,28 @@ back one, `h` holds on the current one, `c` lists the channels, and
 `S television.channel=janis` behaves as if the arbiter had set it.
 `-D TV_FADE_MS=0` makes every change a hard cut.
 
+## Queue sign
+
+The arbiter's screen doubles as the sign at the front of the installation.
+From boot it shows a text card for the queue instead of the monitor: words on
+a solid colour, drawn the same way as the television's (`lib/pulleys_textcard`).
+The game picks what it says with the device setting `queue.sign`, a setting of
+the arbiter itself rather than of a device on the mesh; today's game sets
+`enter` in `passive` and `wait` from the start of `easy_round` until it is back
+in `passive`. The words for each value are `SIGN_MESSAGES` in
+`src/arbiter_mesh/sign_messages.h`, a channel per value like the television's
+(`test/test_television.py` checks they match the game file).
+
+While the sign is up it has the whole screen and LVGL is paused, so the
+monitor's buttons are out of the public's reach. To get to the monitor, tap
+the screen's four quadrants in the secret order -- by default top left, bottom
+right, bottom left, top right, each within 3 s of the last
+(`ARBITER_SIGN_UNLOCK` in `src/arbiter_mesh/signui.cpp`). Nothing on screen
+answers a tap. The monitor has a red SIGN button at the top right to put the
+sign back, and the sign returns by itself after 5 minutes with no touch and no
+install screen open. `Q` on the serial console swaps them without the taps.
+A game with no `queue.sign` has no sign: the monitor stays up.
+
 ## Device settings
 
 How the game drives things in the room that are not media -- lights, latches --

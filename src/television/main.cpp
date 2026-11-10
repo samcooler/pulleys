@@ -10,6 +10,7 @@
 #include <pulleys_census.h>
 #include <pulleys_install.h>
 #include <pulleys_settings.h>
+#include <pulleys_textcard.h>
 #include "messages.h"
 
 // ── Television — the TV set inside the diorama ────────────────────────────────
@@ -42,9 +43,6 @@
 #ifndef TV_FADE_MS
 #define TV_FADE_MS   350     // each way, through black; 0 = a hard cut
 #endif
-#define TV_MARGIN    48      // px kept clear on every side
-#define TV_MAX_LINES 12
-#define TV_LINE_LEN  128
 
 #if defined(ARBITER_BOARD_CROWPANEL7)
 #define PANEL_MCU_ADDR 0x30  // STC8: 0 = full backlight ... 245 = off
@@ -57,86 +55,7 @@
 
 static pulleys::LcdPanel display;
 static LGFX_Sprite       frame(&display);   // drawn whole, then pushed: no half-drawn frames
-
-// Largest first; the first that fits the message wins.
-static const lgfx::IFont* const FONTS[] = {
-    &fonts::DejaVu72, &fonts::DejaVu56, &fonts::DejaVu40,
-    &fonts::DejaVu24, &fonts::DejaVu18, &fonts::DejaVu12,
-};
-
-// ── Layout ────────────────────────────────────────────────────────────────────
-static char  lines[TV_MAX_LINES][TV_LINE_LEN];
-static uint8_t lineCount = 0;
-static const lgfx::IFont* font = FONTS[0];
-
-// Greedy word wrap of `text` at the current font. False if it does not fit:
-// too many lines, too tall, or one word wider than the screen on its own.
-static bool wrap(const char* text) {
-    const int maxW = LCD_WIDTH - 2 * TV_MARGIN;
-    lineCount = 0;
-    char cur[TV_LINE_LEN] = "";
-    const char* p = text;
-    while (true) {
-        // Next word, and what ends it.
-        while (*p == ' ') p++;
-        const char* w = p;
-        while (*p && *p != ' ' && *p != '\n') p++;
-        size_t wl = p - w;
-        if (wl > 0) {
-            char trial[TV_LINE_LEN];
-            size_t cl = strlen(cur);
-            if (cl + 1 + wl >= TV_LINE_LEN) return false;
-            snprintf(trial, sizeof(trial), cl ? "%s %.*s" : "%s%.*s", cur, (int)wl, w);
-            if (frame.textWidth(trial) <= maxW) {
-                strcpy(cur, trial);
-            } else {
-                if (cl == 0) return false;                    // the word alone is too wide
-                if (lineCount >= TV_MAX_LINES) return false;
-                strcpy(lines[lineCount++], cur);
-                snprintf(cur, sizeof(cur), "%.*s", (int)wl, w);
-                if (frame.textWidth(cur) > maxW) return false;
-            }
-        }
-        if (*p == '\n' || *p == 0) {
-            if (lineCount >= TV_MAX_LINES) return false;
-            strcpy(lines[lineCount++], cur);
-            cur[0] = 0;
-            if (*p == 0) break;
-            p++;
-        }
-    }
-    return lineCount * frame.fontHeight() <= LCD_HEIGHT - 2 * TV_MARGIN;
-}
-
-static void layout(const TvMessage& m) {
-    for (const lgfx::IFont* f : FONTS) {
-        font = f;
-        frame.setFont(f);
-        if (wrap(m.text)) return;
-    }
-    Serial.printf("  [TV] \"%s\" does not fit even at the smallest size: clipped\n", m.text);
-}
-
-// ── Drawing ───────────────────────────────────────────────────────────────────
-static uint16_t dim565(uint32_t rgb, uint16_t level) {   // level 0..256
-    uint8_t r = ((rgb >> 16) & 0xFF) * level >> 8;
-    uint8_t g = ((rgb >> 8)  & 0xFF) * level >> 8;
-    uint8_t b = ( rgb        & 0xFF) * level >> 8;
-    return lgfx::color565(r, g, b);
-}
-
-static void draw(const TvMessage& m, uint16_t level) {
-    uint16_t bg = dim565(m.bg, level);
-    frame.fillScreen(bg);
-    frame.setFont(font);
-    frame.setTextColor(dim565(m.fg, level), bg);
-    frame.setTextDatum(lgfx::top_center);
-    int lh = frame.fontHeight();
-    int y  = (LCD_HEIGHT - lineCount * lh) / 2;
-    for (uint8_t i = 0; i < lineCount; i++, y += lh)
-        frame.drawString(lines[i], LCD_WIDTH / 2, y);
-    frame.pushSprite(0, 0);
-}
+static pulleys::CardPlayer player(frame, TV_MESSAGES, TV_MESSAGE_COUNT, TV_FADE_MS);
 
 // ── Backlight ─────────────────────────────────────────────────────────────────
 // `dark` should look off: a black frame on a lit LCD still glows in a dark box.
@@ -154,36 +73,7 @@ static bool backlight(bool on) {
 #endif
 }
 
-// ── Channels ──────────────────────────────────────────────────────────────────
-// A channel is named by its setting value's hash, the way it arrives; 0 is off.
-static constexpr uint16_t OFF = 0;
-
-static uint16_t channelOf(uint8_t i) { return pulleys::settings_hash(TV_MESSAGES[i].channel); }
-
-static const char* channelName(uint16_t ch) {
-    if (ch == OFF) return TV_OFF;
-    for (uint8_t i = 0; i < TV_MESSAGE_COUNT; i++)
-        if (channelOf(i) == ch) return TV_MESSAGES[i].channel;
-    return "?";
-}
-
-static bool channelExists(uint16_t ch) {
-    for (uint8_t i = 0; i < TV_MESSAGE_COUNT; i++) if (channelOf(i) == ch) return true;
-    return false;
-}
-
-// The message after `from` on channel `ch`, wrapping; -1 if the channel has
-// none. step = -1 walks backwards. from = -1 starts at the channel's first.
-static int8_t stepOn(uint16_t ch, int8_t from, int8_t step = 1) {
-    if (ch == OFF) return -1;
-    for (uint8_t k = 1; k <= TV_MESSAGE_COUNT; k++) {
-        int i = from < 0 ? (step > 0 ? k - 1 : TV_MESSAGE_COUNT - k)
-                         : (from + step * (int)k + TV_MESSAGE_COUNT * k) % TV_MESSAGE_COUNT;
-        if (channelOf(i) == ch) return (int8_t)i;
-    }
-    return -1;
-}
-
+// ── Channel ───────────────────────────────────────────────────────────────────
 // What the game wants, read fresh every loop: a change, a reboot and a lapsed
 // lease all come down this one path.
 static uint16_t wantedChannel() {
@@ -191,8 +81,8 @@ static uint16_t wantedChannel() {
     static uint16_t warned = 0;
     uint16_t v = pulleys::setting_value(pulleys::settings_hash(TV_SETTING));
     if (v == 0) return fallback;
-    if (v == pulleys::settings_hash(TV_OFF)) return OFF;
-    if (channelExists(v)) return v;
+    if (v == pulleys::settings_hash(TV_OFF)) return pulleys::CARD_DARK;
+    if (player.hasChannel(v)) return v;
     if (warned != v) {   // the game names a channel this firmware does not have
         Serial.printf("  [TV] the game asked for a channel (hash %04X) with no messages here: "
                       "playing %s\n", v, TV_DEFAULT_CHANNEL);
@@ -201,90 +91,17 @@ static uint16_t wantedChannel() {
     return fallback;
 }
 
-// ── The set ───────────────────────────────────────────────────────────────────
-enum TvPhase : uint8_t { TV_SHOW, TV_FADE_OUT, TV_FADE_IN, TV_DARK };
-
-static uint16_t channel   = OFF;      // what is on (or being faded to)
-static int8_t   current   = -1;       // message on screen; -1 = dark
-static int8_t   nextIdx   = -1;       // where a fade out lands; -1 = dark
-static TvPhase  phase     = TV_DARK;
-static uint32_t phaseAt   = 0;
-static bool     held      = false;
-static uint16_t lastLevel = 0xFFFF;
-
-static void goDark(uint32_t now) {
-    current = -1;
-    phase   = TV_DARK;
-    phaseAt = now;
-    frame.fillScreen(0);
-    frame.pushSprite(0, 0);
-    backlight(false);
-    Serial.println("  [TV] dark");
-}
-
-static void show(int8_t i, uint32_t now) {
-    if (i < 0) { goDark(now); return; }
-    if (current < 0) backlight(true);
-    current = i;
-    layout(TV_MESSAGES[i]);
-    Serial.printf("  [TV] %s: \"%s\" (%u lines)\n", TV_MESSAGES[i].channel,
-                  TV_MESSAGES[i].text, lineCount);
-    phase     = TV_FADE_MS ? TV_FADE_IN : TV_SHOW;   // fade the new one up
-    phaseAt   = now;
-    lastLevel = 0xFFFF;
-}
-
-// Fade out of whatever is on, then into message i (or dark). From dark there
-// is nothing to fade out of.
-static void changeTo(int8_t i, uint32_t now) {
-    if (current < 0) { if (i >= 0) show(i, now); return; }
-    nextIdx = i;
-    if (phase == TV_FADE_OUT) return;            // already on the way down
-    // Fading in? Start the fade out from the level it has reached.
-    uint32_t t = now - phaseAt;
-    phaseAt = (phase == TV_FADE_IN && t < TV_FADE_MS) ? now - (TV_FADE_MS - t) : now;
-    phase   = TV_FADE_OUT;
-}
-
-static void tune(uint16_t ch, uint32_t now) {
-    channel = ch;
-    pulleys::device_report(TV_SETTING, channelName(ch));
-    Serial.printf("  [TV] channel %s\n", channelName(ch));
-    changeTo(stepOn(ch, -1), now);
-}
-
 static void tvTick(uint32_t now) {
-    static bool tuned = false;   // tune once at boot even to `off`, so it reports
+    static bool tuned = false;   // tune once at boot even to dark, so it reports
     uint16_t want = wantedChannel();
-    if (want != channel || !tuned) { tune(want, now); tuned = true; }
-    if (phase == TV_DARK) return;
-
-    const TvMessage& m = TV_MESSAGES[current];
-    uint32_t t = now - phaseAt;
-    uint16_t level = 256;
-
-    switch (phase) {
-        case TV_SHOW: {
-            int8_t next = stepOn(channel, current);
-            if (!held && next != current && t >= (uint32_t)m.seconds * 1000)
-                changeTo(next, now);
-            break;
-        }
-        case TV_FADE_OUT:
-            if (t >= TV_FADE_MS) { show(nextIdx, now); return; }
-            level = 256 - t * 256 / TV_FADE_MS;
-            break;
-        case TV_FADE_IN:
-            if (t >= TV_FADE_MS) { phase = TV_SHOW; phaseAt = now; break; }
-            level = t * 256 / TV_FADE_MS;
-            break;
-        default:
-            break;
+    if (want != player.channel() || !tuned) {
+        tuned = true;
+        player.tune(want, now);
+        const char* name = player.channelName(want, TV_OFF);
+        pulleys::device_report(TV_SETTING, name);
+        Serial.printf("  [TV] channel %s\n", name);
     }
-    if (level != lastLevel) {
-        draw(m, level);
-        lastLevel = level;
-    }
+    player.tick(now);
 }
 
 // ── Console ───────────────────────────────────────────────────────────────────
@@ -301,21 +118,14 @@ static void handleSerial() {
             if (pulleys::census_handle_serial(buf)) continue; // "CENSUS"
             uint32_t now = millis();
             if (buf[0] == 'n' || buf[0] == 'b') {
-                int8_t i = stepOn(channel, current, buf[0] == 'n' ? 1 : -1);
-                if (i < 0) Serial.println("  [TV] the set is off");
-                else       changeTo(i, now);
+                if (!player.step(buf[0] == 'n' ? 1 : -1, now)) Serial.println("  [TV] the set is dark");
             } else if (buf[0] == 'h') {
-                held = !held;
-                if (!held && phase == TV_SHOW) phaseAt = now;   // a full hold from here
-                Serial.printf("  [TV] %s\n", held ? "holding" : "changing again");
+                player.hold(!player.held(), now);
+                Serial.printf("  [TV] %s\n", player.held() ? "holding" : "changing again");
             } else if (buf[0] == 'c') {
-                Serial.printf("  [TV] on: %s   default: %s   channels:", channelName(channel),
-                              TV_DEFAULT_CHANNEL);
-                for (uint8_t i = 0; i < TV_MESSAGE_COUNT; i++) {
-                    bool first = true;
-                    for (uint8_t j = 0; j < i; j++) if (channelOf(j) == channelOf(i)) first = false;
-                    if (first) Serial.printf(" %s", TV_MESSAGES[i].channel);
-                }
+                Serial.printf("  [TV] on: %s   default: %s   channels:",
+                              player.channelName(player.channel(), TV_OFF), TV_DEFAULT_CHANNEL);
+                player.printChannels(Serial);
                 Serial.println(" " TV_OFF);
             } else if (buf[0] == 'S' && strchr(buf, '=')) {
                 char* eq = strchr(buf, '=');
@@ -352,6 +162,10 @@ void setup() {
     frame.setColorDepth(16);
     frame.setPsram(true);
     bool fb = frame.createSprite(LCD_WIDTH, LCD_HEIGHT) != nullptr;
+    player.onDark([](bool dark) {
+        backlight(!dark);
+        Serial.printf("  [TV] %s\n", dark ? "dark" : "lit");
+    });
 
     pulleys::identity_init(PULLEYS_TYPE_SCREEN);
     Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -392,8 +206,9 @@ void loop() {
     static uint32_t lastLog = 0;
     if (now - lastLog >= 10000) {
         lastLog = now;
-        Serial.printf("── tv channel=%s%s%s  clock=%s\n", channelName(channel),
-                      held ? " (held)" : "",
+        Serial.printf("── tv channel=%s%s%s  clock=%s\n",
+                      player.channelName(player.channel(), TV_OFF),
+                      player.held() ? " (held)" : "",
                       pulleys::settings_fresh() ? "" : " (game silent: default)",
                       pulleys::mesh_clock_locked() ? "locked" : "free");
         pulleys::mesh_print_stats();

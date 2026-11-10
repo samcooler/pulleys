@@ -22,15 +22,9 @@
 // The words here are placeholders until the real ones are written.
 #define TV_DEFAULT_CHANNEL "idle"
 
-struct TvMessage {
-    const char* channel;
-    const char* text;
-    uint32_t    bg;
-    uint32_t    fg;
-    uint16_t    seconds;
-};
+#include <pulleys_textcard.h>
 
-static const TvMessage TV_MESSAGES[] = {
+static const pulleys::TextCard TV_MESSAGES[] = {
     { "idle",     "PLACEHOLDER\nidle one",                         0x10206A, 0xFFFFFF, 6 },
     { "idle",     "STAY TUNED",                                    0xC81E1E, 0xFFF2C0, 5 },
     { "janis",    "A message from Janis",                          0x000000, 0xFFD400, 6 },
