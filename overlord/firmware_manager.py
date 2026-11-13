@@ -56,7 +56,7 @@ class FirmwareManager:
         self._active = None
         self._sequence = 0
         self._saved_at = 0.0
-        self._last_progress_log = {}
+        self._transfer_started = {}   # node -> monotonic time its first chunk was served
         self._load()
 
     def _load(self):
@@ -126,6 +126,11 @@ class FirmwareManager:
                 if stage:
                     device["state"] = stage
                     self._log(stage.capitalize(), node_id)
+                if state == "ok" and node_id in self._transfer_started:
+                    # One line when the transfer is over, not one per chunk.
+                    seconds = max(time.monotonic() - self._transfer_started.pop(node_id), 0.001)
+                    sent = device.get("bytes") or device.get("total") or 0
+                    self._log(f"Upload completed {sent / 1024:,.0f} KB at {sent / 1024 / seconds:,.0f} KB/s", node_id)
                 if state == "failed":
                     self._log(f"Device reported failure: {fields.get('err', 'unknown')}", node_id, "error")
                 if fields.get("offset", "").isdigit():
@@ -135,14 +140,11 @@ class FirmwareManager:
                 device["bytes"] = max(device.get("bytes", 0), fields["bytes"])
                 if device.get("state") not in ("verifying", "confirmed"):
                     device["state"] = "transferring"
-                mark = device["bytes"] // 65536
-                if mark > self._last_progress_log.get(node_id, -1):
-                    self._last_progress_log[node_id] = mark
-                    self._log(f"Served {device['bytes']:,} of {device.get('total', 0):,} bytes", node_id)
+                self._transfer_started.setdefault(node_id, time.monotonic())
             elif kind == "device":
                 if fields.get("state") == "offering":
                     device.pop("error", None)
-                    self._last_progress_log[node_id] = -1
+                    self._transfer_started.pop(node_id, None)
                 device.update({key: value for key, value in fields.items() if key != "node_id"})
                 self._log(fields.get("error") or fields.get("message") or fields.get("state", "Update"),
                           node_id, "error" if fields.get("state") == "failed" else "info")

@@ -187,6 +187,11 @@ class DashboardTests(unittest.TestCase):
         device = self.manager.snapshot()["jobs"][0]["devices"]["59A4"]
         self.assertEqual(device["bytes"], 96)
         self.assertEqual(device["state"], "verifying")
+        messages = [row["message"] for row in self.manager.snapshot()["logs"]]
+        self.assertFalse([m for m in messages if m.startswith("Served")])     # no per-chunk lines
+        done = [m for m in messages if m.startswith("Upload completed")]
+        self.assertEqual(len(done), 1)
+        self.assertRegex(done[0], r"^Upload completed \d+ KB at [\d,]+ KB/s$")
 
     def http(self, method, path, body=None, headers=None):
         connection = http.client.HTTPConnection(*self.server.address, timeout=5)
