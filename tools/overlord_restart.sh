@@ -5,6 +5,8 @@
 #   tools/overlord_restart.sh --update   also rerun the boot update (git pull + media sync)
 #                                        the way a reboot does: slower, picks up new media
 #   tools/overlord_restart.sh --status   change nothing, just report
+#   tools/overlord_restart.sh --logs     change nothing, print the app's recent log
+#                                        (OVERLORD_LOG_LINES, default 80)
 #
 # The app only reads its code and its serial port at startup, so "pull, then
 # restart" is the normal way to deploy, and a bridge plugged in after the app
@@ -26,7 +28,8 @@ case "${1:-}" in
     "") ;;
     --update) mode="update" ;;
     --status) mode="status" ;;
-    *) echo "usage: $0 [--update|--status]" >&2; exit 2 ;;
+    --logs) mode="logs" ;;
+    *) echo "usage: $0 [--update|--status|--logs]" >&2; exit 2 ;;
 esac
 
 command -v sshpass >/dev/null || { echo "needs sshpass: brew install sshpass" >&2; exit 1; }
@@ -44,6 +47,11 @@ if ! ssh_overlord true 2>/dev/null; then
     TARGET="$FALLBACK_IP"
     ssh_overlord true >/dev/null || { echo "cannot reach the Overlord at $HOST or $FALLBACK_IP" >&2; exit 1; }
     echo "($HOST did not answer; using $FALLBACK_IP)"
+fi
+
+if [ "$mode" = "logs" ]; then
+    ssh_overlord "journalctl -u overlord -n ${OVERLORD_LOG_LINES:-80} --no-pager 2>&1 || sudo -S journalctl -u overlord -n ${OVERLORD_LOG_LINES:-80} --no-pager" <<<"$OVERLORD_PASSWORD" 2>&1 | grep -v '^\[sudo\]'
+    exit 0
 fi
 
 if [ "$mode" != "status" ]; then

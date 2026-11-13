@@ -45,3 +45,7 @@ prints the patterns it matched (`tools/firmware_changes.py` is the table). It
 flashes nothing if only docs, tests or `overlord/` changed. Use `--all` for every
 known node, `--since REF` after committing, or `--id/--type/--env` to choose.
 When adding a `src/` or `lib/` directory, add it to that table (a test enforces it).
+
+To stop or hold an OTA, use `./fw cancel` / `./fw pause` (or the Overlord's
+`/api/firmware/queue` and `/jobs/{id}/cancel` endpoints). Do not restart the
+Overlord to interrupt a job; that is the blunt way and drops everything queued.

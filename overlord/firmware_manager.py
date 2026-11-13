@@ -3,7 +3,6 @@ import copy
 import hashlib
 import json
 from pathlib import Path
-import queue
 import re
 import threading
 import time
@@ -13,7 +12,7 @@ from firmware import ACTIVE_ENVS, OPTIONAL_ENVS, CACHE, FirmwareUpdater
 
 ENVS = ACTIVE_ENVS | OPTIONAL_ENVS
 MAX_IMAGE = 7 * 1024 * 1024
-TERMINAL = {"completed", "failed", "interrupted"}
+TERMINAL = {"completed", "failed", "interrupted", "cancelled"}
 
 
 def validate_manifest(manifest):
@@ -45,7 +44,10 @@ class FirmwareManager:
         self.cache = (Path(cache) if cache is not None else CACHE).expanduser().resolve()
         self.transport = FirmwareUpdater(serial_reader, observer=self._event, cache=self.cache)
         self._lock = self.transport._lock
-        self._queue = queue.Queue()
+        # Jobs waiting to run, in the order they will, and whether the queue is held.
+        self._pending = []
+        self._paused = False
+        self._wake = threading.Condition(self._lock)
         self._stop = threading.Event()
         self._thread = None
         self._releases = {}
@@ -65,6 +67,8 @@ class FirmwareManager:
                 validate_manifest({"schema": 1, "tag": release["tag"], "firmware": release["manifest"],
                                    **({"built_at": release["built_at"]} if release.get("built_at") else {})})
                 self._releases[release["id"]] = release
+            self._paused = bool(state.get("paused"))   # stays held across a restart until resumed
+            self.transport.set_paused(self._paused)
             self._jobs = state.get("jobs", [])[-100:]
             for job in self._jobs:
                 if job.get("state") not in TERMINAL:
@@ -87,7 +91,7 @@ class FirmwareManager:
     def _save(self):
         # Caller holds the same lock used by serial callbacks and snapshots.
         self.cache.mkdir(parents=True, exist_ok=True)
-        state = {"releases": list(self._releases.values()),
+        state = {"releases": list(self._releases.values()), "paused": self._paused,
                  "jobs": self._jobs[-100:], "logs": self._logs[-500:],
                  "inventory": self.transport._inventory, "last_seen": self.transport._last_seen,
                  "assets": {key: str(path.relative_to(self.cache)) for key, path in self.transport._assets.items()}}
@@ -95,11 +99,11 @@ class FirmwareManager:
         temporary.write_text(json.dumps(state))
         temporary.replace(self.cache / "dashboard.json")
 
-    def _log(self, message, node_id=None, level="info"):
+    def _log(self, message, node_id=None, level="info", job_id=None):
         with self._lock:
             self._sequence += 1
             self._logs.append({"sequence": self._sequence, "at": time.time(), "message": message,
-                               "node_id": node_id, "job_id": self._active, "level": level})
+                               "node_id": node_id, "job_id": job_id or self._active, "level": level})
             self._logs = self._logs[-500:]
 
     def _event(self, kind, fields):
@@ -155,11 +159,44 @@ class FirmwareManager:
 
     def stop(self):
         self._stop.set()
-        self._queue.put(None)
+        with self._wake:
+            self._wake.notify_all()
+        self.transport.request_cancel()   # let a running update stop waiting
         if self._thread:
             self._thread.join(timeout=2)
         with self._lock:
             self._save()
+
+    def _validate_update(self, release_id, device_ids, env):
+        """Check a selection the same way for a new job and for edits to a queued
+        one. Returns the device IDs normalised (or None for "every outdated device")."""
+        if not isinstance(release_id, str) or release_id not in self._releases:
+            raise ValueError("choose an available release")
+        if env is not None and (not isinstance(env, str) or env not in ENVS):
+            raise ValueError("unsupported firmware environment")
+        if device_ids is not None:
+            if not isinstance(device_ids, list) or not device_ids or any(
+                    not isinstance(value, str) or not re.fullmatch(r"[0-9A-Fa-f]{4}", value) for value in device_ids):
+                raise ValueError("device_ids must be a nonempty list of four-digit hex IDs")
+            device_ids = list(dict.fromkeys(value.upper() for value in device_ids))
+            if any(value not in self.transport._inventory for value in device_ids):
+                raise ValueError("a selected device has not been discovered")
+        known = [(key, node) for key, node in self.transport._inventory.items()
+                 if (device_ids is None or key in device_ids) and (env is None or node.get("env") == env)]
+        if not known:
+            raise ValueError("no known devices match this selection; scan the mesh first")
+        images = self._releases[release_id]["manifest"]
+        if device_ids is None:
+            known = [(key, node) for key, node in known if node.get("env") in images]
+        if not known:
+            raise ValueError("no known devices match this release")
+        for _, node in known:
+            image = images.get(node.get("env"))
+            if image is None or image["sha256"] not in self.transport._assets:
+                raise ValueError(f"upload an image for {node.get('env', 'unknown')} first")
+        if device_ids and env and any(self.transport._inventory[key].get("env") != env for key in device_ids):
+            raise ValueError("a selected device does not match env")
+        return device_ids
 
     def enqueue(self, kind, release_id=None, device_ids=None, env=None):
         if kind not in {"scan", "update"}:
@@ -168,32 +205,7 @@ class FirmwareManager:
             if sum(row["state"] in {"queued", "running"} for row in self._jobs) >= 25:
                 raise ValueError("firmware queue is full")
             if kind == "update":
-                if not isinstance(release_id, str) or release_id not in self._releases:
-                    raise ValueError("choose an available release")
-                if env is not None and (not isinstance(env, str) or env not in ENVS):
-                    raise ValueError("unsupported firmware environment")
-                if device_ids is not None:
-                    if not isinstance(device_ids, list) or not device_ids or any(
-                            not isinstance(value, str) or not re.fullmatch(r"[0-9A-Fa-f]{4}", value) for value in device_ids):
-                        raise ValueError("device_ids must be a nonempty list of four-digit hex IDs")
-                    device_ids = list(dict.fromkeys(value.upper() for value in device_ids))
-                    if any(value not in self.transport._inventory for value in device_ids):
-                        raise ValueError("a selected device has not been discovered")
-                known = [(key, node) for key, node in self.transport._inventory.items()
-                         if (device_ids is None or key in device_ids) and (env is None or node.get("env") == env)]
-                if not known:
-                    raise ValueError("no known devices match this selection; scan the mesh first")
-                images = self._releases[release_id]["manifest"]
-                if device_ids is None:
-                    known = [(key, node) for key, node in known if node.get("env") in images]
-                if not known:
-                    raise ValueError("no known devices match this release")
-                for _, node in known:
-                    image = images.get(node.get("env"))
-                    if image is None or image["sha256"] not in self.transport._assets:
-                        raise ValueError(f"upload an image for {node.get('env', 'unknown')} first")
-                if device_ids and env and any(self.transport._inventory[key].get("env") != env for key in device_ids):
-                    raise ValueError("a selected device does not match env")
+                device_ids = self._validate_update(release_id, device_ids, env)
             job = {"id": uuid.uuid4().hex[:12], "kind": kind, "state": "queued", "created_at": time.time(),
                    "release_id": release_id, "device_ids": device_ids, "env": env, "devices": {}}
             self._jobs.append(job)
@@ -201,19 +213,190 @@ class FirmwareManager:
             completed = [row for row in self._jobs if row["state"] in TERMINAL]
             for row in completed[:-75]:
                 self._jobs.remove(row)
+            self._pending.append(job["id"])
             self._save()
-            self._queue.put(job["id"])
+            self._wake.notify_all()
             return copy.deepcopy(job)
 
     def retry(self, job_id):
         with self._lock:
             job = next((row for row in self._jobs if row["id"] == job_id), None)
-            if not job or job["state"] not in {"failed", "interrupted"}:
-                raise ValueError("only failed or interrupted jobs can be retried")
+            if not job or job["state"] not in {"failed", "interrupted", "cancelled"}:
+                raise ValueError("only failed, interrupted or cancelled jobs can be retried")
             if job["kind"] == "update" or job.get("release_id"):
-                failed = [key for key, value in job["devices"].items() if value.get("state") == "failed"]
-                return self.enqueue("update", job["release_id"], failed or job["device_ids"], job["env"])
+                # Failed devices; for a cancelled job, everything that did not finish.
+                unfinished = {"failed"} if job["state"] != "cancelled" else None
+                todo = [key for key, value in job["devices"].items()
+                        if (value.get("state") in unfinished if unfinished else value.get("state") not in {"confirmed", "skipped"})]
+                return self.enqueue("update", job["release_id"], todo or job["device_ids"], job["env"])
             return self.enqueue(job["kind"])
+
+    # ── the queue: pause, cancel, reorder, edit ──────────────────────────────
+    def _job(self, job_id):
+        job = next((row for row in self._jobs if row["id"] == job_id), None)
+        if not job:
+            raise KeyError(job_id)
+        return job
+
+    def queue_view(self):
+        """What is running, what is waiting and in what order, and whether the queue is held."""
+        with self._lock:
+            def brief(job):
+                return {key: job.get(key) for key in ("id", "kind", "state", "release_id", "device_ids", "env", "created_at")}
+            return copy.deepcopy({"paused": self._paused,
+                                  "running": brief(self._job(self._active)) if self._active else None,
+                                  "pending": [brief(self._job(job_id)) for job_id in self._pending]})
+
+    def pause(self):
+        """Hold the queue. The device being flashed finishes; nothing new starts, not
+        the next device of the running job and not the next job, until resume()."""
+        with self._lock:
+            if not self._paused:
+                self._paused = True
+                self.transport.set_paused(True)
+                self._log("Queue paused" + ("; the device being flashed will finish first" if self._active else ""))
+                self._save()
+            return self.queue_view()
+
+    def resume(self):
+        with self._wake:
+            if self._paused:
+                self._paused = False
+                self.transport.set_paused(False)
+                self._log("Queue resumed")
+                self._save()
+                self._wake.notify_all()
+            return self.queue_view()
+
+    def cancel(self, job_id):
+        """Stop a job. A waiting one is dropped; a running one stops serving its
+        device and takes no more (the device discards a partial download)."""
+        with self._wake:
+            job = self._job(job_id)
+            if job["state"] == "queued":
+                self._pending.remove(job_id)
+                job.update(state="cancelled", error="Cancelled before it started", finished_at=time.time())
+                self._log("Cancelled a queued job", job_id=job_id)
+            elif job["state"] == "running":
+                if not job.get("cancel_requested"):
+                    job["cancel_requested"] = True
+                    self._log("Cancel requested; stopping the transfer")
+                    self.transport.request_cancel()
+            else:
+                raise ValueError(f"job already {job['state']}")
+            self._save()
+            return copy.deepcopy(job)
+
+    def remove_job(self, job_id):
+        """DELETE a job: cancel it if it is waiting or running, drop it from the history if it is over."""
+        with self._lock:
+            job = self._job(job_id)
+            if job["state"] in TERMINAL:
+                self._jobs.remove(job)
+                self._save()
+                return {"removed": job_id}
+        return {"cancelled": self.cancel(job_id)}
+
+    def move(self, job_id, position):
+        """Reorder a waiting job: 0 runs next, or "top" / "bottom"."""
+        with self._wake:
+            job = self._job(job_id)
+            if job["state"] != "queued":
+                raise ValueError("only a waiting job can be moved")
+            if position == "top":
+                position = 0
+            elif position == "bottom":
+                position = len(self._pending) - 1
+            elif type(position) is not int:
+                raise ValueError('position must be a number, "top" or "bottom"')
+            self._pending.remove(job_id)
+            self._pending.insert(max(0, min(position, len(self._pending))), job_id)
+            self._save()
+            self._wake.notify_all()
+            return self.queue_view()
+
+    def clear_queue(self, include_running=False):
+        """Cancel every waiting job; with include_running, the running one too."""
+        with self._lock:
+            waiting = list(self._pending)
+            running = self._active if include_running else None
+        for job_id in waiting:
+            self.cancel(job_id)
+        if running:
+            self.cancel(running)
+        return self.queue_view()
+
+    def edit_devices(self, job_id, add=(), remove=()):
+        """Change which devices a job will flash. A waiting job can gain or lose
+        devices; a running job can only lose ones it has not reached yet."""
+        with self._lock:
+            job = self._job(job_id)
+            if job["state"] in TERMINAL or job["kind"] != "update":
+                raise ValueError("only a waiting or running update can be edited")
+            add = [value.upper() for value in add]
+            remove = [value.upper() for value in remove]
+            if add:
+                if job["state"] != "queued":
+                    raise ValueError("devices can only be added to a job that has not started; queue a new job instead")
+                if job["device_ids"] is None:
+                    raise ValueError("this job targets every outdated device; queue a new job for specific ones")
+                self._validate_update(job["release_id"], list(dict.fromkeys(job["device_ids"] + add)), job["env"])
+                job["device_ids"] = list(dict.fromkeys(job["device_ids"] + add))
+                self._log(f"Added {', '.join(add)}", job_id=job_id)
+            for node_id in remove:
+                if job["state"] == "running":
+                    if job["devices"].get(node_id, {}).get("state") not in (None, "queued"):
+                        raise ValueError(f"{node_id} is already being flashed or done; cancel the job to stop it")
+                    job.setdefault("exclude", [])
+                    if node_id not in job["exclude"]:
+                        job["exclude"].append(node_id)
+                    self.transport.exclude_device(node_id)
+                elif job["device_ids"] is not None:
+                    if node_id not in job["device_ids"]:
+                        raise ValueError(f"{node_id} is not in this job")
+                    if len(job["device_ids"]) == 1:
+                        raise ValueError("that is the job's last device; cancel the job instead")
+                    job["device_ids"].remove(node_id)
+                else:
+                    job.setdefault("exclude", [])
+                    if node_id not in job["exclude"]:
+                        job["exclude"].append(node_id)
+                self._log(f"Removed {node_id}", job_id=job_id)
+            self._save()
+            return copy.deepcopy(job)
+
+    def delete_release(self, release_id):
+        """Drop a release and the images only it used, to free the cache."""
+        with self._lock:
+            if release_id not in self._releases:
+                raise KeyError(release_id)
+            if any(row["state"] in {"queued", "running"} and row.get("release_id") == release_id for row in self._jobs):
+                raise ValueError("a waiting or running job uses this release")
+            removed = self._releases.pop(release_id)
+            still_used = {image["sha256"] for release in self._releases.values() for image in release["manifest"].values()}
+            freed = 0
+            for image in removed["manifest"].values():
+                digest = image["sha256"]
+                path = self.transport._assets.get(digest)
+                if digest in still_used or path is None:
+                    continue
+                self.transport._assets.pop(digest)
+                try:
+                    if self.cache in Path(path).resolve().parents:   # only ever delete inside the cache
+                        freed += Path(path).stat().st_size
+                        Path(path).unlink()
+                except OSError:
+                    pass
+            self._log(f"Deleted release {removed.get('tag', release_id)}")
+            self._save()
+            return {"deleted": release_id, "freed_bytes": freed}
+
+    def logs(self, since=0, job_id=None, limit=200):
+        """Activity records newer than `since` (a sequence number), oldest first, for following a job."""
+        with self._lock:
+            rows = [row for row in self._logs if row["sequence"] > since and (job_id is None or row.get("job_id") == job_id)]
+            return {"logs": copy.deepcopy(rows[-max(1, min(int(limit), 500)):]),
+                    "last_sequence": self._sequence}
 
     def register_manifest(self, manifest):
         manifest = validate_manifest(manifest)
@@ -284,12 +467,14 @@ class FirmwareManager:
                                "baud": getattr(self.transport.serial, "baudrate", None)},
                     "releases": [self._release_view(row) for row in sorted(self._releases.values(), key=lambda row: row["created_at"], reverse=True)],
                     "jobs": list(reversed(self._jobs)),
-                    "active_job": self._active, "logs": self._logs[-300:]})
+                    "active_job": self._active, "paused": self._paused, "queue": list(self._pending),
+                    "logs": self._logs[-300:]})
 
     def _run_job(self, job):
         with self._lock:
             self._active = job["id"]
             job.update(state="running", started_at=time.time())
+            self.transport.begin_job(job.get("exclude", []))
             self._save()
         try:
             self._log(f"Started {job['kind']}")
@@ -297,44 +482,62 @@ class FirmwareManager:
                 with self._lock:
                     release = copy.deepcopy(self._releases[job["release_id"]])
                 results = self.transport.update_release(release, job["device_ids"], job["env"])
-                if not results:
-                    raise RuntimeError("no devices answered with a matching environment")
-                if any(value["state"] == "failed" for value in results.values()):
-                    raise RuntimeError("one or more devices failed; see device results")
+                if not job.get("cancel_requested"):
+                    if not results:
+                        raise RuntimeError("no devices answered with a matching environment")
+                    if any(value["state"] == "failed" for value in results.values()):
+                        raise RuntimeError("one or more devices failed; see device results")
             elif job["kind"] == "scan":
                 nodes = self.transport.discover()
-                self._log(f"Census received {len(nodes)} device reports")
+                if not job.get("cancel_requested"):
+                    self._log(f"Census received {len(nodes)} device reports")
             with self._lock:
-                job["state"] = "completed"
-                self._log("Job completed")
+                if job.get("cancel_requested"):
+                    job.update(state="cancelled", error="Cancelled")
+                    self._log("Job cancelled")
+                else:
+                    job["state"] = "completed"
+                    self._log("Job completed")
         except Exception as exc:
             with self._lock:
-                job.update(state="failed", error=str(exc))
-                self._log(str(exc), level="error")
+                if job.get("cancel_requested"):
+                    job.update(state="cancelled", error="Cancelled")
+                    self._log("Job cancelled")
+                else:
+                    job.update(state="failed", error=str(exc))
+                    self._log(str(exc), level="error")
         finally:
             with self._lock:
                 job["finished_at"] = time.time()
                 self._active = None
                 self.transport._transfer_target = None
                 self._save()
+            if job.get("cancel_requested"):
+                # Give the bridge and device a moment to drop the abandoned download
+                # before another job can offer them anything.
+                self._stop.wait(3)
 
     def _worker(self):
         while not self._stop.is_set():
-            try:
-                job_id = self._queue.get(timeout=30)
-            except queue.Empty:
-                # Passive discovery shares this worker: never issue control
-                # traffic in the middle of a firmware transfer.
-                try:
-                    self.transport.discover(timeout=5)
-                    with self._lock:
-                        self._save()
-                except Exception:
-                    pass
+            job, signalled = None, True
+            with self._wake:
+                if self._paused or not self._pending:
+                    signalled = self._wake.wait(30)
+                if self._stop.is_set():
+                    break
+                if self._pending and not self._paused:
+                    job_id = self._pending.pop(0)
+                    job = next(row for row in self._jobs if row["id"] == job_id)
+            if job is None:
+                if not signalled:
+                    # Idle for 30 s: passive discovery shares this worker, so it
+                    # never issues control traffic in the middle of a transfer.
+                    try:
+                        self.transport.begin_job()
+                        self.transport.discover(timeout=5)
+                        with self._lock:
+                            self._save()
+                    except Exception:
+                        pass
                 continue
-            if job_id is None:
-                break
-            with self._lock:
-                job = next(row for row in self._jobs if row["id"] == job_id)
             self._run_job(job)
-            self._queue.task_done()

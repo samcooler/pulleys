@@ -35,7 +35,8 @@ function renderButtons() {
     return image?.uploaded && node.sha256!==image.build_hash;
   });
   $('update-all').disabled=posting || !outdated;
-  document.querySelectorAll('[data-update],[data-retry]').forEach(button => button.disabled=posting);
+  document.querySelectorAll('[data-update],[data-retry],[data-cancel]').forEach(button => button.disabled=posting);
+  $('pause').textContent=state?.paused?'Resume':'Pause';
 }
 function latestDeviceWork(id) {
   for (const job of state.jobs) {
@@ -53,7 +54,7 @@ function deviceStatus(node, image, work) {
 }
 function render() {
   const focused=document.activeElement;
-  const focusAttr=['data-expand','data-update','data-retry'].find(attr=>focused?.hasAttribute(attr));
+  const focusAttr=['data-expand','data-update','data-retry','data-cancel'].find(attr=>focused?.hasAttribute(attr));
   const focusValue=focusAttr?focused.getAttribute(focusAttr):null;
   const releases = state.releases;
   if (!releases.some(row=>row.id===selected)) selected=releases[0]?.id || '';
@@ -66,12 +67,6 @@ function render() {
   const target = release();
   $('connection').className=`connection${state.bridge.connected?'':' offline'}`;
   $('connection').innerHTML=`<span class="dot${state.bridge.connected?' green':''}"></span> ${state.bridge.connected?'USB linked':'Bridge disconnected'}${state.bridge.id?' · '+esc(state.bridge.id):''}`;
-  $('updated').textContent=`Updated ${clock(state.now)}`;
-  $('count-seen').textContent=state.devices.length;
-  $('count-online').textContent=`${state.devices.filter(node=>node.online).length} seen in the last 90 seconds`;
-  $('count-current').textContent=state.devices.filter(node=>target?.manifest[node.env]?.build_hash===node.sha256).length;
-  $('count-queued').textContent=state.jobs.filter(job=>job.state==='queued').length;
-  $('count-failed').textContent=state.jobs.filter(job=>['failed','interrupted'].includes(job.state)).length;
   $('device-count').textContent=state.devices.length;
   $('devices').innerHTML=state.devices.length?state.devices.map(node=>{
     const image=target?.manifest[node.env], work=latestDeviceWork(node.id), status=deviceStatus(node,image,work);
@@ -83,15 +78,15 @@ function render() {
     return `<tr class="device-row"><td><div class="device-title"><span class="dot${node.online?' online':''}"></span><button class="expand" data-expand="${esc(node.id)}" aria-expanded="${expanded.has(node.id)}" aria-controls="log-${esc(node.id)}">${esc(node.name || node.id)} <span class="chevron">${expanded.has(node.id)?'−':'+'}</span></button></div><div class="device-meta">${esc(node.env || node.role || 'Unknown role')}</div></td><td><span class="version">${esc(known?releaseLabel(known):'Unmanaged build')}</span><span class="hash" title="${esc(node.sha256)}">${node.sha256 && node.sha256!=='unknown'?esc(node.sha256.slice(0,12)):esc(node.build || 'Identity unknown')}</span></td><td>${badge(status)}${active?`<div class="node-progress" role="progressbar" aria-label="Firmware bytes served" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><span style="width:${percent}%"></span></div><span class="hash">${percent}% served${work.attempt?' · try '+work.attempt:''}</span>`:''}</td><td class="seen" title="${node.last_seen?esc(new Date(node.last_seen*1000).toLocaleString()):''}">${age(node.last_seen)}</td><td>${canUpdate?`<button class="button small" data-update="${esc(node.id)}">Update</button>`:'<span class="subtle">—</span>'}</td></tr>${expanded.has(node.id)?`<tr class="node-detail" id="log-${esc(node.id)}"><td colspan="5"><pre>${esc(`Build: ${node.build || 'unknown'}\nBuilt: ${known?.built_at?built(known.built_at):'unknown'}\nIdentity: ${node.sha256 || 'unknown'}\n` + (logs.length?logs.slice(-30).map(event=>`${clock(event.at)}  ${event.message}`).join('\n'):'No update activity recorded for this device.'))}</pre></td></tr>`:''}`;
   }).join(''):'<tr><td colspan="5" class="empty">No devices reported yet.<br>Scan the mesh to collect running firmware versions.</td></tr>';
   const activeJob=state.jobs.find(job=>job.id===state.active_job);
-  $('queue-badge').className=`badge ${activeJob?'running':'neutral'}`;
-  $('queue-badge').textContent=activeJob?'Running':'Idle';
+  $('queue-badge').className=`badge ${state.paused?'paused':activeJob?'running':'neutral'}`;
+  $('queue-badge').textContent=state.paused?(activeJob?'Pausing':'Paused'):activeJob?'Running':'Idle';
   $('queue').innerHTML=state.jobs.length?state.jobs.slice(0,8).map(job=>{
     const tag=releaseLabel(releases.find(row=>row.id===job.release_id));
     const results=Object.entries(job.devices);
     const confirmed=results.filter(([,row])=>row.state==='confirmed').length;
-    return `<article class="job"><div class="job-title"><span>${esc({scan:'Mesh census',update:'Firmware update'}[job.kind]||job.kind)}</span>${badge(job.state)}</div><div class="job-meta">${esc(tag||'')} ${job.current_device?' · '+esc(job.current_device):''}<br>${esc(job.id)} · ${age(job.created_at)}${results.length?`<br>${confirmed} confirmed · ${results.filter(([,row])=>row.state==='skipped').length} already current`:''}</div>${job.error?`<div class="job-error">${esc(job.error)}</div>`:''}${['failed','interrupted'].includes(job.state)?`<button class="button small" data-retry="${esc(job.id)}">Retry failed</button>`:''}</article>`;
+    return `<article class="job"><div class="job-title"><span>${esc({scan:'Mesh census',update:'Firmware update'}[job.kind]||job.kind)}</span>${badge(job.state)}</div><div class="job-meta">${esc(tag||'')} ${job.current_device?' · '+esc(job.current_device):''}<br>${esc(job.id)} · ${age(job.created_at)}${results.length?`<br>${confirmed} confirmed · ${results.filter(([,row])=>row.state==='skipped').length} already current`:''}</div>${job.error?`<div class="job-error">${esc(job.error)}</div>`:''}${['failed','interrupted','cancelled'].includes(job.state)?`<button class="button small" data-retry="${esc(job.id)}">Retry${job.state==='cancelled'?' unfinished':' failed'}</button>`:''}${['queued','running'].includes(job.state)?` <button class="button small secondary" data-cancel="${esc(job.id)}">Cancel</button>`:''}</article>`;
   }).join(''):'<p class="empty">The queue is clear.<br>Updates run one device at a time.</p>';
-  $('activity').innerHTML=state.logs.length?state.logs.slice(-50).reverse().map(event=>`<div class="event ${event.level==='error'?'error':''}"><span class="event-time">${clock(event.at)}${event.node_id?' · '+esc(event.node_id):''}</span>${esc(event.message)}</div>`).join(''):'<p class="empty">Firmware events will appear here.</p>';
+  $('activity').innerHTML=state.logs.length?state.logs.slice(-80).reverse().map(event=>`<div class="event ${event.level==='error'?'error':''}" title="${esc(clock(event.at)+(event.node_id?' · '+event.node_id:'')+'  '+event.message)}"><span class="event-time">${clock(event.at)}</span><span class="event-node">${esc(event.node_id||'')}</span><span class="event-msg">${esc(event.message)}</span></div>`).join(''):'<p class="empty">Firmware events will appear here.</p>';
   renderButtons();
   if(focusAttr) Array.from(document.querySelectorAll('button')).find(button=>button.getAttribute(focusAttr)===focusValue)?.focus({preventScroll:true});
 }
@@ -102,8 +97,20 @@ async function refresh() {
 $('release').addEventListener('change',()=>{selected=$('release').value; localStorage.setItem('overlord-release',selected); render();});
 $('scan').addEventListener('click',()=>action('/scan'));
 $('update-all').addEventListener('click',()=>action('/updates',{release_id:selected,all:true}));
+async function control(path, message, method='POST', body={}) {
+  if (posting) return;
+  posting=true; renderButtons();
+  try {
+    await api(path, {method, headers:{'Content-Type':'application/json'}, body:method==='DELETE'?undefined:JSON.stringify(body)});
+    notify(message);
+    await refresh();
+  } catch(error) {notify(error.message,true);}
+  finally {posting=false; renderButtons();}
+}
+$('pause').addEventListener('click',()=>state?.paused?control('/queue/resume','Queue resumed.'):control('/queue/pause','Queue paused: the device being flashed will finish first.'));
 document.addEventListener('click',event=>{
-  const expand=event.target.closest('[data-expand]'), update=event.target.closest('[data-update]'), retry=event.target.closest('[data-retry]');
+  const expand=event.target.closest('[data-expand]'), update=event.target.closest('[data-update]'), retry=event.target.closest('[data-retry]'), cancel=event.target.closest('[data-cancel]');
+  if(cancel){const job=state.jobs.find(row=>row.id===cancel.dataset.cancel); if(job?.state!=='running'||confirm('Stop this update now? The device being flashed keeps its current firmware.')) control(`/jobs/${encodeURIComponent(cancel.dataset.cancel)}/cancel`,'Cancelling…');}
   if(expand){const id=expand.dataset.expand; expanded.has(id)?expanded.delete(id):expanded.add(id); render();}
   if(update) action('/updates',{release_id:selected,device_ids:[update.dataset.update]});
   if(retry) action(`/jobs/${encodeURIComponent(retry.dataset.retry)}/retry`);

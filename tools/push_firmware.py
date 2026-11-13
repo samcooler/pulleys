@@ -31,9 +31,9 @@ class UploadBody:
             self.progress(end, self.total)
 
 
-def request(base, path="", body=None, binary=False, progress=None):
+def request(base, path="", body=None, binary=False, progress=None, method=None):
     payload = body if binary else json.dumps(body).encode() if body is not None else None
-    method = "PUT" if binary else "POST" if payload is not None else "GET"
+    method = method or ("PUT" if binary else "POST" if payload is not None else "GET")
     headers = {"Content-Type": "application/octet-stream" if binary else "application/json"}
     if binary and progress is not None:
         headers["Content-Length"] = str(len(payload))
@@ -116,7 +116,7 @@ def main():
     print(json.dumps({"release_id": release_id, "job_id": job["id"]}), flush=True)
     if args.wait:
         previous = None
-        while job["state"] not in {"completed", "failed", "interrupted"}:
+        while job["state"] not in {"completed", "failed", "interrupted", "cancelled"}:
             time.sleep(2)
             job = request(args.url, "/jobs/" + job["id"])["job"]
             progress = (job["state"], json.dumps(job["devices"], sort_keys=True))

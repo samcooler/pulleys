@@ -378,5 +378,89 @@ class UnreachableTests(unittest.TestCase):
             push_firmware.request("http://overlord.local:8080")
 
 
+class QueueCommandTests(unittest.TestCase):
+    def invoke(self, arguments, state=None):
+        output, errors = io.StringIO(), io.StringIO()
+        calls = []
+        def request(url, path="", body=None, **kw):
+            calls.append((path, body))
+            return state if path == "" else {"job": {"id": "J1", "state": "cancelled"}, "paused": False}
+        with patch.object(cli, "request", side_effect=request), contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            code = cli.main(arguments)
+        return code, output.getvalue(), errors.getvalue(), calls
+
+    STATE = {"paused": True, "active_job": "R1", "queue": ["W1", "W2"],
+             "jobs": [{"id": "R1", "kind": "update", "state": "running", "current_device": "A9C8",
+                       "devices": {"A9C8": {"state": "transferring", "bytes": 50, "total": 100}}},
+                      {"id": "W1", "kind": "update", "state": "queued", "device_ids": ["59A4", "CC6B"], "devices": {}},
+                      {"id": "W2", "kind": "update", "state": "queued", "device_ids": None, "devices": {}}]}
+
+    def test_queue_shows_paused_running_and_the_waiting_order(self):
+        code, out, _, _ = self.invoke(["queue"], self.STATE)
+        self.assertEqual(code, 0)
+        for expected in ("PAUSED", "running  R1", "A9C8 transferring 50%", "waiting 1. W1", "59A4, CC6B", "waiting 2. W2", "every outdated device"):
+            self.assertIn(expected, out)
+
+    def test_pause_and_resume_post_to_the_queue(self):
+        _, _, _, calls = self.invoke(["pause"], self.STATE)
+        self.assertEqual(calls[0], ("/queue/pause", {}))
+        _, _, _, calls = self.invoke(["resume"], self.STATE)
+        self.assertEqual(calls[0], ("/queue/resume", {}))
+
+    def test_cancel_defaults_to_the_running_job_or_takes_an_id_or_all(self):
+        _, _, _, calls = self.invoke(["cancel"], self.STATE)
+        self.assertIn(("/jobs/R1/cancel", {}), calls)
+        _, _, _, calls = self.invoke(["cancel", "W2"], self.STATE)
+        self.assertEqual(calls, [("/jobs/W2/cancel", {})])
+        _, out, _, calls = self.invoke(["cancel", "--all"], self.STATE)
+        self.assertEqual(calls[0], ("/queue/clear", {"include_running": True}))
+        self.assertIn("Cancelled everything", out)
+
+    def test_cancel_with_nothing_running_says_so(self):
+        code, _, err, _ = self.invoke(["cancel"], {"active_job": None, "queue": [], "jobs": []})
+        self.assertEqual(code, 1)
+        self.assertIn("nothing is running", err)
+
+    def test_move_sends_a_number_or_a_word(self):
+        _, _, _, calls = self.invoke(["move", "W2", "0"], self.STATE)
+        self.assertEqual(calls[0], ("/jobs/W2/move", {"position": 0}))
+        _, _, _, calls = self.invoke(["move", "W2", "top"], self.STATE)
+        self.assertEqual(calls[0], ("/jobs/W2/move", {"position": "top"}))
+
+    def test_a_cancelled_job_ends_the_watch_with_an_error_and_a_paused_queue_says_how_to_resume(self):
+        job = {"id": "J1", "state": "running", "devices": {}}
+        done = {"jobs": [{**job, "state": "cancelled", "error": "Cancelled"}], "paused": True, "logs": []}
+        output = io.StringIO()
+        with patch.object(cli, "request", return_value=done), patch.object(cli.time, "sleep"), \
+             contextlib.redirect_stdout(output), self.assertRaisesRegex(RuntimeError, "Cancelled"):
+            cli.wait_job("http://unit", job)
+
+    def test_against_a_real_server_cancel_stops_a_waiting_job(self):
+        sys.path.insert(0, str(cli.ROOT / "overlord"))
+        from control import ControlServer
+        from firmware_manager import FirmwareManager
+        from test_firmware_dashboard import fixture, Serial
+        with tempfile.TemporaryDirectory() as directory:
+            manager = FirmwareManager(Serial(), cache=Path(directory) / "cache")
+            manager.handle_line("PULLEYS-CENSUS id=59A4 env=screen sha256=unknown")
+            manifest, data = fixture()
+            release = manager.register_manifest(manifest)
+            manager.upload_image(release["id"], "screen", data)
+            manager.pause()
+            job = manager.enqueue("update", release["id"], ["59A4"])
+            server = ControlServer(lambda *a: (404, {}), host="127.0.0.1", port=0, firmware=manager)
+            server.start()
+            self.addCleanup(server.stop)
+            self.addCleanup(manager.stop)
+            url = "http://%s:%s" % server.address
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(cli.main(["--url", url, "queue"]), 0)
+                self.assertEqual(cli.main(["--url", url, "cancel", job["id"]]), 0)
+                self.assertEqual(cli.main(["--url", url, "resume"]), 0)
+            self.assertIn("PAUSED", out.getvalue())
+            self.assertEqual(manager.snapshot()["jobs"][0]["state"], "cancelled")
+            self.assertFalse(manager.snapshot()["paused"])
+
+
 if __name__ == "__main__":
     unittest.main()

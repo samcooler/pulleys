@@ -130,7 +130,7 @@ class InstallationManager:
             wire = json.dumps(request, separators=(",", ":"), allow_nan=False)
             if len(wire.encode()) > 241:
                 raise ValueError("installation request exceeds mesh payload")
-            pending = {"q": q, "target": request["target"], "chunks": {}, "responses": {}}
+            pending = {"q": q, "target": request["target"], "chunks": {}, "responses": {}, "seen": 0}
             with self._condition:
                 self._pending = pending
             deadline = time.monotonic() + self.timeout
@@ -158,7 +158,7 @@ class InstallationManager:
                             response = next(iter(pending["responses"].values()))
                             break
                     if now >= deadline:
-                        raise InstallationError(504, "arbiter response timed out; result may be unknown")
+                        raise InstallationError(504, f"arbiter response timed out ({self._reception(pending)}); result may be unknown")
                     self._condition.wait(min(.2, max(0, deadline - now)))
             else:
                 raise InstallationError(503, "installation manager stopped")
@@ -170,6 +170,14 @@ class InstallationManager:
             with self._condition:
                 self._pending = None
             self._request_lock.release()
+
+    @staticmethod
+    def _reception(pending):
+        """What did reach the Overlord, so a timeout says where the reply was lost."""
+        if not pending["seen"]:
+            return "no reply pieces reached the Overlord"
+        return "; ".join(f"{arbiter}: {len(chunks['parts'])} of {chunks['count']} pieces"
+                         for (arbiter, _), chunks in pending["chunks"].items())
 
     def handle_line(self, line):
         if not line.startswith("IC "):
@@ -195,6 +203,7 @@ class InstallationManager:
             key = (arbiter, bridge)
             if key not in pending["chunks"] and len(pending["chunks"]) >= 8:
                 return True
+            pending["seen"] += 1
             chunks = pending["chunks"].setdefault(key, {"count": count, "parts": {}})
             if chunks["count"] != count or (part in chunks["parts"] and chunks["parts"][part] != fragment):
                 return True

@@ -89,6 +89,16 @@ class InstallationTests(unittest.TestCase):
         self.assertIn('unknown', str(error.exception))
         self.assertIsNone(self.manager._pending)
 
+    def test_timeout_says_where_the_reply_was_lost(self):
+        with self.assertRaisesRegex(InstallationError, 'no reply pieces reached'):
+            self.manager.mutate('shuffle', self.body)
+        def partial(request):
+            for frame in frames(request['q'], {'v': 1, 'ok': True, 'installation': installation(revision=2)})[:1]:
+                self.manager.handle_line(frame)
+        self.serial.on_write = partial
+        with self.assertRaisesRegex(InstallationError, r'ABCD: 1 of \d+ pieces'):
+            self.manager.mutate('shuffle', self.body)
+
     def test_conflict_updates_readback_without_retrying_mutation(self):
         self.serial.on_write = lambda request: self.reply(request, installation(revision=3), ok=False, error='conflict')
         with self.assertRaises(InstallationError) as error:

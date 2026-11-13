@@ -1,9 +1,8 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Overlord · Installation</title><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/installation.css"><script src="/installation_status.js" defer></script><script src="/installation.js" defer></script></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synchronized Leverage · Installation</title><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/installation.css"><script src="/installation_status.js" defer></script><script src="/installation.js" defer></script></head>
 <body>
-<header class="topbar"><a class="brand" href="/"><span class="brand-mark">O</span> OVERLORD</a><nav aria-label="Main navigation"><a href="/">Firmware</a><a href="/installation" aria-current="page">Installation</a></nav><span id="connection" class="connection">Connecting</span></header>
+<header class="topbar"><a class="brand" href="/" aria-label="Synchronized Leverage Control Panel">Synchronized Leverage <span class="star">*</span> <span class="sub">Control Panel</span></a><nav aria-label="Main navigation"><a href="/">Firmware</a><a href="/installation" aria-current="page">Installation</a></nav><span id="connection" class="connection">Connecting</span></header>
 <main>
-<div class="page-heading"><div><p class="eyebrow">PULLEYS / INSTALLATION</p><h1>The room, at a glance.</h1><p class="subtitle">Follow the game, map ropes, and tune the installation.</p></div></div>
 <div id="notice" role="status" aria-live="polite" hidden></div>
 <section class="panel overview-panel" aria-label="Game and installation status"><div class="panel-heading"><div><p class="eyebrow">GAME AND MESH</p><h2 id="overview-game">Game status unavailable</h2><p id="arbiter-status">Waiting for a configuration snapshot…</p></div><label>Device <select id="arbiter" aria-label="Arbiter device"></select></label></div>
 <div class="overview-health"><strong id="overview-health" role="status">Connecting</strong><span id="overview-freshness">Waiting for an arbiter report.</span></div>
@@ -29,5 +28,5 @@
 <section class="panel installation-panel"><div class="panel-heading"><div><h2>Reset game</h2><p>Restarts the game at its first state and clears the pull history, event log and component charge. Colours, the sensor map, the game and the clock are kept.</p></div><button id="reset-game" class="button secondary" disabled>Reset game</button></div></section>
 <section class="panel installation-panel"><div class="panel-heading"><div><h2>Arbiter clock</h2><p id="clock-status">Waiting for the arbiter clock…</p></div><button id="clock-now" class="button secondary" disabled>Set from Overlord</button></div>
 <p id="overlord-time" class="installation-status"></p><form id="clock-form" class="clock-controls"><label>Local date and time <input id="clock-time" type="datetime-local" min="2024-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" required disabled></label><button id="clock-save" class="button primary" disabled>Save time</button><button id="clock-cancel" class="button secondary" type="button" disabled>Cancel</button></form><p class="installation-status">Without a coin cell, power loss loses the clock. A restored snapshot or firmware build time is approximate; set the clock again after an outage.</p></section>
-<footer><span>OVERLORD / INSTALLATION CONTROL</span><span>Configuration is stored on the arbiter · Refreshes automatically</span></footer>
+<footer><span>SYNCHRONIZED LEVERAGE * CONTROL PANEL</span><span>Configuration is stored on the arbiter · Refreshes automatically</span></footer>
 </main></body></html>

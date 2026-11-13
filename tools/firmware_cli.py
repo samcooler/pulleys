@@ -265,7 +265,7 @@ def wait_job(url, job, *, quiet=False, logs=()):
     on the Overlord whether or not this is watching."""
     if not quiet:
         print(f"Watching job {job['id']} on {url.rstrip('/')}/  (Ctrl-C detaches; ./fw watch reattaches)", flush=True)
-    activity, misses = job_activity(logs, job['id']), 0
+    activity, misses, paused = job_activity(logs, job['id']), 0, False
     with ProgressDisplay(enabled=not quiet) as display:
         while True:
             devices = {node: {"state": "queued"} for node in job.get("device_ids") or []}
@@ -276,10 +276,12 @@ def wait_job(url, job, *, quiet=False, logs=()):
             if devices:
                 title += f" | {done}/{len(devices)} complete | {failed} failed"
             note = "Bar = bytes served; reboot verification is a separate stage." if devices else "Waiting for device discovery or job results."
+            if paused:
+                note = "Queue PAUSED: the device being flashed finishes, then it holds. ./fw resume to continue, ./fw cancel to stop."
             if misses:
                 note = f"Overlord not answering ({misses}/{POLL_FAILURES}); retrying. The job keeps running there."
             display.draw(title, devices, job.get("error") or note, activity)
-            if job["state"] in {"completed", "failed", "interrupted"}:
+            if job["state"] in {"completed", "failed", "interrupted", "cancelled"}:
                 if job["state"] != "completed":
                     raise RuntimeError(job.get("error", job["state"]))
                 return job
@@ -293,8 +295,61 @@ def wait_job(url, job, *, quiet=False, logs=()):
                     raise
                 continue
             misses = 0
+            paused = bool(state.get("paused"))
             job = next((row for row in state.get("jobs", []) if row["id"] == job["id"]), job)
             activity = job_activity(state.get("logs", []), job["id"])
+
+
+def queue_report(url):
+    """The Overlord's queue as text: held or not, what is running, what waits and in what order."""
+    state = request(url)
+    jobs = {row["id"]: row for row in state.get("jobs", [])}
+    lines = ["Queue: " + ("PAUSED (nothing new starts; ./fw resume to continue)" if state.get("paused") else "running")]
+    running = jobs.get(state.get("active_job"))
+    if running:
+        current = running.get("current_device")
+        detail = ""
+        if current and running["devices"].get(current):
+            item = running["devices"][current]
+            percent = None if not item.get("total") else int(100 * item.get("bytes", 0) / item["total"])
+            detail = f" · {current} {item.get('state', '')}" + (f" {percent}%" if percent is not None else "")
+        lines.append(f"  running  {running['id']}  {running['kind']}{detail}  ({len(running['devices'])} device(s) so far)")
+    else:
+        lines.append("  nothing running")
+    for position, job_id in enumerate(state.get("queue", []), 1):
+        job = jobs.get(job_id, {})
+        targets = ", ".join(job.get("device_ids") or []) or ("every outdated device" if job.get("kind") == "update" else "")
+        lines.append(f"  waiting {position}. {job_id}  {job.get('kind', '?')}  {targets}")
+    if not state.get("queue"):
+        lines.append("  nothing waiting")
+    return "\n".join(lines)
+
+
+def queue_command(args):
+    """pause / resume / cancel / move / queue: control the Overlord's update queue."""
+    url = args.url
+    if args.command == "queue":
+        print(queue_report(url))
+    elif args.command == "pause":
+        request(url, "/queue/pause", {})
+        print("Paused: the device being flashed finishes, then nothing new starts.\n" + queue_report(url))
+    elif args.command == "resume":
+        request(url, "/queue/resume", {})
+        print("Resumed.\n" + queue_report(url))
+    elif args.command == "move":
+        request(url, f"/jobs/{args.job}/move", {"position": int(args.position) if args.position.lstrip("-").isdigit() else args.position})
+        print(queue_report(url))
+    elif args.command == "cancel":
+        if args.all:
+            request(url, "/queue/clear", {"include_running": True})
+            print("Cancelled everything waiting and the running job.\n" + queue_report(url))
+            return
+        job_id = args.job or request(url).get("active_job")
+        if not job_id:
+            raise ValueError("nothing is running; name a waiting job (./fw queue lists them) or use --all")
+        job = request(url, f"/jobs/{job_id}/cancel", {})["job"]
+        print(f"Cancelled {job_id}." if job["state"] == "cancelled" else
+              f"Cancelling {job_id}: stopping the transfer; the device keeps its current firmware.")
 
 
 def watch(url, job_id=None):
@@ -438,6 +493,18 @@ followed by reboot/hash verification before a device is confirmed.""")
     watching = commands.add_parser("watch", help="watch a firmware job on the Overlord: the running one, the latest, or JOB_ID")
     transport_options(watching, inherited=True)
     watching.add_argument("job", nargs="?", help="job ID (default: the running job, else the latest)")
+    commands.add_parser("queue", help="show the Overlord's update queue: paused or not, running, waiting").add_argument("--url", default=argparse.SUPPRESS)
+    for name, help_text in (("pause", "hold the queue: the device being flashed finishes, then nothing new starts"),
+                            ("resume", "start the held queue again")):
+        commands.add_parser(name, help=help_text).add_argument("--url", default=argparse.SUPPRESS)
+    cancelling = commands.add_parser("cancel", help="stop a job: the running one by default, or JOB_ID (see ./fw queue)")
+    cancelling.add_argument("--url", default=argparse.SUPPRESS)
+    cancelling.add_argument("job", nargs="?")
+    cancelling.add_argument("--all", action="store_true", help="cancel every waiting job and the running one")
+    moving = commands.add_parser("move", help="reorder a waiting job: 0 runs next, or top / bottom")
+    moving.add_argument("--url", default=argparse.SUPPRESS)
+    moving.add_argument("job")
+    moving.add_argument("position")
     envs = commands.add_parser("envs", help="list production firmware environments and node types")
     envs.add_argument("--json", action="store_true")
     return result
@@ -460,6 +527,9 @@ def main(argv=None):
             return 0
         if args.command == "watch":
             watch(args.url, args.job)
+            return 0
+        if args.command in {"queue", "pause", "resume", "cancel", "move"}:
+            queue_command(args)
             return 0
         choice = filters(args)
         by_changes = None

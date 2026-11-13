@@ -53,7 +53,18 @@ All bodies and responses are JSON except binary PUT uploads. No login is require
 | GET | `/api/firmware/releases/{release_id}` | Manifest metadata and per-image upload readiness |
 | POST | `/api/firmware/updates` | Queue a selected update, returning HTTP 202 and a job |
 | GET | `/api/firmware/jobs/{job_id}` | Poll one job's state, device progress and results |
-| POST | `/api/firmware/jobs/{job_id}/retry` | Retry failed devices, or the original interrupted selection |
+| POST | `/api/firmware/jobs/{job_id}/retry` | Retry failed devices, the unfinished ones of a cancelled job, or an interrupted job's original selection |
+| GET | `/api/firmware/queue` | What is running, what waits (in order), and whether the queue is paused |
+| POST | `/api/firmware/queue/pause` | Hold the queue (see "Controlling the queue") |
+| POST | `/api/firmware/queue/resume` | Release the hold |
+| POST | `/api/firmware/queue/clear` | Cancel every waiting job; `{"include_running": true}` also cancels the running one |
+| POST | `/api/firmware/jobs/{job_id}/cancel` | Cancel a waiting job, or stop a running one |
+| DELETE | `/api/firmware/jobs/{job_id}` | Cancel a waiting or running job; drop a finished one from the history |
+| POST | `/api/firmware/jobs/{job_id}/move` | Reorder a waiting job: `{"position": 0}` runs next; `"top"`, `"bottom"` |
+| POST | `/api/firmware/jobs/{job_id}/devices` | Edit a job's devices: `{"add": ["59A4"], "remove": ["CC6B"]}` |
+| DELETE | `/api/firmware/jobs/{job_id}/devices/{id}` | Remove one device from a job |
+| GET | `/api/firmware/logs?since=SEQ&job=ID&limit=N` | Activity records newer than a sequence number, to follow a job; reply has `last_sequence` |
+| DELETE | `/api/firmware/releases/{release_id}` | Delete a release and the cached images only it used (refused while a waiting or running job needs it) |
 
 Register a manifest and upload an image:
 
@@ -93,9 +104,50 @@ supported environments, using exactly the release tool's `schema`, `tag`,
 `built_at` (Unix seconds the batch was triggered; optional, shown on the dashboard in Pacific time),
 `firmware`, `asset`, `size`, `sha256`, `md5`, and `build_hash` fields.
 
-Job states: `queued`, `running`, `completed`, `failed`, `interrupted`.
+Job states: `queued`, `running`, `completed`, `failed`, `interrupted`, `cancelled`.
 Device states: `offering`, `connecting`, `transferring`, `verifying`, `confirmed`,
-`skipped`, `failed`. Already-current devices are skipped without flashing.
+`skipped`, `failed`, `cancelled`. Already-current devices are skipped without flashing.
+
+## Controlling the queue
+
+Jobs run one at a time, in the order `GET /api/firmware/queue` lists them. The
+snapshot (`GET /api/firmware`) also carries `paused` and `queue` (the waiting job IDs).
+
+- **Pause** holds the queue. The device being flashed **finishes** (a flash is never
+  cut off halfway by a pause), then nothing new starts, neither the running job's
+  next device nor the next job. Held devices show `queue paused; waiting to resume`.
+  `resume` continues exactly where it stopped. The hold survives an Overlord
+  restart, so a paused queue stays paused until someone resumes it. Scans and
+  passive discovery are unaffected.
+- **Cancel** a waiting job and it is dropped without running. Cancel a running one
+  and the Overlord stops serving the device's download (the bridge is answered with
+  an error), takes no more devices, and the job ends `cancelled`; devices that had
+  not started are marked `cancelled`. A device that has not finished downloading
+  discards the partial image and keeps its current firmware, so this is safe up to
+  the moment the install is acknowledged. Cancelling **during the reboot check** can
+  not undo an install that already went through; that device is marked `cancelled`
+  with a message saying it may have installed the new firmware. A scan also stops.
+  `POST .../retry` on a cancelled job queues the devices that did not finish.
+- **Move** reorders a waiting job (`position` 0 runs next).
+- **Edit devices**: a waiting job can gain or lose devices (a job that targets every
+  outdated device takes only removals, recorded as `exclude`; its last device cannot
+  be removed, cancel the job instead). A running job can drop devices it has not
+  reached yet (they finish `skipped`, "removed from this job"); to add devices to a
+  running one, queue a new job. A device already being flashed or finished cannot be
+  removed from a running job.
+- **Delete a release** to free the cache; each `./fw flash` otherwise leaves its
+  images there.
+
+```sh
+curl -X POST   http://overlord.local:8080/api/firmware/queue/pause
+curl -X POST   http://overlord.local:8080/api/firmware/jobs/JOB/cancel
+curl -X POST   http://overlord.local:8080/api/firmware/jobs/JOB/move    -d '{"position":"top"}'
+curl -X POST   http://overlord.local:8080/api/firmware/jobs/JOB/devices -d '{"remove":["CC6B"]}'
+curl           'http://overlord.local:8080/api/firmware/logs?job=JOB&since=120'
+```
+
+Unknown job or release IDs return 404; an operation the job's state does not allow
+(cancelling a finished job, moving a running one) returns 400 with the reason.
 
 The existing `/status`, `/volume`, `/cue`, `/param`, and `/playtest` endpoints
 retain their existing behavior.

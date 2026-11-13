@@ -54,6 +54,11 @@ Run `./fw` for help. The default transport is **OTA through the Overlord**, usin
 ./fw flash --id E857,EC52 --dry-run             # inspect targets without building/flashing
 ./fw flash --id 59A4 --no-wait                  # return after queueing instead of watching
 ./fw watch                                     # watch the running job (else the latest); ./fw watch JOB_ID for one
+./fw queue                                     # paused or not, what is running, what waits and in what order
+./fw pause                                     # hold: the device being flashed finishes, then nothing new starts
+./fw resume                                    # start the held queue again
+./fw cancel                                    # stop the running job (./fw cancel JOB for a waiting one, --all for everything)
+./fw move JOB top                              # reorder a waiting job (0 runs next)
 ./fw flash --id 59A4 --manifest dist/<timestamp>/manifest.json # reuse a bundle without rebuilding
 ./fw list --usb                                # attached boards, timestamps and identities
 ./fw flash --usb --id 59A4                      # build and upload over USB, verify reboot

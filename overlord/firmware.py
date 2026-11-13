@@ -31,17 +31,15 @@ class FirmwareUpdater:
         self._condition = threading.Condition(self._lock)
         self._assets = {}  # sha256 -> local Path
         self._release = None
-        self._running = False
+        # What the queue can ask of an update that is running (FirmwareManager):
+        # hold before the next device, stop, or skip a device. Guarded by _condition.
+        self._paused = False
+        self._cancel = False
+        self._exclude = set()
         # The bridge on this machine's UART, from its FW-BRIDGE line. Satellite
         # players have bridges too, and census reports them with the same env;
         # only this one is updated over the UART, the rest over the mesh.
         self._bridge_id = None
-
-    def start(self):
-        if self._running:
-            return
-        self._running = True
-        threading.Thread(target=self._boot_run, name="firmware-updater", daemon=True).start()
 
     def handle_line(self, line):
         if line.startswith("PULLEYS-CENSUS "):
@@ -85,6 +83,51 @@ class FirmwareUpdater:
         if self.observer:
             self.observer(kind, fields)
 
+    # ── what the queue can ask of a running update ───────────────────────────
+    def begin_job(self, exclude=()):
+        """A new job: nothing is cancelled, and these devices are skipped."""
+        with self._condition:
+            self._cancel = False
+            self._exclude = set(exclude)
+
+    def request_cancel(self):
+        """Stop serving the device being flashed and take no more. A device that
+        has not finished downloading discards the partial image, so this is safe
+        until its install is acknowledged."""
+        with self._condition:
+            self._cancel = True
+            self._condition.notify_all()
+
+    def set_paused(self, paused):
+        """Hold before the next device. The one being flashed finishes first."""
+        with self._condition:
+            self._paused = bool(paused)
+            self._condition.notify_all()
+
+    def exclude_device(self, node_id):
+        with self._condition:
+            self._exclude.add(node_id)
+
+    @property
+    def cancelled(self):
+        return self._cancel
+
+    def _hold_while_paused(self, node_id):
+        with self._condition:
+            announced = False
+            while self._paused and not self._cancel:
+                if not announced:
+                    announced = True
+                    self._emit("device", node_id=node_id, state="queued", message="queue paused; waiting to resume")
+                self._condition.wait(1)
+
+    def _settle(self, seconds):
+        """Sleep, but wake at once if the job is cancelled."""
+        with self._condition:
+            end = time.monotonic() + seconds
+            while not self._cancel and time.monotonic() < end:
+                self._condition.wait(max(0, end - time.monotonic()))
+
     def discover(self, timeout=25):
         started = time.time()
         with self._condition:
@@ -100,8 +143,10 @@ class FirmwareUpdater:
             raise RuntimeError("bridge unavailable")
         # Merge two rounds: one radio census regularly misses a few replies.
         for _ in range(2):
+            if self._cancel:
+                break
             self.serial.write_line("FW-CENSUS spread=3000")
-            time.sleep(3.5)
+            self._settle(3.5)
         with self._condition:
             return {key: dict(value) for key, value in self._inventory.items()
                     if self._last_seen.get(key, 0) >= started}
@@ -128,6 +173,15 @@ class FirmwareUpdater:
         nodes.sort(key=lambda item: 0 if str(item[1].get("env", "")).startswith("arbiter") else
                           2 if item[0] == own else 1)
         for node_id, node in nodes:
+            self._hold_while_paused(node_id)
+            if self._cancel:
+                results[node_id] = {"state": "cancelled", "message": "cancelled before it started"}
+                self._emit("device", node_id=node_id, **results[node_id])
+                continue
+            if node_id in self._exclude:
+                results[node_id] = {"state": "skipped", "message": "removed from this job"}
+                self._emit("device", node_id=node_id, **results[node_id])
+                continue
             env = node.get("env")
             if env not in table or table[env]["sha256"] not in self._assets:
                 results[node_id] = {"state": "failed", "error": "no uploaded image for this environment"}
@@ -149,6 +203,10 @@ class FirmwareUpdater:
                 command = (f"FW-OFFER id={node_id} env={env} build_hash={expected_build} "
                            f"sha256={expected} md5={table[env]['md5']} size={table[env]['size']}")
             for attempt in range(1, 4):
+                if self._cancel:
+                    results[node_id] = {"state": "cancelled", "message": "cancelled before it started"}
+                    self._emit("device", node_id=node_id, **results[node_id])
+                    break
                 with self._condition:
                     self._statuses.pop(node_id, None)
                 self._emit("device", node_id=node_id, state="offering", attempt=attempt,
@@ -162,16 +220,20 @@ class FirmwareUpdater:
                 # while newer bridges use 921600 baud and 4 KiB chunks.
                 timeout = max(180, table[env]["size"] / 4000 + 60)
                 status = self._wait_status(node_id, timeout)
+                if status and status.get("state") == "cancelled":
+                    results[node_id] = {"state": "cancelled", "message": "cancelled while downloading; the device keeps its current firmware"}
+                    self._emit("device", node_id=node_id, **results[node_id])
+                    break
                 if status and status.get("state") == "ok":
                     self._emit("device", node_id=node_id, state="verifying")
                     # Require a newly requested census report with the expected
                     # hash rather than accepting the install ACK alone.
-                    time.sleep(8)  # allow the target to restart and rejoin ESP-NOW
+                    self._settle(8)  # allow the target to restart and rejoin ESP-NOW
                     confirmed_after = time.time()
                     if is_own_bridge:
                         refreshed = None
                         reconnect_deadline = time.monotonic() + 90
-                        while time.monotonic() < reconnect_deadline:
+                        while time.monotonic() < reconnect_deadline and not self._cancel:
                             self.serial.write_line("FW-PING")
                             with self._condition:
                                 value = self._inventory.get(node_id)
@@ -183,10 +245,18 @@ class FirmwareUpdater:
                     else:
                         refreshed = None
                         for _ in range(18):
+                            if self._cancel:
+                                break
                             self.serial.write_line(f"FW-QUERY id={node_id}")
                             refreshed = self._wait_inventory(node_id, 5, expected_build, confirmed_after)
                             if refreshed:
                                 break
+                    if not refreshed and self._cancel:
+                        # The install was already acknowledged, so it may well have gone through.
+                        results[node_id] = {"state": "cancelled", "message":
+                                            "cancelled while verifying; the device may have installed the new firmware"}
+                        self._emit("device", node_id=node_id, **results[node_id])
+                        break
                     if refreshed:
                         print(f"firmware: {env} {node_id} confirmed", flush=True)
                         results[node_id] = {"state": "confirmed"}
@@ -201,7 +271,7 @@ class FirmwareUpdater:
                                     else "update timed out"}
                 self._emit("device", node_id=node_id, **results[node_id])
                 if attempt < 3:
-                    time.sleep(2)
+                    self._settle(2)
         self._transfer_target = None
         return results
 
@@ -212,6 +282,8 @@ class FirmwareUpdater:
                 value = self._statuses.get(node_id)
                 if value and value.get("state") in ("ok", "failed"):
                     return value
+                if self._cancel:
+                    return {"state": "cancelled"}
                 self._condition.wait(max(0, end - time.monotonic()))
         return None
 
@@ -231,6 +303,11 @@ class FirmwareUpdater:
         import zlib
         fields = _fields(line)
         digest = fields.get("sha256", "").lower()
+        if self._cancel:
+            # Answer with an error so the bridge ends the download promptly; the
+            # device then drops the partial image.
+            self.serial.write_line(f"FW-ERROR sha256={digest} offset={fields.get('offset', '?')} reason=cancelled")
+            return
         try:
             offset = int(fields["offset"])
             length = int(fields.get("length", 384))
