@@ -179,6 +179,14 @@ class InstallationManager:
         return "; ".join(f"{arbiter}: {len(chunks['parts'])} of {chunks['count']} pieces"
                          for (arbiter, _), chunks in pending["chunks"].items())
 
+    def _reject(self, arbiter, reason, text):
+        """A fully assembled reply that is not usable: say so, once a while, instead of timing out blind."""
+        now = time.monotonic()
+        if now - getattr(self, "_rejected_at", -60) >= 30:
+            self._rejected_at = now
+            print(f"installation: rejected reply from {arbiter}: {reason}; {len(text)} bytes: {text[:160]!r} ... {text[-80:]!r}", flush=True)
+        return True
+
     def handle_line(self, line):
         if not line.startswith("IC "):
             return False
@@ -211,23 +219,24 @@ class InstallationManager:
             if len(chunks["parts"]) != count:
                 return True
             try:
-                response = json.loads("".join(chunks["parts"][i] for i in range(count)))
+                text = "".join(chunks["parts"][i] for i in range(count))
+                response = json.loads(text)
                 if (not isinstance(response, dict) or type(response.get("v")) is not int or
                     response.get("v") != 1 or type(response.get("ok")) is not bool):
-                    return True
+                    return self._reject(arbiter, "bad envelope", text)
                 if not response["ok"] and not isinstance(response.get("error"), str):
-                    return True
+                    return self._reject(arbiter, "error without message", text)
                 row = response.get("installation")
                 if row is not None:
                     if (not isinstance(row, dict) or row.get("id") != arbiter or
                         not isinstance(row.get("boot"), str) or not TOKEN.fullmatch(row["boot"]) or
                         type(row.get("revision")) is not int):
-                        return True
+                        return self._reject(arbiter, "bad installation row", text)
                     self._arbiters[arbiter] = (row, time.monotonic())
                 elif response["ok"]:
-                    return True
+                    return self._reject(arbiter, "ok without installation row", text)
                 pending["responses"][arbiter] = response
                 self._condition.notify_all()
-            except (ValueError, KeyError, TypeError):
-                pass
+            except (ValueError, KeyError, TypeError) as exc:
+                return self._reject(arbiter, f"{type(exc).__name__}: {exc}", text if "text" in dir() else "")
         return True
