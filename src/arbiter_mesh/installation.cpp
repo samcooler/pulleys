@@ -75,6 +75,11 @@ void snapshot(JsonObject out) {
     uint8_t goalMask = gamestate_goal_color_mask();
     for (uint8_t c = 0; c < pulleys::COLOR_COUNT; ++c)
         if (goalMask & (1u << c)) goals.add(c);
+    // The goals as set, shown or not: what the page's checkboxes edit.
+    JsonArray goalSet = game["goal_set"].to<JsonArray>();
+    uint8_t setMask = components_goal_color_mask();
+    for (uint8_t c = 0; c < pulleys::COLOR_COUNT; ++c)
+        if (setMask & (1u << c)) goalSet.add(c);
     char deviceStatus[80];
     game["devices_ok"] = devices_summary(deviceStatus, sizeof(deviceStatus));
     game["devices_status"] = deviceStatus;
@@ -182,6 +187,10 @@ const char* apply(JsonObjectConst in, uint16_t bridge) {
         if (!integer(in["color"], 0, 5) || !integer(in["r"], 0, 255) ||
             !integer(in["g"], 0, 255) || !integer(in["b"], 0, 255)) return "invalid";
         installcfg_set_rgb(in["color"], in["r"], in["g"], in["b"]);
+    } else if (!strcmp(op, "goals")) {
+        // Palette-colour bits of the five game colours; purple is never a goal.
+        if (!integer(in["mask"], 0, 31)) return "invalid";
+        components_set_goal_colors((uint8_t)in["mask"].as<int>());
     } else if (!strcmp(op, "shuffle")) {
         installcfg_shuffle_game1();
     } else if (!strcmp(op, "reset_rgb")) {

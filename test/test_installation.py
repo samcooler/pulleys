@@ -122,10 +122,16 @@ class InstallationTests(unittest.TestCase):
     def test_validate_rejects_coercions_extra_fields_and_out_of_range(self):
         for op, fields in [('color', {'channel': 0, 'color': 2}), ('color', {'channel': 25, 'color': 2}),
                            ('color', {'channel': 1, 'color': True}), ('rgb', {'color': 0, 'r': 256, 'g': 0, 'b': 0}),
-                           ('rgb', {'color': 0, 'r': 1.5, 'g': 0, 'b': 0}), ('shuffle', {'q': 'BAD'})]:
+                           ('rgb', {'color': 0, 'r': 1.5, 'g': 0, 'b': 0}), ('shuffle', {'q': 'BAD'}),
+                           ('goals', {'mask': 32}), ('goals', {'mask': -1}), ('goals', {'mask': True}), ('goals', {})]:
             with self.subTest(op=op, fields=fields), self.assertRaises(ValueError):
                 self.manager.mutate(op, {**self.body, **fields})
         self.assertFalse(self.serial.lines)
+
+    def test_goals_accepts_a_colour_mask_of_the_five_game_colours(self):
+        for mask in (0, 1, 21, 31):
+            with self.subTest(mask=mask):
+                self.manager.validate('goals', {**self.body, 'mask': mask})
 
     def test_invalid_chunks_cannot_complete_or_refresh_state(self):
         old = self.manager._arbiters['ABCD'][1]

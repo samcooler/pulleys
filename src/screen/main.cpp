@@ -658,7 +658,7 @@ static void renderComponents(uint32_t now, float dt) {
 // extractor still shows which one it is.
 //
 // While a round wants this colour, every LED, strip and ring, is washed lightly
-// in it (EXTRACTOR_WANTED_WASH), and the same lines go to full brightness: an
+// in it (EXTRACTOR_WANTED_WASH), and the same lines brighten (EXTRACTOR_WANTED_LINE): an
 // empty tank waiting to be filled. The liquid is drawn over all of it, and
 // wins wherever it is brighter. This stays for as long as the colour is a
 // goal, full or not, since a full tank can drain back below full. Colours not
@@ -694,7 +694,13 @@ static void renderComponents(uint32_t now, float dt) {
 #endif
 // Of the colour's brightness: the light wash over every LED while it is a goal.
 #ifndef EXTRACTOR_WANTED_WASH
-  #define EXTRACTOR_WANTED_WASH 30
+  #define EXTRACTOR_WANTED_WASH 10
+#endif
+// Of the colour's brightness: the vertical lines while it is a goal and not yet
+// filled. Brighter than idle, but well short of the liquid, which must stay the
+// brightest thing on the surface.
+#ifndef EXTRACTOR_WANTED_LINE
+  #define EXTRACTOR_WANTED_LINE 110
 #endif
 
 static pulleys::ExtractorLiquid liquid;
@@ -740,7 +746,9 @@ static void renderExtractor(uint32_t now, float dt) {
     CRGB wash = full, lineIdle = full;
     wash.nscale8(EXTRACTOR_WANTED_WASH);
     lineIdle.nscale8(EXTRACTOR_IDLE_GLOW);
-    CRGB line = wanted ? full : lineIdle;
+    CRGB lineWanted = full;
+    lineWanted.nscale8(EXTRACTOR_WANTED_LINE);
+    CRGB line = wanted ? lineWanted : lineIdle;
     if (wanted)
         for (uint16_t i = 0; i < S; i++)
             leds[pulleys::extractor_strip_index(i, S, EXTRACTOR_STRIP_REVERSE)] |= wash;

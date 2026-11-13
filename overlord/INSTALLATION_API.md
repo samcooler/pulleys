@@ -56,6 +56,7 @@ All endpoints share the existing control server and its LAN access policy.
 | GET | `/api/installation` | Cached arbiter snapshots, freshness, bridge state, firmware-busy state, Overlord local time/timezone, last polling error |
 | POST | `/api/installation/color` | Common fields plus `channel` (1–24), `color` (0–5) |
 | POST | `/api/installation/rgb` | Common fields plus `color` (0–5), `r`, `g`, `b` (0–255) |
+| POST | `/api/installation/goals` | Common fields plus `mask` (0–31): the goal colours as palette-colour bits, red=1, blue=2, green=4, yellow=8, orange=16. Purple is never a goal; a colour no major component wears is ignored. Needs arbiter firmware with `game.goal_set` |
 | POST | `/api/installation/shuffle` | Common fields |
 | POST | `/api/installation/reset_rgb` | Common fields |
 | POST | `/api/installation/reset_game` | Common fields. Restarts the game at its start state; clears the trigger log, counters, component charge and pull history. Colours, map, game and clock are kept |
@@ -168,6 +169,8 @@ sensor/screen counts, pull activity, arbiter uptime, mesh clock spread, and the
 summary of desired versus reported game-device settings. Bridge connection,
 report freshness, pending edits, and paused updates during firmware work are
 shown alongside these values.
+
+The Installation page shows one checkbox per game colour; ticking one sends `goals` with the new mask. `game.goal_set` is the goals as set (palette indices), whether or not the state shows them; `goal_colors` is still only what is visible.
 
 The arbiter snapshot adds `uptime_ms`, `game`, and `mesh`. `game` includes
 `ready`, `name`, `state`, `state_age_ms`, `timer_left_ms` (-1 for no timer),

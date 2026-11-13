@@ -122,6 +122,27 @@ void components_deal_goals(uint8_t count) {
 
 uint8_t components_goal_mask() { return s_goalMask; }
 
+uint8_t components_goal_color_mask() {
+    uint8_t colors = 0;
+    for (uint8_t i = 0; i < MAJOR_COUNT; i++) {
+        uint8_t c = gamestate_major_color(i);
+        if ((s_goalMask & (1u << i)) && c < pulleys::COLOR_COUNT) colors |= 1u << c;
+    }
+    return colors;
+}
+
+void components_set_goal_colors(uint8_t colorMask) {
+    uint8_t mask = 0;
+    for (uint8_t i = 0; i < MAJOR_COUNT; i++) {
+        uint8_t c = gamestate_major_color(i);
+        if (c < pulleys::COLOR_COUNT && (colorMask & (1u << c))) mask |= 1u << i;
+    }
+    s_goalMask = mask;
+    gamestate_note_goals(mask);
+    publish(true);                 // the extractors' outlines move with the goals
+    components_check_simon_complete();  // a retained lit set can already match
+}
+
 static void checkSimonComplete(uint32_t now) {
     if (goalsComplete(now)) gamestate_event(GE_ALL_COMPONENTS_ACTIVATED);
 }

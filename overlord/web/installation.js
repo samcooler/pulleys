@@ -7,7 +7,7 @@ function newSession() {
 }
 let session=sessionStorage.getItem('mapping-session');
 if(!/^[0-9A-F]{16}$/.test(session || '')) session=newSession();
-let clockDirty=false,clockBase=null,lastRenew=0,receivedAt=Date.now(),renderedGoals='';
+let clockDirty=false,clockBase=null,lastRenew=0,receivedAt=Date.now();
 const names = ['red','blue','green','yellow','orange','purple'];
 function notice(text, error=false) {
   $('notice').textContent = text;
@@ -16,7 +16,21 @@ function notice(text, error=false) {
 }
 function current() { return state?.arbiters.find(row => row.id === selected); }
 function paint(el, rgb) { el.style.backgroundColor = `rgb(${rgb.join(',')})`; }
+// One checkbox per game colour (purple is never a goal) saying whether it is a goal now.
+function buildGoals() {
+  const box=$('overview-goals');
+  for(let index=0;index<5;index++) {
+    const label=document.createElement('label'); label.className='goal-chip';
+    label.innerHTML=`<input type="checkbox" id="goal-${index}" aria-label="${names[index]} is a goal"><span class="swatch" id="goal-swatch-${index}" aria-hidden="true"></span>${names[index]}`;
+    label.querySelector('input').addEventListener('change',event => {
+      const mask=[0,1,2,3,4].reduce((bits,i)=>bits|($(`goal-${i}`).checked?1<<i:0),0);
+      mutate('goals',{mask}).then(ok => {if(!ok) event.target.checked=!event.target.checked;});
+    });
+    box.append(label);
+  }
+}
 function build() {
+  buildGoals();
   for (let ch=1; ch<=24; ch++) {
     $('map-channel').add(new Option(`Channel ${ch}`,ch));
     const card = document.createElement('label'); card.className='channel';
@@ -39,7 +53,7 @@ function build() {
       event.preventDefault();
       await applyRgb(index,['r','g','b'].map(key => Number($(`rgb-${index}-${key}`).value)));
     });
-    form.querySelector('.swatch-btn').addEventListener('click',event => {event.stopPropagation();openPicker(index,event.currentTarget);});
+    form.querySelector('.swatch-btn').addEventListener('click',event => openPicker(index,event.currentTarget));
     $('colors').append(form);
   });
 }
@@ -50,37 +64,19 @@ async function applyRgb(index,[r,g,b]) {
   if(ok) {dirty.delete(index);render();}
   return ok;
 }
-// The colour picker: a few vivid presets and a free choice, opened from a swatch.
-// Picking applies immediately. Whites are left out on purpose: they draw the most power.
-const PRESETS=[['Red',[255,0,0]],['Orange',[255,70,0]],['Amber',[255,140,0]],['Yellow',[255,210,0]],['Lime',[120,255,0]],['Green',[0,255,0]],
-  ['Teal',[0,255,120]],['Cyan',[0,200,255]],['Blue',[0,0,255]],['Indigo',[70,0,255]],['Purple',[160,0,255]],['Magenta',[255,0,150]]];
+// Clicking a swatch opens the browser's full colour picker straight away. Its OK (the input's
+// change event) saves the colour; dragging inside it and cancelling change nothing.
 const hex=rgb=>'#'+rgb.map(v=>v.toString(16).padStart(2,'0')).join('');
-let picker=null;
-function closePicker() { if(picker) {picker.remove();picker=null;} }
 function openPicker(index,anchor) {
-  closePicker();
   const rgb=current()?.colors[index].rgb || [0,0,0];
-  picker=document.createElement('div'); picker.className='picker'; picker.setAttribute('role','dialog'); picker.setAttribute('aria-label',`Pick ${names[index]} colour`);
-  picker.addEventListener('click',event=>event.stopPropagation());
-  PRESETS.forEach(([label,value]) => {
-    const choice=document.createElement('button'); choice.type='button'; choice.className='picker-choice'; choice.title=`${label} (${value.join(', ')})`; choice.setAttribute('aria-label',label);
-    paint(choice,value);
-    if(value.join()===rgb.join()) choice.classList.add('current');
-    choice.addEventListener('click',()=>{closePicker();applyRgb(index,value);});
-    picker.append(choice);
-  });
-  const custom=document.createElement('label'); custom.className='picker-custom'; custom.textContent='Custom…';
   const input=document.createElement('input'); input.type='color'; input.value=hex(rgb);
-  input.addEventListener('change',()=>{const v=input.value;closePicker();applyRgb(index,[1,3,5].map(i=>parseInt(v.slice(i,i+2),16)));});
-  custom.append(input); picker.append(custom);
-  document.body.append(picker);
-  const box=anchor.getBoundingClientRect();
-  picker.style.left=Math.max(8,Math.min(window.scrollX+box.left,window.scrollX+document.documentElement.clientWidth-picker.offsetWidth-8))+'px';
-  picker.style.top=(window.scrollY+box.bottom+6)+'px';
-  picker.querySelector('.picker-choice')?.focus();
+  input.setAttribute('aria-label',`${names[index]} colour`);
+  input.style.cssText='position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
+  input.addEventListener('change',()=>{const v=input.value;input.remove();applyRgb(index,[1,3,5].map(i=>parseInt(v.slice(i,i+2),16)));});
+  input.addEventListener('cancel',()=>input.remove());
+  anchor.parentElement.append(input);
+  if(input.showPicker) input.showPicker(); else input.click();
 }
-document.addEventListener('click',closePicker);
-document.addEventListener('keydown',event=>{if(event.key==='Escape') closePicker();});
 function render() {
   if(!state) return;
   const options=state.arbiters.map(row=>row.id);
@@ -156,18 +152,17 @@ function renderOverview(row) {
   $('connection').textContent=view.health;
   document.querySelector('.overview-panel').classList.toggle('report-stale',!view.live);
   $('overview-devices').classList.toggle('status-warning',!view.devicesOk);
-  const goalValues=view.goals.map(index=>[index,row.colors?.[index]]);
-  const key=JSON.stringify(goalValues);
-  if(renderedGoals!==key) {
-    renderedGoals=key;
-    const goals=$('overview-goals');goals.replaceChildren();
-    for(const [index,color] of goalValues) {
-      const chip=document.createElement('span');chip.className='goal-chip';
-      const swatch=document.createElement('span');swatch.className='swatch';swatch.setAttribute('aria-hidden','true');
-      if(color?.rgb) paint(swatch,color.rgb);
-      chip.append(swatch,document.createTextNode(color?.name || names[index]));goals.append(chip);
-    }
+  const set=row?.game?.goal_set;   // older arbiter firmware has no goal_set: show, but do not edit
+  const editable=Array.isArray(set) && !!row?.fresh && state.bridge_connected && !state.busy && !pending;
+  for(let index=0;index<5;index++) {
+    const box=$(`goal-${index}`);
+    box.checked=Array.isArray(set) ? set.includes(index) : view.goals.includes(index);
+    box.disabled=!editable;
+    if(row?.colors?.[index]) paint($(`goal-swatch-${index}`),row.colors[index].rgb);
   }
+  if(Array.isArray(set) && row.game?.ready && !row.game.goals_visible)
+    $('overview-goals-status').textContent='Goals are set here but only show in states that use them.';
+  else if(Array.isArray(set)) $('overview-goals-status').textContent=view.live?'Tick the colours that are goals.':'Last reported goals.';
 }
 function renderMapping(row,live) {
   const map=row?.mapping;

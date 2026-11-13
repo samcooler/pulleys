@@ -31,6 +31,12 @@ bool components_on_cue(const char* cue);
 // The `goals: N` action: deal N goal colours (1-5), never the set just dealt.
 void components_deal_goals(uint8_t count);
 uint8_t components_goal_mask();   // bit i = major component i is a goal
+// Goals as palette-colour bits (colour index c = bit c), whether or not the
+// current state shows them; only colours a major component wears can be goals.
+uint8_t components_goal_color_mask();
+// Set the goals by colour from the Installation page. Colours no major wears
+// are ignored; zero clears them.
+void components_set_goal_colors(uint8_t colorMask);
 // Send every component's charge (and, while the state cares, the goals) now.
 void components_publish();
 void components_reset();   // charges, lit finals and goals back to nothing
