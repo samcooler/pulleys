@@ -9,6 +9,8 @@ Type=oneshot
 User=@USER@
 EnvironmentFile=/etc/overlord.env
 ExecStart=@DIR@/deploy/update.sh
+# On the screen as well as in the journal, so a long media sync shows "copying 12/44".
+StandardOutput=journal+console
 # update.sh never fails; the timeout only stops a hung sync blocking the show forever.
 TimeoutStartSec=30min
 
