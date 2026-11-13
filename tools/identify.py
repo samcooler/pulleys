@@ -64,6 +64,7 @@ def probe(port, out, versions=False):
         s.port = port
         s.baudrate = BAUD
         s.timeout = 0.2
+        s.write_timeout = 1.0   # never tcdrain: it has no timeout and hangs on a CDC port that is not draining
         s.dtr = False
         s.rts = False
         s.open()
@@ -82,7 +83,6 @@ def probe(port, out, versions=False):
             while time.monotonic() < (version_deadline or deadline):
                 if not identified and time.monotonic() - asked > 0.7:
                     s.write(b"?\n")
-                    s.flush()
                     asked = time.monotonic()
                 chunk = s.read(512)
                 if not chunk:
@@ -104,7 +104,6 @@ def probe(port, out, versions=False):
                             return
                         if version_deadline is None:
                             s.write(b"CENSUS 500\n")
-                            s.flush()
                             version_deadline = time.monotonic() + 1.5
                     elif identified and "PULLEYS-CENSUS " in line:
                         fields = parse(line[line.index("PULLEYS-CENSUS "):])
