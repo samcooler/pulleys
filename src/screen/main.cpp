@@ -653,6 +653,8 @@ static void renderComponents(uint32_t now, float dt) {
 // arbiter publishes it for the component bars: pulls add to it, and it drains
 // at the game's rate. 'c<bar> <percent>' on serial drives it on the bench.
 //
+// The ring's bottom row always glows faintly in the colour (EXTRACTOR_IDLE_GLOW).
+//
 // While a round wants this colour, the ring's top and bottom rows are outlined
 // in it at half brightness: an empty tank waiting to be filled. The outline
 // stays for as long as the colour is a goal, full or not, since a full tank
@@ -672,6 +674,12 @@ static void renderComponents(uint32_t now, float dt) {
 // plastic like every other panel: this is a heat budget as much as a look.
 #ifndef EXTRACTOR_BRIGHTNESS
   #define EXTRACTOR_BRIGHTNESS 60
+#endif
+
+// Of the colour's own (already dimmed) brightness, out of 255: the faint glow
+// along the ring's bottom row while the tank is empty.
+#ifndef EXTRACTOR_IDLE_GLOW
+  #define EXTRACTOR_IDLE_GLOW 40
 #endif
 
 static pulleys::ExtractorLiquid liquid;
@@ -714,11 +722,16 @@ static void renderExtractor(uint32_t now, float dt) {
     // The outline goes under the liquid: where the liquid is brighter it wins.
     CRGB outline = full;
     outline.nscale8(128);
+    // Idle, the ring's bottom row glows faintly in the colour, so a dry
+    // extractor still shows which one it is. Same rule: the liquid wins.
+    CRGB idle = full;
+    idle.nscale8(EXTRACTOR_IDLE_GLOW);
     bool wanted = extractorWanted(color);
     for (uint8_t x = 0; x < pulleys::EXTRACTOR_RING_W; x++) {
         float r = pulleys::extractor_ring_surface(liquid, S, x);
         for (uint8_t y = 0; y < pulleys::EXTRACTOR_RING_H; y++) {
             CRGB c = liquidPixel(full, pulleys::extractor_cover(r, (float)(S + y)));
+            if (y == 0) c |= idle;
             if (wanted && (y == 0 || y == pulleys::EXTRACTOR_RING_H - 1)) c |= outline;
             leds[pulleys::extractor_ring_index(x, y, EXTRACTOR_REVERSE_Y)] = c;
         }
