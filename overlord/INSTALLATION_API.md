@@ -89,6 +89,22 @@ responses update Overlord's cached readback before returning an HTTP error.
 Renew/end require the same boot and mapping owner but do not compare revision:
 ordinary captures must not prevent lease renewal or closing the session.
 
+## Lever debug
+
+The Installation page ends with one button per rope channel (1-24). A click is
+one pull on that channel, as if its sensor had fired: it charges the component,
+lights goals, fires cues and reaches the play log. Clicks are independent, so
+fast clicking pulls fast.
+
+`POST /lever/<channel>` (1-31) on the control server does it: 200 `{"channel":n}`,
+400 for a bad channel, 503 if the bridge is not connected. Overlord writes
+`GAME-PULL <channel>` to the bridge, which floods `MESH_MSG_GAME_PULL` (`0xA6`,
+body the channel in ASCII, two copies the mesh dedupes). The arbiter plays it
+into the game through the same path as a sensor pull. It is not a sensor event,
+so it is not written to the SD log, and it is dropped while the mapping screen
+holds the ropes. With `--game` (no arbiter), Overlord's own engine takes the pull.
+Needs bridge and arbiter firmware from this change.
+
 ## Bridge and mesh protocol, version 1
 
 Overlord writes one line:

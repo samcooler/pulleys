@@ -69,6 +69,13 @@ class GainStoreTest(unittest.TestCase):
             self.store.set_many({'audio_once_steam': 5, 'audio_once_chime': 99})
         self.assertEqual(self.store.get('audio_once_steam'), 0.3)
 
+    def test_missing_cues_sort_last(self):
+        self.store.media = lambda cue: [] if cue in ('audio_loop_idle', 'audio_once_chime') else ['x']
+        rows = self.store.snapshot()['cues']
+        self.assertEqual([c['cue'] for c in rows],
+                         ['audio_once_steam', 'video_once_janis_nag_*', 'audio_loop_idle', 'audio_once_chime'])
+        self.assertEqual([c['missing'] for c in rows], [False, False, True, True])
+
     def test_yaml_block(self):
         self.store.set('audio_once_chime', 1.25)
         self.store.set('audio_once_steam', 1)   # explicit in the YAML, so kept

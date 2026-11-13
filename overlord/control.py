@@ -1,6 +1,5 @@
 """Overlord control API and firmware dashboard on the same HTTP server."""
 import json
-import mimetypes
 from pathlib import Path
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,11 +9,10 @@ from installation import InstallationError
 
 WEB = Path(__file__).with_name("web")
 MAX_IMAGE = 7 * 1024 * 1024
-MAX_MEDIA = 64 * 1024 * 1024   # the largest clip the Gain tab will fetch to draw
 
 
 class ControlServer:
-    def __init__(self, handle, host="127.0.0.1", port=8080, firmware=None, installation=None, sessions=None, gains=None, media=None):
+    def __init__(self, handle, host="127.0.0.1", port=8080, firmware=None, installation=None, sessions=None, gains=None, waves=None):
         class Handler(BaseHTTPRequestHandler):
             def _body(self, limit, binary=False):
                 if self.headers.get("Transfer-Encoding"):
@@ -122,15 +120,17 @@ class ControlServer:
             def _serve(self):
                 parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
                 content_type = "application/json; charset=utf-8"
-                extra_headers = {}
                 try:
                     assets = {("gain",): ("gain.html", "text/html"),
+                              ("gain.css",): ("gain.css", "text/css"),
                               ("gain.js",): ("gain.js", "application/javascript"),
                               ("sessions",): ("sessions.html", "text/html"),
                               ("sessions.js",): ("sessions.js", "application/javascript"),
                               ("installation_status.js",): ("installation_status.js", "application/javascript"),
                               ("installation",): ("installation.html", "text/html"),
                               ("installation.js",): ("installation.js", "application/javascript"),
+                              ("levers.js",): ("levers.js", "application/javascript"),
+                              ("levers.css",): ("levers.css", "text/css"),
                               ("installation.css",): ("installation.css", "text/css"),
                               (): ("index.html", "text/html"),
                               ("dashboard.css",): ("dashboard.css", "text/css"),
@@ -153,16 +153,12 @@ class ControlServer:
                         else:
                             query = parse_qs(urlsplit(self.path).query)
                             status, body = 200, sessions.snapshot(int(query.get("limit", [200])[0]))
-                    elif parts[:3] == ["api", "gain", "media"] and len(parts) == 4 and self.command == "GET":
-                        files = media(parts[3]) if media else []
-                        if not files:
-                            status, body = 404, {"error": "no media for that cue"}
-                        elif files[0].stat().st_size > MAX_MEDIA:
-                            status, body = 413, {"error": "file too large to draw"}
+                    elif parts == ["api", "gain", "waves"] and self.command == "GET":
+                        if waves is None:
+                            status, body = 503, {"error": "waveforms unavailable"}
                         else:
-                            content_type = mimetypes.guess_type(files[0].name)[0] or "application/octet-stream"
-                            extra_headers = {"X-Media-Name": files[0].name, "X-Media-Count": str(len(files))}
-                            status, body = 200, files[0].read_bytes()
+                            found, pending = waves()
+                            status, body = 200, {"waves": found, "pending": pending}
                     elif parts[:2] == ["api", "gain"]:
                         status, body = self._gain(parts[2:])
                     elif parts[:2] == ["api", "firmware"]:
@@ -182,8 +178,6 @@ class ControlServer:
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(data)))
                 self.send_header("Cache-Control", "no-store")
-                for key, value in extra_headers.items():
-                    self.send_header(key, value)
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
                 try:

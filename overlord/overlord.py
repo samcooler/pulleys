@@ -47,6 +47,7 @@ from debug_menu import DebugMenu
 from mpv_ipc import Mpv, MpvError, SoundPlayer
 from ambient import Ambient, load as load_ambient
 import gain as gain_config
+from waveform import WaveformCache
 from control import ControlServer
 from serial_reader import SerialReader
 from firmware_manager import FirmwareManager
@@ -346,6 +347,17 @@ def main():
             print(f"cue {cue} failed: {e}", flush=True)
         return False
 
+    def pull_lever(channel):
+        """A debug pull on a rope channel, as if its sensor had fired: through the
+        bridge to the arbiter, or into overlord's own engine with --game. False
+        if the bridge is not there."""
+        if game:
+            game.pull(channel)
+        elif not serial.write_line(f"GAME-PULL {channel}"):
+            return False
+        print(f"lever: pull on channel {channel}", flush=True)
+        return True
+
     def control(method, parts):
         """The REST API (control.py). Returns (http status, body)."""
         if parts == ["status"] and method == "GET":
@@ -374,6 +386,16 @@ def main():
             if fire_cue(parts[1], enter=True):   # an operator's cue always plays
                 return 200, {"cue": parts[1]}
             return 404, {"error": f"cue not played: {parts[1]} (see the log)"}
+        if len(parts) == 2 and parts[0] == "lever" and method in ("POST", "PUT"):
+            try:
+                channel = int(parts[1])
+            except ValueError:
+                channel = 0
+            if not 1 <= channel <= 31:
+                return 400, {"error": "lever must be a rope channel, 1 to 31"}
+            if not pull_lever(channel):
+                return 503, {"error": "the bridge is not connected"}
+            return 200, {"channel": channel}
         if len(parts) == 3 and parts[0] == "param" and method in ("POST", "PUT"):
             # Tune by hand without a reflash: the arbiter clamps it to the game's range.
             try:
@@ -531,6 +553,12 @@ def main():
         DEFAULT_GAME = None
     gains.path = args.game or DEFAULT_GAME
     gains.reload()
+    gains.media = cue_media
+    wave_cache = WaveformCache(cue_media, settings.PATH.parent / "waveforms.json")
+
+    def wave_cache_waves():
+        return wave_cache.waves([cue for cue, _group in gain_config.cue_list(gains.path)])
+    wave_cache_waves()   # start drawing them now, so the Gain tab is ready when opened
     ambient = None
     ambient_config = args.game or DEFAULT_GAME
     if ambient_config:
@@ -541,7 +569,7 @@ def main():
     if args.control_port:
         try:
             api = ControlServer(control, args.control_bind, args.control_port, firmware=firmware_updater, installation=installation,
-                            sessions=sessions, gains=gains, media=cue_media)
+                            sessions=sessions, gains=gains, waves=wave_cache_waves)
             api.start()
             print(f"control: http://{api.address[0]}:{api.address[1]}/status", flush=True)
         except OSError as e:  # the player matters more than its remote control

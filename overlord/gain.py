@@ -78,6 +78,7 @@ class GainStore:
     def __init__(self, path=None):
         import threading
         self.path = path
+        self.media = None   # media(cue) -> the files that cue may play; lets rows say which have none
         self._lock = threading.Lock()
         self._base = {}
         self._over = {}
@@ -133,10 +134,13 @@ class GainStore:
             if cue not in seen:
                 seen.add(cue)
                 rows.append((cue, "unlisted"))
-        return {"cues": [{"cue": cue, "group": group, "yaml": base.get(cue, 1.0),
-                          "in_yaml": cue in base, "gain": over.get(cue, base.get(cue, 1.0)),
-                          "overridden": cue in over and over[cue] != base.get(cue, 1.0)}
-                         for cue, group in rows],
+        cues = [{"cue": cue, "group": group, "yaml": base.get(cue, 1.0),
+                 "in_yaml": cue in base, "gain": over.get(cue, base.get(cue, 1.0)),
+                 "overridden": cue in over and over[cue] != base.get(cue, 1.0),
+                 "missing": bool(self.media) and not self.media(cue)}
+                for cue, group in rows]
+        cues.sort(key=lambda c: c["missing"])   # cues with no media sink to the bottom, order kept
+        return {"cues": cues,
                 "overrides": len([c for c in over if over[c] != base.get(c, 1.0)])}
 
     def yaml_block(self):

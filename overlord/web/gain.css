@@ -1,0 +1,62 @@
+:root{--wave:#2a78d6;--wave-clip:#e34948;--wave-mid:#d5dacf;--bad:#b3261e}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--wave:#3987e5;--wave-clip:#e66767;--wave-mid:#3a3f38;--bad:#e66767}}
+:root[data-theme="dark"]{--wave:#3987e5;--wave-clip:#e66767;--wave-mid:#3a3f38;--bad:#e66767}
+.gain-table td,.gain-table th{white-space:nowrap;font-variant-numeric:tabular-nums}
+.gain-table td.cue{font:11px ui-monospace,monospace}
+.gain-table th:last-child,.gain-table td:last-child{text-align:right}
+.gain-table td.meta{display:none}
+.gain-over td{background:#fbf3df}
+.gain-missing td.cue,.gain-missing .dur{color:var(--bad)}
+.gain-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.gain-tools input[type=search]{padding:5px 8px;border:1px solid var(--line);border-radius:4px;width:200px}
+.wave{display:flex;align-items:center;gap:8px}
+.wave canvas{width:120px;height:28px;display:block}
+.wave .dur{font:11px ui-monospace,monospace;color:var(--muted);min-width:46px;text-align:right}
+.gainctl{display:flex;align-items:center;gap:6px}
+.gainctl input[type=range]{width:150px;margin:0}
+.gainctl input[type=number],.adjust-all input[type=number]{width:70px;padding:4px 6px;border:1px solid var(--line);border-radius:3px}
+.button.step{width:28px;padding:3px 0;font-size:14px;line-height:1}
+.adjust-all{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:8px 16px;background:#f2f4ee;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:12px}
+.adjust-all.master{border-top:0}
+.adjust-all .pick{display:flex;gap:6px}
+.adjust-all output{font:12px ui-monospace,monospace}
+.master input[type=range]{flex:0 1 320px;min-width:140px}
+#yaml-box{margin:0 16px 14px;padding:10px;max-height:240px;overflow:auto;background:#f2f4ee;border:1px solid var(--line);border-radius:5px;font:11px/1.6 ui-monospace,monospace}
+
+/* Phones and narrow windows: every cue becomes a card with big touch targets, and
+   nothing scrolls sideways. Tuning is a slider plus -/+ steps of 0.05 for fine work. */
+@media(max-width:700px){
+  .topbar{gap:10px;overflow-x:auto}.brand,.connection{display:none}
+  main{padding:10px 8px}
+  .panel-heading{flex-direction:column;align-items:stretch}
+  .gain-tools{flex-wrap:wrap}.gain-tools input[type=search]{flex:1 1 100%;width:100%;font-size:16px;padding:10px}
+  .gain-tools .button,.adjust-all .button{min-height:44px;font-size:13px;flex:1}
+  .adjust-all{padding:12px;gap:10px}
+  .adjust-all .pick{flex:1 1 100%}.adjust-all .pick .button{flex:1}
+  .adjust-all label{flex:1 1 100%;font-size:13px}
+  .master input[type=range],.adjust-all .gainctl{flex:1 1 100%}
+  .adjust-all .gainctl{width:100%}
+  .master input[type=range]{height:40px}
+  .adjust-all .subtle{flex:1 1 100%}
+  .gainctl input[type=range]{flex:1;width:auto;min-width:0;height:44px}
+  .gainctl input[type=number],.adjust-all input[type=number]{width:76px;height:44px;font-size:16px}
+  .button.step{width:48px;height:44px;font-size:20px}
+  .button.play{min-height:44px;min-width:76px;font-size:13px}
+  input[type=checkbox]{width:24px;height:24px;margin:0}
+  .table-scroll{overflow:visible}
+  .gain-table,.gain-table tbody{display:block;min-width:0;width:100%}
+  .gain-table thead{display:none}
+  .gain-table tr{display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"sel cue play" "wave wave wave" "meta meta reset" "gain gain gain";gap:8px 10px;align-items:center;padding:12px;border-bottom:1px solid var(--line)}
+  .gain-table td{display:block;padding:0;border:0;text-align:left!important;white-space:normal;background:none!important}
+  .gain-over{background:#fbf3df}
+  td.sel{grid-area:sel}td.cue{grid-area:cue;font-size:13px!important;overflow-wrap:anywhere;line-height:1.4}td.play{grid-area:play}
+  td.wavecell{grid-area:wave}td.reset{grid-area:reset}td.gaincell{grid-area:gain}
+  .gain-table td.meta{display:block;grid-area:meta;font-size:12px;color:var(--muted)}
+  .gain-missing td.wavecell{display:none}
+  .gain-table td.reset .button{min-height:40px;min-width:72px;font-size:12px}
+  .wave canvas{flex:1;width:auto;min-width:0;height:40px}
+  .wave .dur{order:2;font-size:12px}
+  .gain-table tr>td:empty{display:none}
+  #yaml-box{margin:0 8px 12px}
+}
+@media(max-width:700px){.gain-table td.desk{display:none}}
