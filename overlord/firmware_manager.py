@@ -449,6 +449,11 @@ class FirmwareManager:
         result["ready"] = all(image["uploaded"] for image in result["manifest"].values())
         return result
 
+    def updating(self):
+        """Is firmware being flashed right now? Cheap enough to poll many times a second."""
+        with self._lock:
+            return any(row["id"] == self._active and row["kind"] == "update" for row in self._jobs)
+
     def snapshot(self):
         with self._lock:
             now = time.time()

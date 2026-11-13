@@ -653,13 +653,17 @@ static void renderComponents(uint32_t now, float dt) {
 // arbiter publishes it for the component bars: pulls add to it, and it drains
 // at the game's rate. 'c<bar> <percent>' on serial drives it on the bench.
 //
-// The ring's bottom row always glows faintly in the colour (EXTRACTOR_IDLE_GLOW).
+// Idle, a few thin vertical lines in the colour stand round the ring, evenly
+// spaced (EXTRACTOR_MARKS of them, faint: EXTRACTOR_IDLE_GLOW), so a dry
+// extractor still shows which one it is.
 //
-// While a round wants this colour, the ring's top and bottom rows are outlined
-// in it at half brightness: an empty tank waiting to be filled. The outline
-// stays for as long as the colour is a goal, full or not, since a full tank
-// can drain back below full. Colours not wanted get none. The arbiter sends
-// the goals with the charges, and only while a round is on.
+// While a round wants this colour, every LED, strip and ring, is washed lightly
+// in it (EXTRACTOR_WANTED_WASH), and the same lines go to full brightness: an
+// empty tank waiting to be filled. The liquid is drawn over all of it, and
+// wins wherever it is brighter. This stays for as long as the colour is a
+// goal, full or not, since a full tank can drain back below full. Colours not
+// wanted get none. The arbiter sends the goals with the charges, and only
+// while a round is on.
 //
 // Which way the surface is mounted: ring row 0 is the bottom, and the strip's
 // first LED is its top (nearest the ring). Flip either if it fills the wrong way.
@@ -676,10 +680,18 @@ static void renderComponents(uint32_t now, float dt) {
   #define EXTRACTOR_BRIGHTNESS 60
 #endif
 
-// Of the colour's own (already dimmed) brightness, out of 255: the faint glow
-// along the ring's bottom row while the tank is empty.
+// Of the colour's own (already dimmed) brightness, out of 255: the faint
+// vertical lines round the ring while the colour is not a goal.
 #ifndef EXTRACTOR_IDLE_GLOW
-  #define EXTRACTOR_IDLE_GLOW 40
+  #define EXTRACTOR_IDLE_GLOW 22
+#endif
+// How many lines, spaced evenly round the 64 columns (6 is one every ~10.7).
+#ifndef EXTRACTOR_MARKS
+  #define EXTRACTOR_MARKS 6
+#endif
+// Of the colour's brightness: the light wash over every LED while it is a goal.
+#ifndef EXTRACTOR_WANTED_WASH
+  #define EXTRACTOR_WANTED_WASH 30
 #endif
 
 static pulleys::ExtractorLiquid liquid;
@@ -719,20 +731,25 @@ static void renderExtractor(uint32_t now, float dt) {
         leds[pulleys::extractor_strip_index(i, S, EXTRACTOR_STRIP_REVERSE)] =
             liquidPixel(full, pulleys::extractor_cover(s, i));
 
-    // The outline goes under the liquid: where the liquid is brighter it wins.
-    CRGB outline = full;
-    outline.nscale8(128);
-    // Idle, the ring's bottom row glows faintly in the colour, so a dry
-    // extractor still shows which one it is. Same rule: the liquid wins.
-    CRGB idle = full;
-    idle.nscale8(EXTRACTOR_IDLE_GLOW);
+    // Under the liquid, which wins wherever it is brighter. Not a goal: faint
+    // lines round the ring. A goal: every LED lightly washed, the lines bright.
     bool wanted = extractorWanted(color);
+    CRGB wash = full, lineIdle = full;
+    wash.nscale8(EXTRACTOR_WANTED_WASH);
+    lineIdle.nscale8(EXTRACTOR_IDLE_GLOW);
+    CRGB line = wanted ? full : lineIdle;
+    if (wanted)
+        for (uint16_t i = 0; i < S; i++)
+            leds[pulleys::extractor_strip_index(i, S, EXTRACTOR_STRIP_REVERSE)] |= wash;
     for (uint8_t x = 0; x < pulleys::EXTRACTOR_RING_W; x++) {
+        bool mark = false;
+        for (uint8_t m = 0; m < EXTRACTOR_MARKS; m++)
+            if (x == (uint8_t)((uint16_t)m * pulleys::EXTRACTOR_RING_W / EXTRACTOR_MARKS)) mark = true;
         float r = pulleys::extractor_ring_surface(liquid, S, x);
         for (uint8_t y = 0; y < pulleys::EXTRACTOR_RING_H; y++) {
             CRGB c = liquidPixel(full, pulleys::extractor_cover(r, (float)(S + y)));
-            if (y == 0) c |= idle;
-            if (wanted && (y == 0 || y == pulleys::EXTRACTOR_RING_H - 1)) c |= outline;
+            if (wanted) c |= wash;
+            if (mark) c |= line;
             leds[pulleys::extractor_ring_index(x, y, EXTRACTOR_REVERSE_Y)] = c;
         }
     }
@@ -1107,7 +1124,7 @@ static void partyPoll(uint32_t now) {
 //   c<bar> <percent>  set a component bar as if the arbiter had sent it
 //             ("c0 100" fills component 1, then it drains)
 //   g<mask>  the goals, as if the arbiter had sent them: bit i = component i
-//             ("g5" wants components 1 and 3; an extractor outlines its tank)
+//             ("g5" wants components 1 and 3; an extractor lights its tank)
 //   r      reset all activity and the counter
 //   m      force the other display mode now (refused on a board built for one)
 //   w      flip the 14×2 panel's row direction, for matching the wiring

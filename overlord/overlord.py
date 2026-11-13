@@ -439,6 +439,11 @@ def main():
         firmware_updater.start()
         installation.start()
 
+    # A spinner in the corner while firmware is being flashed.
+    if firmware_updater:
+        from update_overlay import UpdateOverlay
+        UpdateOverlay(video, firmware_updater.updating).start()
+
     # Goals over the video, for a game that wants them seen (show_goals: true).
     if playlog and game_cfg and game_cfg.get("show_goals"):
         from goal_display import GoalDisplay

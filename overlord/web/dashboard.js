@@ -80,12 +80,14 @@ function render() {
   const activeJob=state.jobs.find(job=>job.id===state.active_job);
   $('queue-badge').className=`badge ${state.paused?'paused':activeJob?'running':'neutral'}`;
   $('queue-badge').textContent=state.paused?(activeJob?'Pausing':'Paused'):activeJob?'Running':'Idle';
-  $('queue').innerHTML=state.jobs.length?state.jobs.slice(0,8).map(job=>{
+  // Only firmware that is flashing or waiting to. Finished and failed jobs, and scans, live in the activity log.
+  const pending=state.jobs.filter(job=>job.kind==='update'&&['queued','running'].includes(job.state));
+  $('queue').innerHTML=pending.length?pending.slice(0,8).map(job=>{
     const tag=releaseLabel(releases.find(row=>row.id===job.release_id));
     const results=Object.entries(job.devices);
     const confirmed=results.filter(([,row])=>row.state==='confirmed').length;
     return `<article class="job"><div class="job-title"><span>${esc({scan:'Mesh census',update:'Firmware update'}[job.kind]||job.kind)}</span>${badge(job.state)}</div><div class="job-meta">${esc(tag||'')} ${job.current_device?' · '+esc(job.current_device):''}<br>${esc(job.id)} · ${age(job.created_at)}${results.length?`<br>${confirmed} confirmed · ${results.filter(([,row])=>row.state==='skipped').length} already current`:''}</div>${job.error?`<div class="job-error">${esc(job.error)}</div>`:''}${['failed','interrupted','cancelled'].includes(job.state)?`<button class="button small" data-retry="${esc(job.id)}">Retry${job.state==='cancelled'?' unfinished':' failed'}</button>`:''}${['queued','running'].includes(job.state)?` <button class="button small secondary" data-cancel="${esc(job.id)}">Cancel</button>`:''}</article>`;
-  }).join(''):'<p class="empty">The queue is clear.<br>Updates run one device at a time.</p>';
+  }).join(''):'<p class="empty">Nothing is flashing.</p>';
   $('activity').innerHTML=state.logs.length?state.logs.slice(-80).reverse().map(event=>`<div class="event ${event.level==='error'?'error':''}" title="${esc(clock(event.at)+(event.node_id?' · '+event.node_id:'')+'  '+event.message)}"><span class="event-time">${clock(event.at)}</span><span class="event-node">${esc(event.node_id||'')}</span><span class="event-msg">${esc(event.message)}</span></div>`).join(''):'<p class="empty">Firmware events will appear here.</p>';
   renderButtons();
   if(focusAttr) Array.from(document.querySelectorAll('button')).find(button=>button.getAttribute(focusAttr)===focusValue)?.focus({preventScroll:true});
