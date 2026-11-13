@@ -100,6 +100,13 @@ class GainStore:
             self._over[str(cue)] = gain
         return gain
 
+    def set_many(self, values):
+        """Set several at once; if any value is bad, none is applied."""
+        parsed = {str(c): parse_gain(v) for c, v in values.items()}
+        with self._lock:
+            self._over.update(parsed)
+        return parsed
+
     def reset(self, cue=None):
         """Drop one override, or every override when cue is None."""
         with self._lock:

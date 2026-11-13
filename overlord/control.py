@@ -99,12 +99,17 @@ class ControlServer:
                 return 404, {"error": "no such firmware route"}
 
             def _gain(self, route):
-                """Live loudness overrides: GET /api/gain; POST /api/gain/<cue>
+                """Live loudness overrides: GET /api/gain; POST /api/gain {"gains": {cue: x}} for several; POST /api/gain/<cue>
                 {"gain": 1.2}; DELETE /api/gain/<cue>, or /api/gain for all."""
                 if gains is None:
                     return 503, {"error": "gain control unavailable"}
                 if self.command == "GET" and not route:
                     return 200, {**gains.snapshot(), "yaml": gains.yaml_block()}
+                if self.command == "POST" and not route:
+                    values = self._body(65536).get("gains")
+                    if not isinstance(values, dict):
+                        raise ValueError('need {"gains": {cue: multiplier}}')
+                    return 200, {"gains": gains.set_many(values)}
                 if self.command == "POST" and len(route) == 1:
                     return 200, {"cue": route[0], "gain": gains.set(route[0], self._body(256).get("gain"))}
                 if self.command == "DELETE" and len(route) <= 1:

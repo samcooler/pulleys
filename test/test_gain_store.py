@@ -62,6 +62,13 @@ class GainStoreTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.store.set('audio_once_chime', bad)
 
+    def test_set_many_is_all_or_nothing(self):
+        self.store.set_many({'audio_once_steam': 0.3, 'audio_once_chime': 2})
+        self.assertEqual(self.store.get('audio_once_steam'), 0.3)
+        with self.assertRaises(ValueError):
+            self.store.set_many({'audio_once_steam': 5, 'audio_once_chime': 99})
+        self.assertEqual(self.store.get('audio_once_steam'), 0.3)
+
     def test_yaml_block(self):
         self.store.set('audio_once_chime', 1.25)
         self.store.set('audio_once_steam', 1)   # explicit in the YAML, so kept
