@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const expanded = new Set();
-let state = null, selected = localStorage.getItem('overlord-release') || '', posting = false, networkError = false, releaseOptionsKey = "";
+let queueOpen = false, state = null, selected = localStorage.getItem('overlord-release') || '', posting = false, networkError = false, releaseOptionsKey = "";
 const clock = timestamp => new Date(timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
 // When a firmware batch was built, always in Pacific time (PST or PDT, whichever applies).
 const built = timestamp => new Date(timestamp * 1000).toLocaleString('en-US', {timeZone:'America/Los_Angeles', year:'numeric', month:'short', day:'numeric', hour:'numeric', minute:'2-digit', timeZoneName:'short'});
@@ -83,13 +83,27 @@ function render() {
   $('queue-badge').className=`badge ${state.paused?'paused':activeJob?'running':'neutral'}`;
   $('queue-badge').textContent=state.paused?(activeJob?'Pausing':'Paused'):activeJob?'Running':'Idle';
   // Only firmware that is flashing or waiting to. Finished and failed jobs, and scans, live in the activity log.
-  const pending=state.jobs.filter(job=>job.kind==='update'&&['queued','running'].includes(job.state));
-  $('queue').innerHTML=pending.length?pending.slice(0,8).map(job=>{
-    const tag=releaseLabel(releases.find(row=>row.id===job.release_id));
-    const results=Object.entries(job.devices);
-    const confirmed=results.filter(([,row])=>row.state==='confirmed').length;
-    return `<article class="job"><div class="job-title"><span>${esc({scan:'Mesh census',update:'Firmware update'}[job.kind]||job.kind)}</span>${badge(job.state)}</div><div class="job-meta">${esc(tag||'')} ${job.current_device?' · '+esc(job.current_device):''}<br>${esc(job.id)} · ${age(job.created_at)}${results.length?`<br>${confirmed} confirmed · ${results.filter(([,row])=>row.state==='skipped').length} already current`:''}</div>${job.error?`<div class="job-error">${esc(job.error)}</div>`:''}${['failed','interrupted','cancelled'].includes(job.state)?`<button class="button small" data-retry="${esc(job.id)}">Retry${job.state==='cancelled'?' unfinished':' failed'}</button>`:''}${['queued','running'].includes(job.state)?` <button class="button small secondary" data-cancel="${esc(job.id)}">Cancel</button>`:''}</article>`;
-  }).join(''):'<p class="empty">Nothing is flashing.</p>';
+  // The device being flashed on top with its progress, then everything still waiting
+  // (all queued jobs, oldest first) in a list you can open. Finished work is in the activity log.
+  const pending=state.jobs.filter(job=>job.kind==='update'&&['queued','running'].includes(job.state)).reverse();
+  const finished=['confirmed','skipped','failed'];
+  const nameOf=id=>{const n=state.devices.find(d=>d.id===id);return n?.name||id;};
+  let current=null; const waiting=[];
+  pending.forEach(job=>{
+    const rel=releases.find(r=>r.id===job.release_id);
+    const ids=[...new Set([...(job.device_ids||state.devices.filter(n=>(!job.env||n.env===job.env)&&rel?.manifest[n.env]).map(n=>n.id)),...Object.keys(job.devices)])];
+    ids.forEach(id=>{
+      const work=job.devices[id];
+      if(work&&finished.includes(work.state)) return;
+      if(!current&&job.state==='running'&&work&&work.state!=='queued') current={id,job,work};
+      else waiting.push({id,job});
+    });
+  });
+  $('queue').innerHTML=pending.length?`${current?(()=>{
+      const total=current.work.total, percent=current.work.state==='verifying'?100:total?Math.min(100,Math.floor((current.work.bytes||0)/total*100)):0;
+      const env=state.devices.find(d=>d.id===current.id)?.env||'';
+      return `<div class="now"><div class="now-title"><span>${esc(nameOf(current.id))} <span class="subtle">${esc(env)}</span></span>${badge(current.work.state||'queued')}</div><div class="now-bar" role="progressbar" aria-label="Firmware progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><span style="width:${percent}%"></span></div><div class="job-meta">${percent}%${current.work.attempt?' · try '+current.work.attempt:''}</div></div>`;
+    })():'<div class="now"><div class="job-meta">Starting…</div></div>'}${waiting.length?`<details class="waiting"${queueOpen?' open':''}><summary>${waiting.length} waiting</summary><ul>${waiting.map(w=>`<li><span>${esc(nameOf(w.id))}</span><span class="subtle">${esc(state.devices.find(d=>d.id===w.id)?.env||'')}</span></li>`).join('')}</ul></details>`:''}${pending.map(job=>`<div class="job-foot"><span>${esc(releaseLabel(releases.find(row=>row.id===job.release_id)))} · ${esc(job.id)}</span><button class="button small secondary" data-cancel="${esc(job.id)}">Cancel</button></div>`).join('')}`:'<p class="empty">Nothing is flashing.</p>';
   $('activity').innerHTML=state.logs.length?state.logs.slice(-80).reverse().map(event=>`<div class="event ${event.level==='error'?'error':''}" title="${esc(clock(event.at)+(event.node_id?' · '+event.node_id:'')+'  '+event.message)}"><span class="event-time">${clock(event.at)}</span><span class="event-node">${esc(event.node_id||'')}</span><span class="event-msg">${esc(event.message)}</span></div>`).join(''):'<p class="empty">Firmware events will appear here.</p>';
   renderButtons();
   if(focusAttr) Array.from(document.querySelectorAll('button')).find(button=>button.getAttribute(focusAttr)===focusValue)?.focus({preventScroll:true});
@@ -98,6 +112,7 @@ async function refresh() {
   try {state=await api(); if(networkError){$('notice').hidden=true; networkError=false;} render();}
   catch(error) {networkError=true; $('connection').className='connection offline'; $('connection').textContent='Server unavailable'; notify(`Cannot refresh: ${error.message}`,true);}
 }
+$('queue').addEventListener('toggle',event=>{if(event.target.matches('details.waiting')) queueOpen=event.target.open;},true);
 $('release').addEventListener('change',()=>{selected=$('release').value; localStorage.setItem('overlord-release',selected); render();});
 $('scan').addEventListener('click',()=>action('/scan'));
 $('update-all').addEventListener('click',()=>action('/updates',{release_id:selected,all:true}));
