@@ -25,6 +25,11 @@
 // `why` says what is wrong.
 bool gamestate_load(const String& json, String& why);
 
+// Back to the start of the loaded game: state, timers, counters, params'
+// effects on devices and the trigger log are cleared. The config -- the game,
+// its params, the palette and the install map -- is untouched.
+void gamestate_reset();
+
 void gamestate_event(GameEvent e);
 // An event by name: a device's input ("diorama.door_opened"), or any of the above.
 void gamestate_input(const char* name);

@@ -5,6 +5,7 @@
 #include "gamestate.h"
 #include "devices.h"
 #include "monitor.h"
+#include "components.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <pulleys_channel.h>
@@ -185,6 +186,11 @@ const char* apply(JsonObjectConst in, uint16_t bridge) {
         installcfg_shuffle_game1();
     } else if (!strcmp(op, "reset_rgb")) {
         installcfg_reset_rgb();
+    } else if (!strcmp(op, "reset_game")) {
+        // State and history only; the configuration (colours, map, game) stays.
+        gamestate_reset();
+        components_reset();
+        monitor_clear_history();
     } else return "unsupported";
     return nullptr;
 }

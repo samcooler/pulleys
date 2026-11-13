@@ -56,7 +56,7 @@ function render() {
   const row=current();
   const live=!!row?.fresh && state.bridge_connected && !state.busy && !pending;
   $('channel-fields').disabled=!live; $('rgb-fields').disabled=!live;
-  $('shuffle').disabled=!live; $('reset').disabled=!live;
+  $('shuffle').disabled=!live; $('reset').disabled=!live; $('reset-game').disabled=!live;
   $('arbiter').disabled=pending || options.length<2 || !!(row?.mapping?.active && row.mapping.owner===session);
   renderOverview(row);
   renderMapping(row,live);
@@ -108,6 +108,7 @@ async function mutate(op,values,base=null,quiet=false) {
 }
 $('arbiter').addEventListener('change',()=>{selected=$('arbiter').value;dirty.clear();clockDirty=false;clockBase=null;render();});
 $('shuffle').addEventListener('click',()=>mutate('shuffle',{}));
+$('reset-game').addEventListener('click',async()=>{if(confirm('Reset the game? This clears its state and history. Configuration is kept.')&&await mutate('reset_game',{})) notice('Game reset on the arbiter.');});
 $('reset').addEventListener('click',async()=>{if(await mutate('reset_rgb',{})){dirty.clear();render();}});
 function renderOverview(row) {
   const view=InstallationStatus.model(state,row,{pending,networkError,elapsedSeconds:(Date.now()-receivedAt)/1000});

@@ -59,6 +59,7 @@ const MonChannel*  monitor_channels();
 const MonLogEntry* monitor_log();     // newest first
 uint8_t            monitor_log_count();
 
+void     monitor_clear_history();   // the pull log and its counts; nodes stay
 uint8_t  monitor_count(uint8_t type);      // active nodes of a role
 uint32_t monitor_total_events();
 float    monitor_events_per_min();

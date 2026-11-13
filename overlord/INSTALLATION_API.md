@@ -58,6 +58,7 @@ All endpoints share the existing control server and its LAN access policy.
 | POST | `/api/installation/rgb` | Common fields plus `color` (0–5), `r`, `g`, `b` (0–255) |
 | POST | `/api/installation/shuffle` | Common fields |
 | POST | `/api/installation/reset_rgb` | Common fields |
+| POST | `/api/installation/reset_game` | Common fields. Restarts the game at its start state; clears the trigger log, counters, component charge and pull history. Colours, map, game and clock are kept |
 | POST | `/api/installation/map_begin` | Common fields plus `session` |
 | POST | `/api/installation/map_again` | Common fields plus `session` |
 | POST | `/api/installation/map_assign` | Common fields plus `session`, `channel` (1–24) |

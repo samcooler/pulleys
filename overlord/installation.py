@@ -72,7 +72,7 @@ class InstallationManager:
     def validate(op, body):
         fields = {"color": {"channel": (1, 24), "color": (0, 5)},
                   "rgb": {"color": (0, 5), "r": (0, 255), "g": (0, 255), "b": (0, 255)},
-                  "shuffle": {}, "reset_rgb": {}, "clock": {}, "clock_now": {},
+                  "shuffle": {}, "reset_rgb": {}, "reset_game": {}, "clock": {}, "clock_now": {},
                   "map_begin": {}, "map_again": {}, "map_renew": {}, "map_end": {},
                   "map_assign": {"channel": (1, 24)}}
         if op not in fields:

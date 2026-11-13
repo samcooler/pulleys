@@ -102,6 +102,15 @@ void monitor_init() {
     pulleys::mesh_on_sync(onSync);
 }
 
+// The pull history only: the node list is what the mesh says is out there, not
+// something the operator made, so it stays.
+void monitor_clear_history() {
+    memset(s_log,   0, sizeof(s_log));
+    memset(s_perSec, 0, sizeof(s_perSec));
+    s_logCount = 0;
+    s_totalEvents = 0;
+}
+
 void monitor_on_event(MonEventHook hook) { s_hook = hook; }
 
 void monitor_tick() {

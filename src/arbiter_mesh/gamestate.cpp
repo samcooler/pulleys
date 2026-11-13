@@ -680,6 +680,17 @@ bool gamestate_load(const String& json, String& why) {
     return true;
 }
 
+void gamestate_reset() {
+    if (!s_ready) return;
+    infoFlush();
+    memset(s_log, 0, sizeof(s_log));
+    s_logCount = 0;
+    for (uint8_t i = 0; i < s_counterCount; i++) s_counters[i].value = 0;
+    s_state[0] = 0;   // so enter() logs it as a start
+    devices_load(s_doc);   // `set:` settings back to what the game begins with
+    enter(s_doc["start"].as<const char*>());
+}
+
 void gamestate_event(GameEvent e) { gamestate_input(gameevent_name(e)); }
 
 void gamestate_input(const char* name) {

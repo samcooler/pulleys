@@ -175,6 +175,12 @@ void components_init() {
     resetAll();
 }
 
+void components_reset() {
+    s_goalMask = 0;
+    resetAll();
+    publish(true);
+}
+
 bool components_on_cue(const char* cue) {
     if (cue && strcmp(cue, "game_reset_components") == 0) {
         resetAll();
