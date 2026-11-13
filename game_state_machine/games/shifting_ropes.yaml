@@ -76,6 +76,7 @@ states:
           - rounds
         colors: restore
         cue:
+          - game_reset_components   # the round's lit components go dark
           - audio_loop_idle
           - video_loop_idle
       pull:

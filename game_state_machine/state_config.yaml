@@ -265,6 +265,7 @@ states:
           party.lights: dark
           queue.sign: enter           # nobody inside: let the next group in
         cue:
+          - game_reset_components     # the round's lit components go dark
           - audio_loop_idle
           - audio_bed_clock_ambient   # stays on until victory2
           - video_loop_idle

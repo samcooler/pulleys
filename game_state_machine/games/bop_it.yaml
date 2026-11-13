@@ -67,6 +67,8 @@ counters:
     reach: $lives
 
 cues:
+  game:
+    - game_reset_components
   audio_loop:
     - audio_loop_idle
   video_loop:
@@ -93,6 +95,7 @@ states:
           - streak
           - misses
         cue:
+          - game_reset_components   # the round's lit components go dark
           - audio_loop_idle
           - video_loop_idle
       pull:                             # any pull starts a game
