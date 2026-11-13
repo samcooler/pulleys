@@ -13,6 +13,7 @@
 #include <pulleys_identity.h>
 #include <pulleys_whoami.h>
 #include <pulleys_protocol.h>
+#include <pulleys_channel.h>
 #include <pulleys_mesh.h>
 #include <pulleys_ota.h>
 #include <pulleys_census.h>
@@ -83,6 +84,22 @@ static bool           s_touchDebug = false;
 // the question the log exists to answer. V lists every device
 // setting, wanted against reported; "g diorama.door_opened" injects a device's
 // input the way "g <event>" injects a game event.
+// A pull on a rope: the game hears it, and so does the room. Every pull is a
+// lever being pumped, and each colour's lever has its own sound,
+// audio_once_lever_<colour>, for the colour the rope wears today -- a recoloured
+// rope takes its new colour's sound. No state asks for it, so it plays in every
+// state; it is here and not in components.cpp so the host conformance build of
+// the game logic never sees it.
+static void ropePulled(const pulleys::MeshEvent& ev) {
+    if (gamestate_ready() && ev.channel < pulleys::CHANNEL_COUNT) {
+        char lever[40];
+        snprintf(lever, sizeof(lever), "audio_once_lever_%s",
+                 pulleys::color_name(pulleys::channel_color_index(ev.channel)));
+        pulleys::mesh_send_cue(lever);
+    }
+    components_on_mesh_event(ev);
+}
+
 static void handleSerial() {
     static char buf[96];
     static uint8_t len = 0;
@@ -130,7 +147,7 @@ static void handleSerial() {
                 ev.channel   = (uint8_t)atoi(buf + 1);
                 ev.magnitude = 90;
                 ev.originId  = pulleys::identity_id();
-                components_on_mesh_event(ev);
+                ropePulled(ev);
             } else if (buf[0] == 'g' && n > 2 && buf[1] == ' ') {
                 // "g goal_component_activated" -> inject a game event by name:
                 // a component event, a device's input, a counter's _reached
@@ -400,7 +417,7 @@ void setup() {
         bool pull = pulleys::mesh_event_is_pull(ev);
         if (pull) eventlog_record(ev, relayed);
         if (installui_on_event(ev)) return;
-        if (pull) components_on_mesh_event(ev);
+        if (pull) ropePulled(ev);
     });
     ui_init();
     clockui_init(&s_rtc);

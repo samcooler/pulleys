@@ -288,6 +288,14 @@ cues:
     - video_once_janis_panic_immediately  # Get back to work immediately.
   audio_once:
     - audio_once_steam
+    # One lever sound per colour, sent by the arbiter on every pull of a rope
+    # wearing that colour (components.cpp), not fired by any state.
+    - audio_once_lever_red
+    - audio_once_lever_blue
+    - audio_once_lever_green
+    - audio_once_lever_yellow
+    - audio_once_lever_orange
+    - audio_once_lever_purple
     - audio_once_component_powerup  # placeholder
     - audio_once_component_powerdown  # placeholder
     - audio_once_encouragement
