@@ -28,7 +28,7 @@ function build() {
   }
   names.forEach((name,index) => {
     const form=document.createElement('form'); form.className='rgb-form';
-    form.innerHTML=`<h3><span class="swatch" id="rgb-swatch-${index}"></span>${name}</h3><div class="rgb-inputs"></div><button class="button secondary">Apply ${name}</button>`;
+    form.innerHTML=`<h3><button type="button" class="swatch swatch-btn" id="rgb-swatch-${index}" aria-label="Pick ${name} colour" aria-haspopup="dialog" title="Pick a colour"></button>${name}</h3><div class="rgb-inputs"></div><button class="button secondary">Apply ${name}</button>`;
     ['r','g','b'].forEach(key => {
       const label=document.createElement('label'); label.textContent=key.toUpperCase();
       const input=document.createElement('input'); input.type='number'; input.min='0'; input.max='255'; input.step='1'; input.required=true; input.id=`rgb-${index}-${key}`; input.setAttribute('aria-label',`${name} ${key.toUpperCase()}`);
@@ -37,14 +37,50 @@ function build() {
     });
     form.addEventListener('submit',async event => {
       event.preventDefault();
-      const values=Object.fromEntries(['r','g','b'].map(key => [key,Number($(`rgb-${index}-${key}`).value)]));
-      const ok=await mutate('rgb',{color:index,...values},dirty.get(index));
-      if(!ok && dirty.has(index)) dirty.set(index,current());
-      if(ok) {dirty.delete(index);render();}
+      await applyRgb(index,['r','g','b'].map(key => Number($(`rgb-${index}-${key}`).value)));
     });
+    form.querySelector('.swatch-btn').addEventListener('click',event => {event.stopPropagation();openPicker(index,event.currentTarget);});
     $('colors').append(form);
   });
 }
+// Sets a named colour's RGB on the arbiter and refreshes at once. Used by the form and the picker.
+async function applyRgb(index,[r,g,b]) {
+  const ok=await mutate('rgb',{color:index,r,g,b},dirty.get(index));
+  if(!ok && dirty.has(index)) dirty.set(index,current());
+  if(ok) {dirty.delete(index);render();}
+  return ok;
+}
+// The colour picker: a few vivid presets and a free choice, opened from a swatch.
+// Picking applies immediately. Whites are left out on purpose: they draw the most power.
+const PRESETS=[['Red',[255,0,0]],['Orange',[255,70,0]],['Amber',[255,140,0]],['Yellow',[255,210,0]],['Lime',[120,255,0]],['Green',[0,255,0]],
+  ['Teal',[0,255,120]],['Cyan',[0,200,255]],['Blue',[0,0,255]],['Indigo',[70,0,255]],['Purple',[160,0,255]],['Magenta',[255,0,150]]];
+const hex=rgb=>'#'+rgb.map(v=>v.toString(16).padStart(2,'0')).join('');
+let picker=null;
+function closePicker() { if(picker) {picker.remove();picker=null;} }
+function openPicker(index,anchor) {
+  closePicker();
+  const rgb=current()?.colors[index].rgb || [0,0,0];
+  picker=document.createElement('div'); picker.className='picker'; picker.setAttribute('role','dialog'); picker.setAttribute('aria-label',`Pick ${names[index]} colour`);
+  picker.addEventListener('click',event=>event.stopPropagation());
+  PRESETS.forEach(([label,value]) => {
+    const choice=document.createElement('button'); choice.type='button'; choice.className='picker-choice'; choice.title=`${label} (${value.join(', ')})`; choice.setAttribute('aria-label',label);
+    paint(choice,value);
+    if(value.join()===rgb.join()) choice.classList.add('current');
+    choice.addEventListener('click',()=>{closePicker();applyRgb(index,value);});
+    picker.append(choice);
+  });
+  const custom=document.createElement('label'); custom.className='picker-custom'; custom.textContent='Custom…';
+  const input=document.createElement('input'); input.type='color'; input.value=hex(rgb);
+  input.addEventListener('change',()=>{const v=input.value;closePicker();applyRgb(index,[1,3,5].map(i=>parseInt(v.slice(i,i+2),16)));});
+  custom.append(input); picker.append(custom);
+  document.body.append(picker);
+  const box=anchor.getBoundingClientRect();
+  picker.style.left=Math.max(8,Math.min(window.scrollX+box.left,window.scrollX+document.documentElement.clientWidth-picker.offsetWidth-8))+'px';
+  picker.style.top=(window.scrollY+box.bottom+6)+'px';
+  picker.querySelector('.picker-choice')?.focus();
+}
+document.addEventListener('click',closePicker);
+document.addEventListener('keydown',event=>{if(event.key==='Escape') closePicker();});
 function render() {
   if(!state) return;
   const options=state.arbiters.map(row=>row.id);
