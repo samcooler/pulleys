@@ -63,7 +63,7 @@ def main():
                           linewidth=0.8, edgecolor="#cbd5e1", facecolor="#f8fafc")
     ax.add_patch(note)
     ax.text(0.7, 0.52,
-            "Startup: fetch latest GitHub release (3 attempts), validate assets, then discover bridge (25 s).",
+            "Push: firmware is uploaded to the Overlord and validated; nothing is fetched or run at startup. Each job discovers the bridge (25 s).",
             fontsize=10, va="center", color="#0f172a")
     ax.text(0.7, 0.92,
             "Scheduler: arbiter_mesh first, other reachable nodes arbitrary, bridge last; one target at a time.",

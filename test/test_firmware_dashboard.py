@@ -91,7 +91,7 @@ class DashboardTests(unittest.TestCase):
             with self.subTest(ids=ids, env=env), self.assertRaises(ValueError):
                 self.manager.enqueue("update", release_id, ids, env)
 
-    def test_startup_and_manual_jobs_use_one_worker(self):
+    def test_manual_jobs_use_one_worker(self):
         release_id = self.uploaded()
         counts = {"active": 0, "maximum": 0, "calls": 0}
         lock = threading.Lock()
@@ -105,9 +105,9 @@ class DashboardTests(unittest.TestCase):
                 counts["active"] -= 1
                 counts["calls"] += 1
             return {"59A4": {"state": "confirmed"}}
-        with patch.object(self.manager, "_check_release", return_value=release_id), \
-             patch.object(self.manager.transport, "update_release", side_effect=update):
+        with patch.object(self.manager.transport, "update_release", side_effect=update):
             self.manager.start()
+            self.manager.enqueue("update", release_id, ["59A4"])
             self.manager.enqueue("update", release_id, ["59A4"])
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
@@ -116,6 +116,7 @@ class DashboardTests(unittest.TestCase):
                     break
                 time.sleep(.01)
             self.assertEqual(counts, {"active": 0, "maximum": 1, "calls": 2})
+            self.assertFalse(any(job["kind"] == "startup" for job in self.manager.snapshot()["jobs"]), "start() must not queue anything")
             self.assertTrue(all(job["state"] == "completed" for job in self.manager.snapshot()["jobs"]))
 
     def test_retry_only_failed_devices(self):

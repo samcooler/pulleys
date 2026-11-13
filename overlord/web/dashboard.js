@@ -26,7 +26,6 @@ async function action(path, body={}) {
 }
 function renderButtons() {
   $('scan').disabled=posting || !state;
-  $('check').disabled=posting || !state;
   const target = release();
   const outdated = state?.devices.some(node => {
     const image=target?.manifest[node.env];
@@ -54,10 +53,10 @@ function render() {
   const focusAttr=['data-expand','data-update','data-retry'].find(attr=>focused?.hasAttribute(attr));
   const focusValue=focusAttr?focused.getAttribute(focusAttr):null;
   const releases = state.releases;
-  if (!releases.some(row=>row.id===selected)) selected=state.latest_release_id || releases[0]?.id || '';
+  if (!releases.some(row=>row.id===selected)) selected=releases[0]?.id || '';
   const nextReleaseOptionsKey=JSON.stringify(releases.map(row=>[row.id,row.tag,row.ready]));
   if(nextReleaseOptionsKey!==releaseOptionsKey){
-  $('release').innerHTML=releases.length?releases.map(row=>`<option value="${esc(row.id)}">${esc(row.tag)} · ${row.source==='github'?'GitHub':'Local'}${row.ready?'':' · partial upload'}</option>`).join(''):'<option value="">No release loaded</option>';
+  $('release').innerHTML=releases.length?releases.map(row=>`<option value="${esc(row.id)}">${esc(row.tag)}${row.ready?'':' · partial upload'}</option>`).join(''):'<option value="">No release loaded</option>';
   releaseOptionsKey=nextReleaseOptionsKey;
   }
   if($('release').value!==selected) $('release').value=selected;
@@ -71,7 +70,6 @@ function render() {
   $('count-queued').textContent=state.jobs.filter(job=>job.state==='queued').length;
   $('count-failed').textContent=state.jobs.filter(job=>['failed','interrupted'].includes(job.state)).length;
   $('device-count').textContent=state.devices.length;
-  $('auto-policy').textContent=state.automatic_startup?'Startup updates enabled':'Startup updates disabled';
   $('devices').innerHTML=state.devices.length?state.devices.map(node=>{
     const image=target?.manifest[node.env], work=latestDeviceWork(node.id), status=deviceStatus(node,image,work);
     const known=releases.find(row=>node.release_ids.includes(row.id));
@@ -88,7 +86,7 @@ function render() {
     const tag=releases.find(row=>row.id===job.release_id)?.tag;
     const results=Object.entries(job.devices);
     const confirmed=results.filter(([,row])=>row.state==='confirmed').length;
-    return `<article class="job"><div class="job-title"><span>${esc({startup:'Startup update',check:'Check GitHub',scan:'Mesh census',update:'Firmware update'}[job.kind]||job.kind)}</span>${badge(job.state)}</div><div class="job-meta">${esc(tag||'')} ${job.current_device?' · '+esc(job.current_device):''}<br>${esc(job.id)} · ${age(job.created_at)}${results.length?`<br>${confirmed} confirmed · ${results.filter(([,row])=>row.state==='skipped').length} already current`:''}</div>${job.error?`<div class="job-error">${esc(job.error)}</div>`:''}${['failed','interrupted'].includes(job.state)?`<button class="button small" data-retry="${esc(job.id)}">Retry failed</button>`:''}</article>`;
+    return `<article class="job"><div class="job-title"><span>${esc({scan:'Mesh census',update:'Firmware update'}[job.kind]||job.kind)}</span>${badge(job.state)}</div><div class="job-meta">${esc(tag||'')} ${job.current_device?' · '+esc(job.current_device):''}<br>${esc(job.id)} · ${age(job.created_at)}${results.length?`<br>${confirmed} confirmed · ${results.filter(([,row])=>row.state==='skipped').length} already current`:''}</div>${job.error?`<div class="job-error">${esc(job.error)}</div>`:''}${['failed','interrupted'].includes(job.state)?`<button class="button small" data-retry="${esc(job.id)}">Retry failed</button>`:''}</article>`;
   }).join(''):'<p class="empty">The queue is clear.<br>Updates run one device at a time.</p>';
   $('activity').innerHTML=state.logs.length?state.logs.slice(-50).reverse().map(event=>`<div class="event ${event.level==='error'?'error':''}"><span class="event-time">${clock(event.at)}${event.node_id?' · '+esc(event.node_id):''}</span>${esc(event.message)}</div>`).join(''):'<p class="empty">Firmware events will appear here.</p>';
   renderButtons();
@@ -100,7 +98,6 @@ async function refresh() {
 }
 $('release').addEventListener('change',()=>{selected=$('release').value; localStorage.setItem('overlord-release',selected); render();});
 $('scan').addEventListener('click',()=>action('/scan'));
-$('check').addEventListener('click',()=>action('/check'));
 $('update-all').addEventListener('click',()=>action('/updates',{release_id:selected,all:true}));
 document.addEventListener('click',event=>{
   const expand=event.target.closest('[data-expand]'), update=event.target.closest('[data-update]'), retry=event.target.closest('[data-retry]');

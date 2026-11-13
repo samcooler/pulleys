@@ -4,21 +4,21 @@ Open `http://overlord.local:8080/` from the local network. The dashboard and the
 existing media control API share one Python HTTP server. The default bind is
 `0.0.0.0`; override with `--control-bind` or `OVERLORD_CONTROL_BIND`.
 
-Startup still checks GitHub and updates outdated devices automatically. Startup,
-manual updates, scans, and release checks use one worker. A census never runs
+The Overlord never downloads firmware and does nothing about it at startup:
+images are pushed to it (`./fw flash`, `tools/push_firmware.py`, or the endpoints
+below). Updates and scans use one worker. A census never runs
 in the middle of a transfer. The arbiter runs first and this server's bridge
 runs last. A device is confirmed only after a fresh post-reboot identity report.
 
 The dashboard polls every two seconds. Expand a device for its build identity
-and activity. Select a GitHub or local release before updating devices. Progress
+and activity. Select a release before updating devices. Progress
 counts bytes served through the bridge, not successful installation; the
 separate verification stage checks the reboot. A gray device may simply have
 an old census report while another device is updating.
 
 Catalogs, validated binaries, job results and the last 500 activity records live
 in `$OVERLORD_FIRMWARE_CACHE` (default `~/.cache/overlord/firmware`). Pending jobs
-become `interrupted` after a restart and can be explicitly retried. Startup's
-normal update pass still runs. History retains up to 75 terminal jobs plus
+become `interrupted` after a restart and can be explicitly retried; nothing is retried or started on its own. History retains up to 75 terminal jobs plus
 pending work. Changing the selected release does not alter already queued jobs.
 
 ## Script workflow
@@ -47,7 +47,6 @@ All bodies and responses are JSON except binary PUT uploads. No login is require
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/firmware` | Devices, last seen, identities, releases, jobs, bridge link, activity |
-| POST | `/api/firmware/check` | Queue GitHub release fetch and checksum verification; does not flash |
 | POST | `/api/firmware/scan` | Queue two census rounds |
 | POST | `/api/firmware/releases` | Register an unchanged schema-1 release manifest |
 | PUT | `/api/firmware/releases/{release_id}/{env}` | Upload the raw `.bin` described by that environment |

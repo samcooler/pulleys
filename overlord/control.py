@@ -47,8 +47,8 @@ class ControlServer:
                         return (200, {route[0][:-1]: row}) if row else (404, {"error": "not found"})
                 if self.command == "POST":
                     body = self._body(256 * 1024)
-                    if route in (["check"], ["scan"]):
-                        return 202, {"job": firmware.enqueue(route[0])}
+                    if route == ["scan"]:
+                        return 202, {"job": firmware.enqueue("scan")}
                     if route == ["releases"]:
                         return 201, {"release": firmware.register_manifest(body)}
                     if route == ["updates"]:

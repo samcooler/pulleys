@@ -125,9 +125,9 @@ The older scripts remain available:
 
 ## Firmware releases and updates
 
-The Overlord checks the latest GitHub Release in the background at startup,
-compares release build identities, verifies asset SHA-256 values, and updates
-reachable nodes sequentially. The bridge's open `pulleys-fw` AP remains on
+Firmware is pushed to the Overlord (`./fw flash`, above); the Overlord never
+downloads any and does nothing about firmware at startup. It verifies asset
+SHA-256 values and updates the selected nodes sequentially. The bridge's open `pulleys-fw` AP remains on
 `MESH_WIFI_CHANNEL`; node downloads are served from firmware chunks requested
 from the Overlord over UART.
 
@@ -140,7 +140,8 @@ python3 tools/release_firmware.py
 This builds `sensor`, `screen`, `component_state_display`, `screen_extractor`,
 `screen_diorama`, `screen_party`, `arbiter_mesh`, `bridge`, and `bridge_esp32`, then creates the next minor GitHub Release with the images and
 `manifest.json`. Use `--build-only` to create local assets only. `./flash_all.sh
---ota` is retired; managed updates are initiated by restarting the Overlord.
+--ota` is retired; updates are pushed with `./fw flash`. Publishing a GitHub
+Release is optional and the Overlord does not read it.
 
 The first migration requires one USB flash of the new bridge environment,
 because the old bridge image cannot receive the new serial update protocol:

@@ -1,4 +1,4 @@
-"""Durable firmware catalog and one queue shared by startup, HTTP and scripts."""
+"""Durable firmware catalog and one queue shared by HTTP and scripts. Firmware is pushed in; nothing is fetched."""
 import copy
 import hashlib
 import json
@@ -46,7 +46,6 @@ class FirmwareManager:
         self._stop = threading.Event()
         self._thread = None
         self._releases = {}
-        self._latest = None
         self._jobs = []
         self._logs = []
         self._active = None
@@ -58,9 +57,10 @@ class FirmwareManager:
         try:
             state = json.loads((self.cache / "dashboard.json").read_text())
             for release in state.get("releases", []):
+                if release.get("source") == "github":
+                    continue   # from when the Overlord fetched releases itself; it no longer does
                 validate_manifest({"schema": 1, "tag": release["tag"], "firmware": release["manifest"]})
                 self._releases[release["id"]] = release
-            self._latest = state.get("latest")
             self._jobs = state.get("jobs", [])[-100:]
             for job in self._jobs:
                 if job.get("state") not in TERMINAL:
@@ -83,7 +83,7 @@ class FirmwareManager:
     def _save(self):
         # Caller holds the same lock used by serial callbacks and snapshots.
         self.cache.mkdir(parents=True, exist_ok=True)
-        state = {"releases": list(self._releases.values()), "latest": self._latest,
+        state = {"releases": list(self._releases.values()),
                  "jobs": self._jobs[-100:], "logs": self._logs[-500:],
                  "inventory": self.transport._inventory, "last_seen": self.transport._last_seen,
                  "assets": {key: str(path.relative_to(self.cache)) for key, path in self.transport._assets.items()}}
@@ -142,13 +142,11 @@ class FirmwareManager:
     def handle_line(self, line):
         return self.transport.handle_line(line)
 
-    def start(self, automatic=True):
+    def start(self):
         with self._lock:
             if self._thread:
                 return
             self._thread = threading.Thread(target=self._worker, name="firmware-queue", daemon=True)
-            if automatic:
-                self.enqueue("startup")
             self._thread.start()
 
     def stop(self):
@@ -160,7 +158,7 @@ class FirmwareManager:
             self._save()
 
     def enqueue(self, kind, release_id=None, device_ids=None, env=None):
-        if kind not in {"startup", "check", "scan", "update"}:
+        if kind not in {"scan", "update"}:
             raise ValueError("unsupported job type")
         with self._lock:
             if sum(row["state"] in {"queued", "running"} for row in self._jobs) >= 25:
@@ -280,22 +278,8 @@ class FirmwareManager:
                     "bridge": {"id": self.transport._bridge_id, "connected": connected,
                                "baud": getattr(self.transport.serial, "baudrate", None)},
                     "releases": [self._release_view(row) for row in sorted(self._releases.values(), key=lambda row: row["created_at"], reverse=True)],
-                    "latest_release_id": self._latest, "jobs": list(reversed(self._jobs)),
-                    "active_job": self._active, "logs": self._logs[-300:], "automatic_startup": True})
-
-    def _check_release(self):
-        self._log("Checking GitHub release and verifying assets")
-        self.transport._fetch_latest()
-        release = self.transport._release
-        identity = hashlib.sha256(json.dumps(release["manifest"], sort_keys=True).encode()).hexdigest()[:12]
-        release_id = "github-" + release["tag"] + "-" + identity
-        with self._lock:
-            self._releases[release_id] = {"id": release_id, "source": "github", "tag": release["tag"],
-                                          "created_at": time.time(), "manifest": copy.deepcopy(release["manifest"])}
-            self._latest = release_id
-            self._save()
-        self._log(f"Verified GitHub release {release['tag']}")
-        return release_id
+                    "jobs": list(reversed(self._jobs)),
+                    "active_job": self._active, "logs": self._logs[-300:]})
 
     def _run_job(self, job):
         with self._lock:
@@ -304,16 +288,7 @@ class FirmwareManager:
             self._save()
         try:
             self._log(f"Started {job['kind']}")
-            if job["kind"] in {"check", "startup"}:
-                for attempt in range(3):
-                    try:
-                        job["release_id"] = self._check_release()
-                        break
-                    except Exception:
-                        if attempt == 2:
-                            raise
-                        self._stop.wait((attempt + 1) * 3)
-            if job["kind"] in {"update", "startup"}:
+            if job["kind"] == "update":
                 with self._lock:
                     release = copy.deepcopy(self._releases[job["release_id"]])
                 results = self.transport.update_release(release, job["device_ids"], job["env"])

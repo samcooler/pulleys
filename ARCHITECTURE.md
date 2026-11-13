@@ -218,7 +218,7 @@ These are marked with `TODO` comments in the code:
 2. **Genetic mutation** — Random culture drift over time (`culture_mutate()` stub)
 3. **Ritual interaction** — IMU gestures modify exchange dynamics (`RitualDetector` stub)
 4. **Matrix patterns** — Spatial 8×8 patterns that use row/column position
-5. **Firmware updates** — the Overlord coordinates GitHub Release images and
+5. **Firmware updates** — the Overlord is pushed an image (`./fw flash`) and
    nodes pull a selected image from the bridge's same-channel AP.
 6. **Pattern library** — Multiple pattern types selectable by culture traits
 7. **Culture persistence** — Save culture to NVS flash so stations remember across reboots

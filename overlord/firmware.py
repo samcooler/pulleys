@@ -1,14 +1,8 @@
-"""Boot-time GitHub firmware update coordinator for the Overlord."""
+"""Firmware update transport for the Overlord: census, and serving images to nodes over the bridge."""
 
-import hashlib
-import json
 import os
-import re
-import subprocess
 import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 ACTIVE_ENVS = {"sensor", "screen", "component_state_display", "arbiter_mesh", "bridge"}
@@ -17,34 +11,9 @@ CACHE = Path(os.environ.get("OVERLORD_FIRMWARE_CACHE",
                             str(Path.home() / ".cache" / "overlord" / "firmware")))
 
 
-def _github_repo():
-    explicit = os.environ.get("PULLEYS_GITHUB_REPO")
-    if explicit:
-        return explicit.strip().removesuffix(".git")
-    try:
-        url = subprocess.check_output(
-            ["git", "remote", "get-url", "origin"], text=True, stderr=subprocess.DEVNULL
-        ).strip()
-    except Exception as exc:
-        raise RuntimeError("cannot determine GitHub repository; set PULLEYS_GITHUB_REPO") from exc
-    match = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", url)
-    if not match:
-        raise RuntimeError(f"origin is not a GitHub URL: {url}")
-    return match.group(1)
-
-
-def _get(url, timeout=15):
-    headers = {"User-Agent": "pulleys-overlord", "Accept": "application/vnd.github+json"}
-    token = os.environ.get("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
-
-
 class FirmwareUpdater:
-    """Fetch and validate the latest release, then coordinate serial updates.
+    """Coordinate firmware updates over the bridge. Images are pushed to the
+    Overlord (see FirmwareManager); nothing is downloaded from the internet.
 
     The serial protocol is line-oriented control only. Firmware bytes are served
     on demand in bounded Base64 chunks using FW-READ / FW-DATA records.
@@ -111,62 +80,6 @@ class FirmwareUpdater:
             self._answer_chunk(line)
             return True
         return False
-
-    def _fetch_latest(self):
-        repo = _github_repo()
-        release = json.loads(_get(f"https://api.github.com/repos/{repo}/releases/latest"))
-        tag = release.get("tag_name")
-        assets = {asset["name"]: asset["browser_download_url"] for asset in release.get("assets", [])}
-        if "manifest.json" not in assets:
-            raise RuntimeError(f"release {tag} has no manifest.json")
-        manifest = json.loads(_get(assets["manifest.json"]))
-        if manifest.get("tag") != tag or manifest.get("schema") != 1:
-            raise RuntimeError("release manifest tag/schema does not match its release")
-        table = manifest.get("firmware", {})
-        if not ACTIVE_ENVS.issubset(table):
-            raise RuntimeError("release manifest is missing active firmware environments")
-        self.cache.mkdir(parents=True, exist_ok=True)
-        local = {}
-        for env in sorted(ACTIVE_ENVS | (OPTIONAL_ENVS & table.keys())):
-            entry = table[env]
-            name = entry.get("asset")
-            if name not in assets:
-                raise RuntimeError(f"release is missing asset {name!r} for {env}")
-            digest = entry.get("sha256", "").lower()
-            build_hash = entry.get("build_hash", "").lower()
-            md5 = entry.get("md5", "").lower()
-            if not re.fullmatch(r"[0-9a-f]{64}", digest):
-                raise RuntimeError(f"invalid SHA-256 for {env}")
-            if not re.fullmatch(r"[0-9a-f]{64}", build_hash):
-                raise RuntimeError(f"invalid build hash for {env}")
-            if not re.fullmatch(r"[0-9a-f]{32}", md5):
-                raise RuntimeError(f"invalid migration checksum for {env}")
-            data = _get(assets[name], timeout=60)
-            if (len(data) != entry.get("size") or
-                    hashlib.sha256(data).hexdigest() != digest):
-                raise RuntimeError(f"download integrity check failed for {env}")
-            if hashlib.md5(data, usedforsecurity=False).hexdigest() != md5:
-                raise RuntimeError(f"download MD5 check failed for {env}")
-            path = self.cache / f"{tag}-{env}-{digest}.bin"
-            path.write_bytes(data)
-            local[digest] = path
-            table[env]["sha256"] = digest
-        with self._condition:
-            self._release = {"tag": tag, "manifest": table}
-            self._assets.update(local)
-
-    def _boot_run(self):
-        for attempt in range(1, 4):
-            try:
-                self._fetch_latest()
-                break
-            except Exception as exc:
-                print(f"firmware: GitHub attempt {attempt}/3 failed: {exc}", flush=True)
-                if attempt == 3:
-                    return
-                time.sleep(attempt * 3)
-
-        self.update_release(self._release)
 
     def _emit(self, kind, **fields):
         if self.observer:

@@ -90,12 +90,29 @@ static bool           s_touchDebug = false;
 // rope takes its new colour's sound. No state asks for it, so it plays in every
 // state; it is here and not in components.cpp so the host conformance build of
 // the game logic never sees it.
+//
+// Two levers are strung together, so one tug on the string pulls both and
+// sounds twice. A pull of a colour within LEVER_PAIR_MS of that colour's last
+// sounded pull is taken as the other end of the same tug: it is silent, and
+// the next pull after it starts a fresh pair. The game still hears every pull.
+#ifndef LEVER_PAIR_MS
+#define LEVER_PAIR_MS 300
+#endif
 static void ropePulled(const pulleys::MeshEvent& ev) {
     if (gamestate_ready() && ev.channel < pulleys::CHANNEL_COUNT) {
-        char lever[40];
-        snprintf(lever, sizeof(lever), "audio_once_lever_%s",
-                 pulleys::color_name(pulleys::channel_color_index(ev.channel)));
-        pulleys::mesh_send_cue(lever);
+        static uint32_t lastSounded[pulleys::COLOR_COUNT];   // by colour index
+        static bool     soundedOnce[pulleys::COLOR_COUNT];
+        uint8_t  color = pulleys::channel_color_index(ev.channel);
+        uint32_t now   = millis();
+        if (color < pulleys::COLOR_COUNT && soundedOnce[color] &&
+            now - lastSounded[color] < LEVER_PAIR_MS) {
+            soundedOnce[color] = false;          // the pair is complete
+        } else {
+            if (color < pulleys::COLOR_COUNT) { soundedOnce[color] = true; lastSounded[color] = now; }
+            char lever[40];
+            snprintf(lever, sizeof(lever), "audio_once_lever_%s", pulleys::color_name(color));
+            pulleys::mesh_send_cue(lever);
+        }
     }
     components_on_mesh_event(ev);
 }

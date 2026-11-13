@@ -5,14 +5,13 @@ looping background video and a looping background audio track. Trigger events
 play a video clip once (then return to the video loop) or overlay a sound effect
 on top of everything.
 
-At normal startup the Overlord also checks the latest GitHub firmware Release
-in a background thread. It validates every firmware asset's binary SHA-256,
-asks the bridge for a mesh census, compares release build identities, and
-updates reachable out-of-date nodes one at a time. The bridge hosts the open
-`pulleys-fw` AP on the ESP-NOW channel and serves
-node downloads by requesting chunks over its USB link to the Overlord. GitHub
-or bridge unavailability does not stop media playback; update checks are retried
-on the next Overlord reboot.
+The Overlord also coordinates firmware updates, but only for firmware pushed to
+it: it never downloads any, and nothing happens at startup. Push images from the
+dev machine with `./fw flash` (or `tools/push_firmware.py`) and the Overlord
+validates each binary's SHA-256, then updates the selected nodes one at a time.
+The bridge hosts the open `pulleys-fw` AP on the ESP-NOW channel and serves node
+downloads by requesting chunks over its USB link to the Overlord. A missing
+bridge does not stop media playback.
 
 ## Firmware dashboard
 
@@ -187,14 +186,17 @@ curl -X POST localhost:8080/param/round_time/1m
 
 ## Deploying on a mini PC or Raspberry Pi
 
-The Overlord needs outbound Internet access to GitHub Releases. Its bridge
+The Overlord needs no Internet access for firmware: images are pushed to it
+(`./fw flash`). The boot-time `git pull` and media sync do use the network, and
+both are best-effort. Its bridge
 plugs into a USB port; `serial_reader.py` finds it as `/dev/ttyACM*` and prefers
 it over the Pi's GPIO UART (`/dev/serial0`, `/dev/ttyAMA*`), which it falls
 back to for a bridge built with `BRIDGE_PI_USB=0`. The bridge AP is
 open and intended for the Pulleys nodes; it does not provide Internet routing.
 
-To publish firmware, install PlatformIO and GitHub CLI, authenticate `gh`, and
-run from the repository:
+The Overlord does not read GitHub Releases. If you still want to publish one for
+the record, install PlatformIO and GitHub CLI, authenticate `gh`, and run from
+the repository:
 
 ```sh
 python3 tools/release_firmware.py
@@ -203,8 +205,7 @@ python3 tools/release_firmware.py
 The script requires a clean Git working tree, builds the active environments
 sequentially, publishes their `firmware.bin` assets plus `manifest.json`, and
 advances the minor release number. `--build-only` creates local assets without
-publishing. For a private repository, the Overlord can read releases with a
-GitHub token provided through the `GITHUB_TOKEN` environment variable.
+publishing.
 
 The new firmware protocol cannot be spoken by a bridge running the retired
 image-host firmware. Flash it once over USB with
