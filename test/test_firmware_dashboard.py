@@ -30,7 +30,7 @@ def fixture(env="screen", chip=0, declared=None):
     data = bytes(data)
     image = {"asset": env + "-firmware.bin", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
              "md5": hashlib.md5(data).hexdigest(), "build_hash": declared or identity}
-    return {"schema": 1, "tag": "v0.3.0", "firmware": {env: image}}, data
+    return {"schema": 1, "tag": "1763000000", "built_at": 1763000000, "firmware": {env: image}}, data
 
 
 class DashboardTests(unittest.TestCase):
@@ -64,9 +64,16 @@ class DashboardTests(unittest.TestCase):
         restored = FirmwareManager(Serial(), cache=self.directory.name)
         snapshot = restored.snapshot()
         self.assertTrue(snapshot["releases"][0]["ready"])
+        self.assertEqual(snapshot["releases"][0]["built_at"], 1763000000)   # survives a restart
         self.assertEqual(snapshot["jobs"][0]["id"], job["id"])
         self.assertEqual(snapshot["jobs"][0]["state"], "interrupted")
         self.assertEqual(snapshot["devices"][0]["id"], "59A4")
+
+    def test_built_at_must_be_a_unix_timestamp(self):
+        manifest, _ = fixture()
+        for bad in ("2025-11-12", 0, -5, 1.5, True):
+            with self.assertRaisesRegex(ValueError, "built_at"):
+                self.manager.register_manifest(dict(manifest, built_at=bad))
 
     def test_rejects_corruption_wrong_chip_and_false_identity(self):
         for env, chip, identity, message in [("sensor", 0, None, "chip type"),

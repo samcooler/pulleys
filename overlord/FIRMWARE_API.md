@@ -27,10 +27,10 @@ Use the existing release tooling to produce `manifest.json` and its binaries.
 For example, after committing firmware source changes:
 
 ```sh
-python3 tools/release_firmware.py --build-only --tag v0.3.0
+python3 tools/release_firmware.py          # prints dist/<timestamp>/
 python3 tools/push_firmware.py \
   --url http://overlord.local:8080 \
-  --manifest dist/v0.3.0/manifest.json \
+  --manifest dist/<timestamp>/manifest.json \
   --device 59A4 --wait
 ```
 
@@ -59,11 +59,11 @@ Register a manifest and upload an image:
 
 ```sh
 curl -sS -X POST http://overlord.local:8080/api/firmware/releases \
-  -H 'Content-Type: application/json' --data-binary @dist/v0.3.0/manifest.json
+  -H 'Content-Type: application/json' --data-binary @dist/<timestamp>/manifest.json
 # Use the returned release.id:
 curl -sS -X PUT http://overlord.local:8080/api/firmware/releases/RELEASE_ID/sensor \
   -H 'Content-Type: application/octet-stream' \
-  --data-binary @dist/v0.3.0/sensor-firmware.bin
+  --data-binary @dist/<timestamp>/sensor-firmware.bin
 ```
 
 Queue explicit device IDs:
@@ -90,6 +90,7 @@ at execution time. The update never changes a device's firmware environment.
 Local uploads check size, SHA-256, MD5, ESP chip type and the embedded build
 identity before becoming usable. Local manifests can contain one or multiple
 supported environments, using exactly the release tool's `schema`, `tag`,
+`built_at` (Unix seconds the batch was triggered; optional, shown on the dashboard in Pacific time),
 `firmware`, `asset`, `size`, `sha256`, `md5`, and `build_hash` fields.
 
 Job states: `queued`, `running`, `completed`, `failed`, `interrupted`.

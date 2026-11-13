@@ -4,6 +4,9 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 const expanded = new Set();
 let state = null, selected = localStorage.getItem('overlord-release') || '', posting = false, networkError = false, releaseOptionsKey = "";
 const clock = timestamp => new Date(timestamp * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+// When a firmware batch was built, always in Pacific time (PST or PDT, whichever applies).
+const built = timestamp => new Date(timestamp * 1000).toLocaleString('en-US', {timeZone:'America/Los_Angeles', year:'numeric', month:'short', day:'numeric', hour:'numeric', minute:'2-digit', timeZoneName:'short'});
+const releaseLabel = row => row?.built_at ? built(row.built_at) : row?.tag || '';
 const age = timestamp => {if (!timestamp) return 'Never'; const n = Math.max(0, Math.floor(Date.now()/1000-timestamp)); return n < 5 ? 'Just now' : n < 60 ? `${n}s ago` : n < 3600 ? `${Math.floor(n/60)}m ago` : `${Math.floor(n/3600)}h ago`;};
 const badge = value => `<span class="badge ${esc(value)}">${esc(value.replaceAll('_',' '))}</span>`;
 const release = () => state?.releases.find(row => row.id === selected);
@@ -54,9 +57,9 @@ function render() {
   const focusValue=focusAttr?focused.getAttribute(focusAttr):null;
   const releases = state.releases;
   if (!releases.some(row=>row.id===selected)) selected=releases[0]?.id || '';
-  const nextReleaseOptionsKey=JSON.stringify(releases.map(row=>[row.id,row.tag,row.ready]));
+  const nextReleaseOptionsKey=JSON.stringify(releases.map(row=>[row.id,row.tag,row.built_at,row.ready]));
   if(nextReleaseOptionsKey!==releaseOptionsKey){
-  $('release').innerHTML=releases.length?releases.map(row=>`<option value="${esc(row.id)}">${esc(row.tag)}${row.ready?'':' · partial upload'}</option>`).join(''):'<option value="">No release loaded</option>';
+  $('release').innerHTML=releases.length?releases.map(row=>`<option value="${esc(row.id)}">${esc(releaseLabel(row))}${row.ready?'':' · partial upload'}</option>`).join(''):'<option value="">No release loaded</option>';
   releaseOptionsKey=nextReleaseOptionsKey;
   }
   if($('release').value!==selected) $('release').value=selected;
@@ -77,13 +80,13 @@ function render() {
     const active=work?.job.state==='running' && !['confirmed','skipped','failed'].includes(work.state);
     const logs=state.logs.filter(event=>event.node_id===node.id);
     const canUpdate=image?.uploaded && node.sha256!==image.build_hash && !active;
-    return `<tr class="device-row"><td><div class="device-title"><span class="dot${node.online?' online':''}"></span><button class="expand" data-expand="${esc(node.id)}" aria-expanded="${expanded.has(node.id)}" aria-controls="log-${esc(node.id)}">${esc(node.name || node.id)} <span class="chevron">${expanded.has(node.id)?'−':'+'}</span></button></div><div class="device-meta">${esc(node.env || node.role || 'Unknown role')}</div></td><td><span class="version">${esc(known?.tag || 'Unmanaged build')}</span><span class="hash" title="${esc(node.sha256)}">${node.sha256 && node.sha256!=='unknown'?esc(node.sha256.slice(0,12)):esc(node.build || 'Identity unknown')}</span></td><td>${badge(status)}${active?`<div class="node-progress" role="progressbar" aria-label="Firmware bytes served" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><span style="width:${percent}%"></span></div><span class="hash">${percent}% served${work.attempt?' · try '+work.attempt:''}</span>`:''}</td><td class="seen" title="${node.last_seen?esc(new Date(node.last_seen*1000).toLocaleString()):''}">${age(node.last_seen)}</td><td>${canUpdate?`<button class="button small" data-update="${esc(node.id)}">Update</button>`:'<span class="subtle">—</span>'}</td></tr>${expanded.has(node.id)?`<tr class="node-detail" id="log-${esc(node.id)}"><td colspan="5"><pre>${esc(`Build: ${node.build || 'unknown'}\nIdentity: ${node.sha256 || 'unknown'}\n` + (logs.length?logs.slice(-30).map(event=>`${clock(event.at)}  ${event.message}`).join('\n'):'No update activity recorded for this device.'))}</pre></td></tr>`:''}`;
+    return `<tr class="device-row"><td><div class="device-title"><span class="dot${node.online?' online':''}"></span><button class="expand" data-expand="${esc(node.id)}" aria-expanded="${expanded.has(node.id)}" aria-controls="log-${esc(node.id)}">${esc(node.name || node.id)} <span class="chevron">${expanded.has(node.id)?'−':'+'}</span></button></div><div class="device-meta">${esc(node.env || node.role || 'Unknown role')}</div></td><td><span class="version">${esc(known?releaseLabel(known):'Unmanaged build')}</span><span class="hash" title="${esc(node.sha256)}">${node.sha256 && node.sha256!=='unknown'?esc(node.sha256.slice(0,12)):esc(node.build || 'Identity unknown')}</span></td><td>${badge(status)}${active?`<div class="node-progress" role="progressbar" aria-label="Firmware bytes served" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><span style="width:${percent}%"></span></div><span class="hash">${percent}% served${work.attempt?' · try '+work.attempt:''}</span>`:''}</td><td class="seen" title="${node.last_seen?esc(new Date(node.last_seen*1000).toLocaleString()):''}">${age(node.last_seen)}</td><td>${canUpdate?`<button class="button small" data-update="${esc(node.id)}">Update</button>`:'<span class="subtle">—</span>'}</td></tr>${expanded.has(node.id)?`<tr class="node-detail" id="log-${esc(node.id)}"><td colspan="5"><pre>${esc(`Build: ${node.build || 'unknown'}\nBuilt: ${known?.built_at?built(known.built_at):'unknown'}\nIdentity: ${node.sha256 || 'unknown'}\n` + (logs.length?logs.slice(-30).map(event=>`${clock(event.at)}  ${event.message}`).join('\n'):'No update activity recorded for this device.'))}</pre></td></tr>`:''}`;
   }).join(''):'<tr><td colspan="5" class="empty">No devices reported yet.<br>Scan the mesh to collect running firmware versions.</td></tr>';
   const activeJob=state.jobs.find(job=>job.id===state.active_job);
   $('queue-badge').className=`badge ${activeJob?'running':'neutral'}`;
   $('queue-badge').textContent=activeJob?'Running':'Idle';
   $('queue').innerHTML=state.jobs.length?state.jobs.slice(0,8).map(job=>{
-    const tag=releases.find(row=>row.id===job.release_id)?.tag;
+    const tag=releaseLabel(releases.find(row=>row.id===job.release_id));
     const results=Object.entries(job.devices);
     const confirmed=results.filter(([,row])=>row.state==='confirmed').length;
     return `<article class="job"><div class="job-title"><span>${esc({scan:'Mesh census',update:'Firmware update'}[job.kind]||job.kind)}</span>${badge(job.state)}</div><div class="job-meta">${esc(tag||'')} ${job.current_device?' · '+esc(job.current_device):''}<br>${esc(job.id)} · ${age(job.created_at)}${results.length?`<br>${confirmed} confirmed · ${results.filter(([,row])=>row.state==='skipped').length} already current`:''}</div>${job.error?`<div class="job-error">${esc(job.error)}</div>`:''}${['failed','interrupted'].includes(job.state)?`<button class="button small" data-retry="${esc(job.id)}">Retry failed</button>`:''}</article>`;
@@ -121,7 +124,7 @@ $('upload-form').addEventListener('submit',async event=>{
     }
     localStorage.setItem('overlord-release',selected);
     $('upload-result').textContent=`Uploaded ${files.length} binaries. Select devices to update.`;
-    notify(`Local release ${manifest.tag} is available.`); await refresh();
+    notify(`Local release ${manifest.built_at?built(manifest.built_at):manifest.tag} is available.`); await refresh();
   }catch(error){$('upload-result').textContent=error.message; notify(error.message,true);}
   finally{button.disabled=false;}
 });

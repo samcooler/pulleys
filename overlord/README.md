@@ -194,18 +194,11 @@ it over the Pi's GPIO UART (`/dev/serial0`, `/dev/ttyAMA*`), which it falls
 back to for a bridge built with `BRIDGE_PI_USB=0`. The bridge AP is
 open and intended for the Pulleys nodes; it does not provide Internet routing.
 
-The Overlord does not read GitHub Releases. If you still want to publish one for
-the record, install PlatformIO and GitHub CLI, authenticate `gh`, and run from
-the repository:
-
-```sh
-python3 tools/release_firmware.py
-```
-
-The script requires a clean Git working tree, builds the active environments
-sequentially, publishes their `firmware.bin` assets plus `manifest.json`, and
-advances the minor release number. `--build-only` creates local assets without
-publishing.
+The Overlord does not read GitHub Releases, and there are none. A build is
+identified by the Unix time its batch was triggered, shown on the dashboard
+with the build hash and the date and time in Pacific time. `./fw flash` builds
+and pushes; `python3 tools/release_firmware.py` builds every active environment
+as one batch without flashing.
 
 The new firmware protocol cannot be spoken by a bridge running the retired
 image-host firmware. Flash it once over USB with

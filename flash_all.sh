@@ -91,7 +91,7 @@ ONLY_PORTS=()
 ONLY_IDS=()
 expect=""
 # The former mesh-hosted OTA flow has been retired in favor of Overlord-managed
-# GitHub Release updates.
+# updates pushed from ./fw flash.
 # The wireless counterpart to -l: -l sees what is plugged in, --survey sees what
 # is out there. Same handoff shape, and it disturbs nothing -- boards answer
 # from inside their normal loop.
@@ -104,7 +104,7 @@ if [[ " $* " == *" --survey "* ]]; then
 fi
 
 if [[ " $* " == *" --ota "* ]]; then
-  print -u2 "--ota has been retired; start the Overlord to update reachable nodes from GitHub Releases."
+  print -u2 "--ota has been retired; start the Overlord to push firmware with ./fw flash."
   exit 2
 fi
 
