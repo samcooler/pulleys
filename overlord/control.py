@@ -12,7 +12,7 @@ MAX_IMAGE = 7 * 1024 * 1024
 
 
 class ControlServer:
-    def __init__(self, handle, host="127.0.0.1", port=8080, firmware=None, installation=None, sessions=None):
+    def __init__(self, handle, host="127.0.0.1", port=8080, firmware=None, installation=None, sessions=None, gains=None):
         class Handler(BaseHTTPRequestHandler):
             def _body(self, limit, binary=False):
                 if self.headers.get("Transfer-Encoding"):
@@ -98,11 +98,27 @@ class ControlServer:
                     return 200, {"release": firmware.upload_image(route[1], route[2], data)}
                 return 404, {"error": "no such firmware route"}
 
+            def _gain(self, route):
+                """Live loudness overrides: GET /api/gain; POST /api/gain/<cue>
+                {"gain": 1.2}; DELETE /api/gain/<cue>, or /api/gain for all."""
+                if gains is None:
+                    return 503, {"error": "gain control unavailable"}
+                if self.command == "GET" and not route:
+                    return 200, {**gains.snapshot(), "yaml": gains.yaml_block()}
+                if self.command == "POST" and len(route) == 1:
+                    return 200, {"cue": route[0], "gain": gains.set(route[0], self._body(256).get("gain"))}
+                if self.command == "DELETE" and len(route) <= 1:
+                    gains.reset(route[0] if route else None)
+                    return 200, {"reset": route[0] if route else "all"}
+                return 404, {"error": "no such gain route"}
+
             def _serve(self):
                 parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
                 content_type = "application/json; charset=utf-8"
                 try:
-                    assets = {("sessions",): ("sessions.html", "text/html"),
+                    assets = {("gain",): ("gain.html", "text/html"),
+                              ("gain.js",): ("gain.js", "application/javascript"),
+                              ("sessions",): ("sessions.html", "text/html"),
                               ("sessions.js",): ("sessions.js", "application/javascript"),
                               ("installation_status.js",): ("installation_status.js", "application/javascript"),
                               ("installation",): ("installation.html", "text/html"),
@@ -129,6 +145,8 @@ class ControlServer:
                         else:
                             query = parse_qs(urlsplit(self.path).query)
                             status, body = 200, sessions.snapshot(int(query.get("limit", [200])[0]))
+                    elif parts[:2] == ["api", "gain"]:
+                        status, body = self._gain(parts[2:])
                     elif parts[:2] == ["api", "firmware"]:
                         status, body = self._firmware(parts)
                     else:

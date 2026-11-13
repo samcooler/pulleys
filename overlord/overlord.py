@@ -240,16 +240,16 @@ def main():
 
     signal.signal(signal.SIGTERM, shutdown)
 
-    gains = {}  # cue name -> loudness multiplier; filled below once the game file is known
+    gains = gain_config.GainStore()  # cue -> loudness multiplier, with live overrides; pointed at the game file below
 
-    def play_clip(path, interrupt=False):
+    def play_clip(path, interrupt=False, gain=1.0):
         """Play a clip once. Unless interrupt, a clip already playing wins and
         this one is dropped. Returns whether it played."""
         with lock:
             if state["playing_clip"] and not interrupt:
                 return False
             state["playing_clip"] = True
-            video.play(path, loop=False)
+            video.play(path, loop=False, gain=gain)
             return True
 
     def set_video_loop(path):
@@ -308,7 +308,7 @@ def main():
                 if prefix.startswith("audio_"):
                     action(path, gains.get(event_name, 1.0))
                 elif action is play_clip:
-                    if not play_clip(path, interrupt=enter):
+                    if not play_clip(path, interrupt=enter, gain=gains.get(event_name, 1.0)):
                         return "skipped"
                 else:
                     action(path)
@@ -522,7 +522,8 @@ def main():
         from game import DEFAULT_GAME
     except ImportError:  # pyyaml missing: game.py cannot be imported
         DEFAULT_GAME = None
-    gains.update(gain_config.load(args.game or DEFAULT_GAME))
+    gains.path = args.game or DEFAULT_GAME
+    gains.reload()
     ambient = None
     ambient_config = args.game or DEFAULT_GAME
     if ambient_config:
@@ -533,7 +534,7 @@ def main():
     if args.control_port:
         try:
             api = ControlServer(control, args.control_bind, args.control_port, firmware=firmware_updater, installation=installation,
-                            sessions=sessions)
+                            sessions=sessions, gains=gains)
             api.start()
             print(f"control: http://{api.address[0]}:{api.address[1]}/status", flush=True)
         except OSError as e:  # the player matters more than its remote control
