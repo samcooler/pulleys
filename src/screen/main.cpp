@@ -681,9 +681,12 @@ static void renderComponents(uint32_t now, float dt) {
 #endif
 
 // Of the colour's own (already dimmed) brightness, out of 255: the faint
-// vertical lines round the ring while the colour is not a goal.
+// vertical lines round the ring while the colour is not a goal. It is meant to
+// be fainter than a gauge's unlit track (TRACK_LEVEL 10, which comes out as 2 of
+// 255 on a lit channel). At 5 this comes out as 1 of 255, the least an LED can
+// show; the 8-bit scaling means 0..4 would turn it off entirely.
 #ifndef EXTRACTOR_IDLE_GLOW
-  #define EXTRACTOR_IDLE_GLOW 22
+  #define EXTRACTOR_IDLE_GLOW 5
 #endif
 // How many lines, spaced evenly round the 64 columns (6 is one every ~10.7).
 #ifndef EXTRACTOR_MARKS
