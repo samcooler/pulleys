@@ -12,10 +12,13 @@ CACHE = Path(os.environ.get("OVERLORD_FIRMWARE_CACHE",
 
 
 # The background scan: replies are spread over this window (ms) so a few dozen
-# boards do not answer at once, and a scan starts as the last one ends.
+# boards do not answer at once.
 SCAN_SPREAD_MS = 2000
+# The background scan repeats this often (seconds, start to start) while idle.
+# Each census floods the mesh with replies, which makes it feel sluggish.
+SCAN_INTERVAL_SECONDS = 10
 # A device is offline once it has been silent this long (seconds). It is not
-# flashed while offline, and it is shown last, in red. Scans run every couple of
+# flashed while offline, and it is shown last, in red. Scans run every few
 # seconds, so this is many missed scans, not a flicker.
 ONLINE_SECONDS = 180
 # Silent this long (or never heard) and the dashboard calls it simply "offline".
@@ -173,8 +176,8 @@ class FirmwareUpdater:
                     if self._last_seen.get(key, 0) >= started}
 
     def scan(self, spread_ms=SCAN_SPREAD_MS):
-        """One light census: ask everyone once, wait out the reply window. Cheap
-        enough to repeat every couple of seconds; discover() is the thorough one."""
+        """One light census: ask everyone once, wait out the reply window. discover() is
+        the thorough one."""
         if not self.serial.connected:
             return
         self.serial.write_line(f"FW-CENSUS spread={spread_ms}")

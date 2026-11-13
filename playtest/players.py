@@ -60,9 +60,9 @@ def meaning_of_cue(name):
     something they would not notice as an event (a game control cue)."""
     if TARGET_SPLIT in name:
         name = name.split(TARGET_SPLIT, 1)[1]
-    if name.startswith("game_") or name == "audio_loop_off":
+    if name.startswith("game_") or name in ("audio_loop_off", "audio_bed_off"):
         return None
-    if name.startswith(("video_loop_", "audio_loop_")):
+    if name.startswith(("video_loop_", "audio_loop_", "audio_bed_")):
         return "scene", name
     family = name.split("*")[0].rstrip("_")
     family = re.sub(r"_\d+$", "", family)

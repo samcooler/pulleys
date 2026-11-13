@@ -8,7 +8,8 @@ import threading
 import time
 import uuid
 
-from firmware import ACTIVE_ENVS, OPTIONAL_ENVS, CACHE, FirmwareUpdater, ONLINE_SECONDS, OFFLINE_SECONDS
+from firmware import (ACTIVE_ENVS, OPTIONAL_ENVS, CACHE, FirmwareUpdater, ONLINE_SECONDS, OFFLINE_SECONDS,
+                      SCAN_INTERVAL_SECONDS)
 
 ENVS = ACTIVE_ENVS | OPTIONAL_ENVS
 MAX_IMAGE = 7 * 1024 * 1024
@@ -56,6 +57,7 @@ class FirmwareManager:
         self._active = None
         self._sequence = 0
         self._saved_at = 0.0
+        self._scanned_at = None   # when the background scan last started
         self._transfer_started = {}   # node -> monotonic time its first chunk was served
         self._load()
 
@@ -563,10 +565,13 @@ class FirmwareManager:
                     job_id = self._pending.pop(0)
                     job = next(row for row in self._jobs if row["id"] == job_id)
             if job is None:
-                if not signalled:
-                    # Nothing to flash: scan the mesh, over and over. This shares
-                    # the worker, so it never puts control traffic in the middle
-                    # of a transfer.
+                if not signalled and (
+                        self._scanned_at is None
+                        or time.monotonic() - self._scanned_at >= SCAN_INTERVAL_SECONDS):
+                    # Nothing to flash: scan the mesh every SCAN_INTERVAL_SECONDS.
+                    # This shares the worker, so it never puts control traffic in
+                    # the middle of a transfer.
+                    self._scanned_at = time.monotonic()
                     try:
                         self.transport.begin_job()
                         self.transport.scan()

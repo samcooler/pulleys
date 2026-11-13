@@ -7,6 +7,9 @@ Events (one per line):
   video_loop_<name>  switch the background video loop to media/video_loops/<name>.*
   audio_loop_<name>  switch the background audio loop to media/audio_loops/<name>.*
   audio_loop_off     stop the background audio loop
+  audio_bed_<name>   a second background loop, under audio_loop_*, from media/audio_beds/<name>.*
+                     (a cue for a bed already playing leaves it running)
+  audio_bed_off      stop the bed
   cue <name>         the arbiter's game fired a cue; play <name> as above (what the bridge sends)
   cue <name> enter   the same, fired on entering a game state
 
@@ -120,6 +123,7 @@ def main():
     state = {
         "video_loop": find_media("video_loops", DEFAULT_LOOP, "video_loop_"),
         "audio_loop": find_media("audio_loops", DEFAULT_LOOP, "audio_loop_"),
+        "audio_bed": None,
         "playing_clip": False,
     }
 
@@ -185,6 +189,7 @@ def main():
 
     video = Mpv(video_extra, on_event=on_event, kiosk=True, name="video")
     audio = Mpv(extra, kiosk=False, name="audio")
+    bed = Mpv(extra, kiosk=False, name="bed")  # audio_bed_*: plays under the audio loop
 
     # Escape opens the debug menu. In a window mpv sees the keys; on the panel
     # (DRM, no window) they are read from the keyboard devices instead.
@@ -194,7 +199,7 @@ def main():
         """Live on the running players and for every sound started later; remembered."""
         percent = max(0, min(100, percent))
         volume[0] = sounds.volume = percent
-        for player in (audio, video):
+        for player in (audio, bed, video):
             player.set("volume", percent)
         settings.save(volume=percent)
 
@@ -223,6 +228,7 @@ def main():
             game.stop()
         sounds.stop_all()
         audio.quit()
+        bed.quit()
         video.quit()
 
     signal.signal(signal.SIGTERM, shutdown)
@@ -255,10 +261,23 @@ def main():
             state["audio_loop"] = None
             audio.stop()
 
+    def set_audio_bed(path, gain=1.0):
+        with lock:
+            if state["audio_bed"] == path:  # entering another state must not restart it
+                return
+            state["audio_bed"] = path
+            bed.play(path, loop=True, gain=gain)
+
+    def stop_audio_bed():
+        with lock:
+            state["audio_bed"] = None
+            bed.stop()
+
     # (prefix, folder, action); longest prefixes first so they win.
     prefixed = [
         ("video_loop_", "video_loops", set_video_loop),
         ("audio_loop_", "audio_loops", set_audio_loop),
+        ("audio_bed_", "audio_beds", set_audio_bed),
         ("video_once_", "video_once", play_clip),
         ("audio_once_", "audio_once", sounds.play),
     ]
@@ -269,6 +288,9 @@ def main():
         a clip dropped because another is playing. `enter` lets a clip interrupt."""
         if event_name == "audio_loop_off":
             stop_audio_loop()
+            return "stopped"
+        if event_name == "audio_bed_off":
+            stop_audio_bed()
             return "stopped"
         for prefix, folder, action in prefixed:
             if event_name.startswith(prefix):
@@ -317,6 +339,7 @@ def main():
                 "volume": volume[0],
                 "video_loop": state["video_loop"].name if state["video_loop"] else None,
                 "audio_loop": state["audio_loop"].name if state["audio_loop"] else None,
+                "audio_bed": state["audio_bed"].name if state["audio_bed"] else None,
                 "playing_clip": state["playing_clip"],
                 "game_state": game.state if game else None,
             }

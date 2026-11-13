@@ -10,7 +10,7 @@ below). Updates and scans use one worker. A census never runs
 in the middle of a transfer. The arbiter runs first and this server's bridge
 runs last. A device is confirmed only after a fresh post-reboot identity report.
 
-The dashboard polls every two seconds. Expand a device for its build identity
+The dashboard polls every two seconds; the Overlord scans the mesh every 10 s while idle. Expand a device for its build identity
 and activity. Select a release before updating devices. Progress
 counts bytes served through the bridge, not successful installation; the
 separate verification stage checks the reboot. A gray device may simply have

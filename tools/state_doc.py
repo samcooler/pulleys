@@ -118,9 +118,9 @@ class Doc:
 
     # -- cues ---------------------------------------------------------------
     def kind(self, cue):
-        for k in ("video_loop", "video_once", "audio_loop", "audio_once", "game"):
-            if cue.startswith(k + "_") or cue == "audio_loop_off":
-                return "audio_loop" if cue == "audio_loop_off" else k
+        for k in ("video_loop", "video_once", "audio_loop", "audio_bed", "audio_once", "game"):
+            if cue.startswith(k + "_"):
+                return k
         return "other"
 
     def takes(self, pattern):
@@ -141,7 +141,7 @@ class Doc:
 
     def cue_html(self, cue, enter=False):
         kind = self.kind(cue)
-        label = {"video_loop": "video loop", "video_once": "clip", "audio_loop": "music",
+        label = {"video_loop": "video loop", "video_once": "clip", "audio_loop": "music", "audio_bed": "bed",
                  "audio_once": "sound", "game": "game", "other": "cue"}[kind]
         name = esc(cue)
         if "*" in cue:
@@ -330,7 +330,7 @@ h3 {{ margin: 0 0 8px; font-size: 12px; font-weight: 600; text-transform: upperc
 .cue[open] summary .n::before {{ content: "▾ "; }}
 .tag {{ font: 500 10.5px var(--sans); text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 4px; }}
 .k-video_once .tag, .k-video_loop .tag {{ color: var(--video); background: var(--video-bg); }}
-.k-audio_once .tag, .k-audio_loop .tag {{ color: var(--audio); background: var(--audio-bg); }}
+.k-audio_once .tag, .k-audio_loop .tag, .k-audio_bed .tag {{ color: var(--audio); background: var(--audio-bg); }}
 .k-game .tag, .k-other .tag {{ color: var(--game); background: var(--game-bg); }}
 .k-set .tag {{ color: var(--device); background: var(--device-bg); }}
 .line {{ color: var(--muted); font-style: italic; }}

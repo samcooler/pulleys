@@ -444,6 +444,8 @@ contain `/`.
 | `video_loop_<name>`  | Switch the background video to `media/video_loops/<name>.*`                     |
 | `audio_loop_<name>`  | Switch the background audio to `media/audio_loops/<name>.*`                     |
 | `audio_loop_off`     | Stop the background audio loop                                                  |
+| `audio_bed_<name>`   | A second background loop under the first, from `media/audio_beds/<name>.*`      |
+| `audio_bed_off`      | Stop the bed                                                                    |
 
 Behaviour details:
 
