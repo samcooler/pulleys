@@ -141,7 +141,7 @@ def inventory(args, *, provision=False):
         row["type"] = node_type(row.get("env", ""), row.get("role", ""))
         work = next((job["devices"][row["id"]] for job in snapshot["jobs"]
                      if job["state"] == "running" and row["id"] in job["devices"]), None)
-        row["status"] = work["state"] if work else "seen" if row.get("online") else "not recent"
+        row["status"] = work["state"] if work else "offline" if row.get("offline") else "seen" if row.get("online") else "not recent"
         rows.append(row)
     return rows, names
 

@@ -18,6 +18,8 @@ SCAN_SPREAD_MS = 2000
 # flashed while offline, and it is shown last, in red. Scans run every couple of
 # seconds, so this is many missed scans, not a flicker.
 ONLINE_SECONDS = 180
+# Silent this long (or never heard) and the dashboard calls it simply "offline".
+OFFLINE_SECONDS = 2 * 3600
 
 
 class FirmwareUpdater:

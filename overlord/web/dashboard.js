@@ -46,9 +46,10 @@ function latestDeviceWork(id) {
 }
 function deviceStatus(node, image, work) {
   if (work?.job.state==='running' && !['confirmed','skipped','failed'].includes(work.state)) return work.state;
+  if (node.offline) return 'offline';   // gone for hours: never "failed", never updated
   if (image && node.sha256===image.build_hash) return 'current';
-  if (work?.state==='failed') return 'failed';
   if (!node.online) return 'not recent';
+  if (work?.state==='failed') return 'failed';
   if (!image?.uploaded) return 'no image';
   return 'outdated';
 }

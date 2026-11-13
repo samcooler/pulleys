@@ -89,6 +89,27 @@ class DashboardTests(unittest.TestCase):
         self.manager.handle_line("PULLEYS-CENSUS id=59A4 env=screen sha256=unknown name=Gauge build=old")
         self.assertTrue(self.manager.enqueue("update", release)["id"])   # heard again: allowed
 
+    def test_offline_after_two_hours_and_never_retried_or_queued(self):
+        node = lambda: next(row for row in self.manager.snapshot()["devices"] if row["id"] == "59A4")
+        self.manager.transport._last_seen["59A4"] = time.time() - 3600
+        self.assertFalse(node()["online"])
+        self.assertFalse(node()["offline"])          # quiet for an hour: not recent, not yet "offline"
+        self.manager.transport._last_seen["59A4"] = time.time() - 3 * 3600
+        self.assertTrue(node()["offline"])
+        release = self.uploaded()
+        with self.assertRaisesRegex(ValueError, "59A4 offline"):
+            self.manager.enqueue("update", release, ["59A4"])
+        # A failed job's retry leaves out a device that has since gone away.
+        self.manager.transport._last_seen["59A4"] = time.time()
+        job = self.manager.enqueue("update", release, ["59A4"])
+        with self.manager._lock:
+            row = next(r for r in self.manager._jobs if r["id"] == job["id"])
+            row.update(state="failed", devices={"59A4": {"state": "failed"}})
+            self.manager._pending.clear()
+        self.manager.transport._last_seen["59A4"] = time.time() - 3 * 3600
+        with self.assertRaisesRegex(ValueError, "none of those devices are online"):
+            self.manager.retry(job["id"])
+
     def test_a_device_that_comes_back_is_marked_as_returned(self):
         node = lambda: next(row for row in self.manager.snapshot()["devices"] if row["id"] == "59A4")
         self.assertIsNone(node()["returned_at"])

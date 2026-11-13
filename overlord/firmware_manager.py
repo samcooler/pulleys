@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 
-from firmware import ACTIVE_ENVS, OPTIONAL_ENVS, CACHE, FirmwareUpdater, ONLINE_SECONDS
+from firmware import ACTIVE_ENVS, OPTIONAL_ENVS, CACHE, FirmwareUpdater, ONLINE_SECONDS, OFFLINE_SECONDS
 
 ENVS = ACTIVE_ENVS | OPTIONAL_ENVS
 MAX_IMAGE = 7 * 1024 * 1024
@@ -248,7 +248,12 @@ class FirmwareManager:
                 unfinished = {"failed"} if job["state"] != "cancelled" else None
                 todo = [key for key, value in job["devices"].items()
                         if (value.get("state") in unfinished if unfinished else value.get("state") not in {"confirmed", "skipped"})]
-                return self.enqueue("update", job["release_id"], todo or job["device_ids"], job["env"])
+                todo = todo or job["device_ids"]
+                if todo:   # a device that has gone away since is not retried
+                    todo = [key for key in todo if self._is_online(key)]
+                    if not todo:
+                        raise ValueError("none of those devices are online to retry")
+                return self.enqueue("update", job["release_id"], todo, job["env"])
             return self.enqueue(job["kind"])
 
     # ── the queue: pause, cancel, reorder, edit ──────────────────────────────
@@ -483,6 +488,7 @@ class FirmwareManager:
                 node = dict(fields, id=node_id, last_seen=self.transport._last_seen.get(node_id),
                             returned_at=self.transport._back_at.get(node_id))
                 node["online"] = bool(node["last_seen"] and now - node["last_seen"] < window)
+                node["offline"] = not node["last_seen"] or now - node["last_seen"] > OFFLINE_SECONDS
                 node["release_ids"] = [release["id"] for release in self._releases.values()
                                        if release["manifest"].get(node.get("env"), {}).get("build_hash") == node.get("sha256")]
                 devices.append(node)
