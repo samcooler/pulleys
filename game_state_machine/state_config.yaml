@@ -343,18 +343,16 @@ states:
         cue:
           - audio_loop_idle
           - video_loop_idle
-      nongoal_component_activated:
+      # The first pull on a rope starts the game: easy_round deals the goals on
+      # entry, and the pull's charge lands in that round. Purple ropes (final_pull)
+      # are not part of this and do not start it. No powerup sound: nothing has
+      # powered up yet, so only Janis reacts.
+      goal_pull:
         cue:
-          - audio_once_component_powerup
           - video_once_janis_encouragement_*
         goto: easy_round
-      # The last round's goals are still dealt when the game comes back here
-      # (nothing clears them), so a colour lit now may count as a goal -- after
-      # a hard round, all five do. Either way it starts the game; without this
-      # the game could never leave passive again (found by playtest's night sim).
-      goal_component_activated:
+      nongoal_pull:
         cue:
-          - audio_once_component_powerup
           - video_once_janis_encouragement_*
         goto: easy_round
 
