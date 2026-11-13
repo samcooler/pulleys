@@ -9,10 +9,13 @@
 
 namespace pulleys {
 
-static uint16_t _deviceId = 0;
-static uint8_t  _deviceLabel = 0;
-static char     _deviceName[8] = {0};
-static uint8_t  _mac[6] = {0};
+// `inline`, not `static`: this header is included from several .cpp files, and a
+// static variable would give each its own copy, so only the file that calls
+// identity_init() would ever see the ID (the others read 0000).
+inline uint16_t _deviceId = 0;
+inline uint8_t  _deviceLabel = 0;
+inline char     _deviceName[8] = {0};
+inline uint8_t  _mac[6] = {0};
 
 // ── Board registry: map known device IDs to physical label numbers ────────────
 // Travelers and stations are numbered independently, both starting at 1.
