@@ -149,12 +149,19 @@ def main():
     except (ImportError, OSError, ValueError) as e:
         print(f"playlog: no game file ({e}); no director or goal display", flush=True)
     playlog = None
+    sessions = None
     if not args.no_playlog:
         from playlog import PlayLog
         playlog = PlayLog()
         print(f"playlog: writing to {playlog.dir}", flush=True)
         if game:
             game.on_record(playlog.engine_record)
+        from sessionlog import SessionLog, DEFAULT_IDLE
+        states = list((game_cfg or {}).get("states") or {})
+        sessions = SessionLog(playlog.dir / "activity.jsonl",
+                              idle_state=(game_cfg or {}).get("start", DEFAULT_IDLE),
+                              phases=states)
+        playlog.listen(sessions.feed)
 
     menu = None  # set once the video player exists
     just_loaded = [False]  # a playback-restart straight after file-loaded is the start, not a loop
@@ -525,7 +532,8 @@ def main():
     api = None
     if args.control_port:
         try:
-            api = ControlServer(control, args.control_bind, args.control_port, firmware=firmware_updater, installation=installation)
+            api = ControlServer(control, args.control_bind, args.control_port, firmware=firmware_updater, installation=installation,
+                            sessions=sessions)
             api.start()
             print(f"control: http://{api.address[0]}:{api.address[1]}/status", flush=True)
         except OSError as e:  # the player matters more than its remote control
@@ -552,6 +560,8 @@ def main():
     finally:
         if playlog:
             playlog.close()
+        if sessions:
+            sessions.close()
         if ambient:
             ambient.stop()
         if api:

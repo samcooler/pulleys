@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synchronized Leverage · Sessions</title><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/installation.css"><style>.sess-live td{background:#eef6ea}.sess-table td,.sess-table th{white-space:nowrap;font-variant-numeric:tabular-nums}.sess-table td.phases{white-space:normal;font:11px ui-monospace,monospace;color:var(--muted)}.sess-table{min-width:760px}.num{text-align:right}</style><script src="/sessions.js" defer></script></head>
+<body>
+<header class="topbar"><a class="brand" href="/" aria-label="Synchronized Leverage Control Panel">Synchronized Leverage <span class="star">*</span> <span class="sub">Control Panel</span></a><nav aria-label="Main navigation"><a href="/">Firmware</a><a href="/installation">Installation</a><a href="/sessions" aria-current="page">Sessions</a></nav><span id="connection" class="connection">Connecting</span></header>
+<main>
+<section class="panel overview-panel" aria-label="Session totals"><div class="panel-heading"><div><p class="eyebrow">ACTIVITY LOG</p><h2 id="headline">Sessions</h2><p id="status">Loading…</p></div></div>
+<div class="overview-grid">
+<article><span>Sessions</span><strong id="t-count">—</strong><small>Since the log began</small></article>
+<article><span>Average duration</span><strong id="t-dur">—</strong><small>Finished sessions</small></article>
+<article><span>Average activations</span><strong id="t-pulls">—</strong><small>Per finished session</small></article>
+<article><span>Average gap</span><strong id="t-gap">—</strong><small>Between sessions</small></article>
+<article><span>Furthest phase</span><strong id="t-max">—</strong><small>Of any session</small></article>
+<article><span>Longest session</span><strong id="t-longest">—</strong><small>Start to idle</small></article>
+</div></section>
+<section class="panel installation-panel"><div class="panel-heading"><div><h2>Sessions</h2><p>A session runs from leaving the idle state until the game is idle again. Newest first.</p></div></div>
+<div class="table-scroll"><table class="sess-table"><thead><tr><th>#</th><th>Started</th><th>Ended</th><th class="num">Duration</th><th class="num">Since last</th><th class="num">Activations</th><th>Max phase</th><th>Time in each phase</th></tr></thead><tbody id="rows"><tr><td colspan="8">Loading…</td></tr></tbody></table></div>
+<p class="installation-status">Every activation is kept with its timestamp in <code>activity.jsonl</code> beside the play logs, for analysis.</p></section>
+<footer><span>SYNCHRONIZED LEVERAGE * CONTROL PANEL</span><span>API <code>/api/sessions</code> · Refreshes every 5 seconds</span></footer>
+</main></body></html>

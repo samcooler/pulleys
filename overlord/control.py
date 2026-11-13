@@ -12,7 +12,7 @@ MAX_IMAGE = 7 * 1024 * 1024
 
 
 class ControlServer:
-    def __init__(self, handle, host="127.0.0.1", port=8080, firmware=None, installation=None):
+    def __init__(self, handle, host="127.0.0.1", port=8080, firmware=None, installation=None, sessions=None):
         class Handler(BaseHTTPRequestHandler):
             def _body(self, limit, binary=False):
                 if self.headers.get("Transfer-Encoding"):
@@ -102,7 +102,9 @@ class ControlServer:
                 parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
                 content_type = "application/json; charset=utf-8"
                 try:
-                    assets = {("installation_status.js",): ("installation_status.js", "application/javascript"),
+                    assets = {("sessions",): ("sessions.html", "text/html"),
+                              ("sessions.js",): ("sessions.js", "application/javascript"),
+                              ("installation_status.js",): ("installation_status.js", "application/javascript"),
                               ("installation",): ("installation.html", "text/html"),
                               ("installation.js",): ("installation.js", "application/javascript"),
                               ("installation.css",): ("installation.css", "text/css"),
@@ -121,6 +123,12 @@ class ControlServer:
                             status, body = 200, installation.mutate(parts[2], self._body(2048))
                         else:
                             status, body = 404, {"error": "no such installation route"}
+                    elif parts == ["api", "sessions"] and self.command == "GET":
+                        if sessions is None:
+                            status, body = 503, {"error": "the activity log is off (--no-playlog)"}
+                        else:
+                            query = parse_qs(urlsplit(self.path).query)
+                            status, body = 200, sessions.snapshot(int(query.get("limit", [200])[0]))
                     elif parts[:2] == ["api", "firmware"]:
                         status, body = self._firmware(parts)
                     else:
