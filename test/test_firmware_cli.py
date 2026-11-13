@@ -36,7 +36,7 @@ def image_fixture(directory, env="sensor"):
     data = bytes(data)
     item = {"asset": env + "-firmware.bin", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
             "md5": hashlib.md5(data).hexdigest(), "build_hash": "a" * 64}
-    manifest = {"schema": 1, "tag": "dev-test", "firmware": {env: item}}
+    manifest = {"schema": 1, "tag": "1763000000", "built_at": 1763000000, "firmware": {env: item}}
     path = Path(directory) / "manifest.json"
     path.write_text(json.dumps(manifest))
     (path.parent / item["asset"]).write_bytes(data)
@@ -101,7 +101,7 @@ class CLITests(unittest.TestCase):
         with patch.object(cli, "request", return_value=snapshot()), patch.object(cli, "build_development") as build:
             code, _, _ = self.invoke(["build", "--id", "E857,EC52"])
         self.assertEqual(code, 0)
-        build.assert_called_once_with(["sensor"])
+        build.assert_called_once_with(["sensor"], verbose=False)
 
     def test_development_builds_get_distinct_embedded_identities(self):
         with patch.object(bundles, "build_bundle") as build:
@@ -110,7 +110,7 @@ class CLITests(unittest.TestCase):
         first, second = build.call_args_list
         self.assertNotEqual(first.args[2]["sensor"], second.args[2]["sensor"])
         self.assertEqual(len(first.args[2]["sensor"]), 64)
-        self.assertTrue(first.args[1].startswith("dev-"))
+        self.assertIsInstance(first.args[1], int)
 
     def test_failed_build_cannot_upload(self):
         with patch.object(cli, "request", return_value=snapshot()), \
@@ -167,7 +167,7 @@ class CLITests(unittest.TestCase):
              patch.object(cli, "flash_usb") as flash, patch.object(cli, "request") as request:
             code, _, _ = self.invoke(["flash", "--usb", "--port", "/dev/test", "--env", "bridge_esp32"])
         self.assertEqual(code, 0)
-        build.assert_called_once_with(["bridge_esp32"])
+        build.assert_called_once_with(["bridge_esp32"], verbose=False)
         flash.assert_called_once()
         request.assert_not_called()
 
@@ -181,19 +181,24 @@ class CLITests(unittest.TestCase):
         self.assertIn("upload", run.call_args.args[0])
         self.assertEqual(run.call_args.kwargs["env"]["PULLEYS_FIRMWARE_BUILD_HASH"], "a" * 64)
 
-    def test_release_build_and_publish_share_existing_release_workflow(self):
-        with patch.object(bundles, "release_bundle") as release:
-            self.assertEqual(self.invoke(["release", "--tag", "v0.3.0"])[0], 0)
-            release.assert_called_with("v0.3.0", publish=False)
-            self.assertEqual(self.invoke(["release", "--publish"])[0], 0)
-            release.assert_called_with(None, publish=True)
+    def test_a_batch_shares_one_unix_timestamp(self):
+        with patch.object(bundles, "build_bundle") as build, patch.object(bundles.time, "time", return_value=1763000000.9):
+            cli.build_development(["sensor", "screen"])
+        args = build.call_args.args
+        self.assertEqual(args[1], 1763000000)
+        self.assertEqual(set(args[2]), {"sensor", "screen"})
+        self.assertEqual(args[3].name, "1763000000")
 
-    def test_release_requires_clean_source_but_dev_build_does_not(self):
-        with patch.object(bundles, "pio_path", return_value="pio"), \
-             patch.object(bundles.subprocess, "check_output", return_value=" M src/sensor/main.cpp\n"), \
-             self.assertRaisesRegex(RuntimeError, "uncommitted development"):
-            bundles.release_bundle("v0.3.0")
-        with patch.object(bundles.subprocess, "check_output", side_effect=AssertionError("git must not gate dev builds")), \
+    def test_build_time_is_shown_in_pacific_time(self):
+        self.assertEqual(bundles.format_built(1763000000), "2025-11-12 18:13 PST")
+        self.assertEqual(bundles.format_built(1752000000), "2025-07-08 11:40 PDT")
+
+    def test_there_is_no_release_command(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.invoke(["release"])
+
+    def test_dev_build_does_not_consult_git(self):
+        with patch.object(bundles.subprocess, "check_output", side_effect=AssertionError("git must not gate builds")), \
              patch.object(bundles, "build_bundle"):
             cli.build_development(["sensor"])
 
@@ -207,11 +212,12 @@ class CLITests(unittest.TestCase):
                 path.write_bytes(kwargs["env"]["PULLEYS_FIRMWARE_BUILD_HASH"].encode())
             with patch.object(bundles, "ROOT", root), patch.object(bundles.subprocess, "run", side_effect=compile_image) as run, \
                  contextlib.redirect_stdout(io.StringIO()):
-                path, manifest = bundles.build_bundle(["sensor", "sensor"], "dev-test", {"sensor": "a" * 64}, root / "out", pio="pio")
+                path, manifest = bundles.build_bundle(["sensor", "sensor"], 1763000000, {"sensor": "a" * 64}, root / "out", pio="pio")
             self.assertEqual(run.call_count, 1)
             image = manifest["firmware"]["sensor"]
             self.assertEqual(image["sha256"], hashlib.sha256(b"a" * 64).hexdigest())
             self.assertEqual(json.loads(path.read_text()), manifest)
+            self.assertEqual((manifest["tag"], manifest["built_at"]), ("1763000000", 1763000000))
 
     def test_stale_pio_artifact_cannot_be_packaged_as_a_new_build(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -221,7 +227,7 @@ class CLITests(unittest.TestCase):
             stale.write_bytes(b"old-firmware")
             with patch.object(bundles, "ROOT", root), patch.object(bundles.subprocess, "run"), \
                  contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "stale firmware"):
-                bundles.build_bundle(["sensor"], "dev-test", {"sensor": "a" * 64}, root / "out", pio="pio")
+                bundles.build_bundle(["sensor"], 1763000000, {"sensor": "a" * 64}, root / "out", pio="pio")
             self.assertFalse((root / "out/manifest.json").exists())
 
     def test_cli_uploads_real_manifest_and_only_selected_ids_to_http_api(self):
@@ -243,7 +249,7 @@ class CLITests(unittest.TestCase):
                 with patch.object(cli, "build_development", return_value=(path, manifest)) as build:
                     code, _, errors = self.invoke(["flash", "--url", url, "--id", "E857,EC52", "--no-wait"])
                 self.assertEqual(code, 0, errors)
-                build.assert_called_once_with(["sensor"])
+                build.assert_called_once_with(["sensor"], verbose=False)
                 state = manager.snapshot()
                 self.assertEqual(state["jobs"][0]["device_ids"], ["E857", "EC52"])
                 self.assertTrue(state["releases"][0]["ready"])
@@ -273,6 +279,103 @@ class CLITests(unittest.TestCase):
         self.assertEqual(rows[0]["build"], "Nov-7")
         self.assertEqual(port.writes.count(b"CENSUS 500\n"), 1)
         self.assertEqual(rows[0]["source"], "id")
+
+
+class WatchTests(unittest.TestCase):
+    """fw watches the Overlord while it flashes: progress, its own words, and survives a bad poll."""
+
+    def running(self, **extra):
+        return {"id": "J1", "state": "running", "device_ids": ["59A4"],
+                "devices": {"59A4": {"state": "transferring", "bytes": 10, "total": 100}}, **extra}
+
+    def snapshot(self, state="completed", logs=()):
+        job = self.running(state=state)
+        job["devices"]["59A4"] = {"state": "confirmed" if state == "completed" else "transferring", "bytes": 100, "total": 100}
+        return {"jobs": [job], "active_job": None if state == "completed" else "J1", "logs": list(logs)}
+
+    def watch(self, side_effect):
+        output = io.StringIO()
+        with patch.object(cli, "request", side_effect=side_effect), patch.object(cli.time, "sleep"), \
+             contextlib.redirect_stdout(output):
+            result = cli.wait_job("http://unit", self.running())
+        return result, output.getvalue()
+
+    def test_a_failed_poll_is_retried_and_the_job_still_finishes(self):
+        calls = iter([OSError("no route"), OSError("no route"), self.snapshot()])
+        def request(url, path=""):
+            value = next(calls)
+            if isinstance(value, Exception):
+                raise value
+            return value
+        result, output = self.watch(request)
+        self.assertEqual(result["state"], "completed")
+        self.assertIn("59A4", output)
+
+    def test_gives_up_after_repeated_failures_but_says_the_job_may_still_run(self):
+        def request(url, path=""):
+            raise OSError("no route")
+        output = io.StringIO()
+        with patch.object(cli, "request", side_effect=request) as polls, patch.object(cli.time, "sleep"), \
+             contextlib.redirect_stdout(output), self.assertRaises(OSError):
+            cli.wait_job("http://unit", self.running())
+        self.assertEqual(polls.call_count, cli.POLL_FAILURES)
+        self.assertIn("may still be running", output.getvalue())
+
+    def test_shows_what_the_overlord_says_about_the_job_but_not_byte_counts(self):
+        logs = [{"sequence": 1, "at": 0, "message": "Served 65,536 of 977,472 bytes", "node_id": "59A4", "job_id": "J1"},
+                {"sequence": 2, "at": 0, "message": "update timed out", "node_id": "59A4", "job_id": "J1"},
+                {"sequence": 3, "at": 0, "message": "another job's line", "node_id": "AAAA", "job_id": "J2"}]
+        snaps = iter([self.snapshot("running", logs), self.snapshot("completed", logs)])
+        result, output = self.watch(lambda url, path="": next(snaps))
+        self.assertEqual(output.count("update timed out"), 1, "each message once")
+        self.assertNotIn("Served", output)
+        self.assertNotIn("another job", output)
+
+    def test_watch_picks_the_running_job_else_the_latest_else_the_named_one(self):
+        old = {**self.running(state="completed"), "id": "OLD"}
+        state = {"jobs": [old, self.running()], "active_job": "J1", "logs": []}
+        with patch.object(cli, "request", return_value=state), patch.object(cli, "wait_job", side_effect=lambda u, j, **kw: j) as wait:
+            self.assertEqual(cli.watch("http://unit")["id"], "J1")
+            self.assertEqual(cli.watch("http://unit", "OLD")["id"], "OLD")
+            state["active_job"] = None
+            self.assertEqual(cli.watch("http://unit")["id"], "OLD")   # jobs[0]: the Overlord lists newest first
+            with self.assertRaises(ValueError):
+                cli.watch("http://unit", "NOPE")
+            state["jobs"] = []
+            with self.assertRaises(ValueError):
+                cli.watch("http://unit")
+
+    def test_default_flash_watches_and_no_wait_does_not(self):
+        job = {"id": "J9", "state": "running", "devices": {}}
+        row = {"id": "E857", "env": "sensor", "type": "sensor", "role": "SENSOR", "sha256": "unknown"}
+        for flag, watches in (([], True), (["--no-wait"], False)):
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as directory:
+                path, manifest = image_fixture(directory)
+                def request(url, path_="", body=None, **kw):
+                    if path_ == "/updates":
+                        return {"job": job}
+                    if path_ == "/releases":
+                        return {"release": {"id": "R1"}}
+                    return {**snapshot(), "devices": [{**row, "online": True}]}
+                with patch.object(cli, "request", side_effect=request), patch.object(cli, "wait_job") as wait, \
+                     patch.object(cli, "build_development", return_value=(path, manifest)), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    cli.main(["flash", "--id", "E857", *flag])
+                self.assertEqual(wait.called, watches)
+
+
+class UnreachableTests(unittest.TestCase):
+    def test_macos_no_route_explains_local_network_privacy(self):
+        import errno
+        import urllib.error
+        from tools import push_firmware
+        blocked = urllib.error.URLError(OSError(errno.EHOSTUNREACH, "No route to host"))
+        with patch.object(push_firmware.urllib.request, "urlopen", side_effect=blocked), \
+             patch.object(push_firmware.sys, "platform", "darwin"), self.assertRaisesRegex(RuntimeError, "Local Network"):
+            push_firmware.request("http://overlord.local:8080")
+        with patch.object(push_firmware.urllib.request, "urlopen", side_effect=blocked), \
+             patch.object(push_firmware.sys, "platform", "linux"), self.assertRaises(urllib.error.URLError):
+            push_firmware.request("http://overlord.local:8080")
 
 
 if __name__ == "__main__":

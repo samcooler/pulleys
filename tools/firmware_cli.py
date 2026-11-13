@@ -1,7 +1,6 @@
 """Unified development firmware CLI. The executable entry point is ./fw."""
 import argparse
 import configparser
-from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -11,16 +10,17 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
 
 if __package__:
     from . import release_firmware as bundles
     from .push_firmware import request
-    from .firmware_progress import ProgressDisplay
+    from .firmware_progress import BuildProgress, ProgressDisplay
+    from . import firmware_changes as changes
 else:
     import release_firmware as bundles
     from push_firmware import request
-    from firmware_progress import ProgressDisplay
+    from firmware_progress import BuildProgress, ProgressDisplay
+    import firmware_changes as changes
 
 ROOT = Path(__file__).resolve().parents[1]
 TYPES = {"sensor", "screen", "bridge", "arbiter", "traveler", "station"}
@@ -133,7 +133,7 @@ def inventory(args, *, provision=False):
     names = {}
     for release in snapshot["releases"]:
         for item in release["manifest"].values():
-            names[item["build_hash"]] = release["tag"]
+            names[item["build_hash"]] = release_label(release)
     rows = []
     for node in snapshot["devices"]:
         row = dict(node)
@@ -146,13 +146,18 @@ def inventory(args, *, provision=False):
     return rows, names
 
 
+def release_label(release):
+    """A release's build time in Pacific time; an old manifest with only a tag shows the tag."""
+    return bundles.format_built(release["built_at"]) if release.get("built_at") else release["tag"]
+
+
 def local_release_names():
     result = {}
     for path in sorted((ROOT / "dist").glob("**/manifest.json")):
         try:
             manifest = json.loads(path.read_text())
             for image in manifest["firmware"].values():
-                result[image["build_hash"]] = manifest["tag"]
+                result[image["build_hash"]] = release_label(manifest)
         except (OSError, KeyError, TypeError, ValueError):
             continue
     return result
@@ -189,13 +194,35 @@ def print_devices(rows, names, *, json_output=False):
     print(f"\n{len(rows)} device(s).")
 
 
-def build_development(envs):
-    # A new identity per invocation also covers changed toolchains/build flags.
-    # One shared identity per env is used for every selected board of that env.
-    nonce = uuid.uuid4().hex
-    tag = "dev-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + nonce[:6]
-    identities = {env: hashlib.sha256(f"pulleys-dev-v1\0{nonce}\0{env}".encode()).hexdigest() for env in envs}
-    return bundles.build_bundle(envs, tag, identities, ROOT / "dist" / tag)
+def build_development(envs, verbose=False):
+    # One timestamp for the whole batch; a new identity per env every time.
+    built_at, identities = bundles.new_batch(envs)
+    output = ROOT / "dist" / str(built_at)
+    if verbose:
+        return bundles.build_bundle(envs, built_at, identities, output)
+    # A line per firmware type, ticked off as each compiles; the compiler's own
+    # output is shown only for a build that fails.
+    with BuildProgress() as progress:
+        return bundles.build_bundle(envs, built_at, identities, output, progress=progress)
+
+
+def choose_by_changes(args, choice):
+    """`fw flash` with nothing selected builds only the firmware the working tree's
+    changes touch (tools/firmware_changes.py has the table). Always says which way
+    it chose. Returns (the choice to use, the Plan or None if you chose); the choice
+    is None if there is nothing to build."""
+    given = [name for name, value in (("--id", choice["ids"]), ("--type", choice["types"]), ("--env", choice["envs"]),
+                                      ("--port", values(args.port)), ("--manifest", args.manifest), ("--all", args.all))
+             if value]
+    if given:
+        print(f"Firmware chosen by you ({', '.join(given)}); git changes were not consulted.", flush=True)
+        return choice, None
+    source = f"git diff {args.since or 'HEAD'} + untracked files"
+    plan = changes.plan(changes.changed_files(ROOT, args.since), bundles.ENVS)
+    print(plan.report(source), flush=True)
+    if not plan.envs:
+        return None, plan
+    return {**choice, "envs": plan.envs}, plan
 
 
 def selected_build_envs(args, choice):
@@ -214,9 +241,31 @@ def selected_build_envs(args, choice):
     return envs
 
 
-def wait_job(url, job, *, quiet=False):
+POLL_SECONDS = 2
+POLL_FAILURES = 5   # in a row, before the watch gives up on the Overlord
+
+
+def job_activity(logs, job_id):
+    """What the Overlord has logged about one job, as (sequence, text) pairs.
+    The "Served 64 KB of ..." lines are the bars already, so they are left out."""
+    rows = []
+    for row in logs:
+        message = str(row.get("message", ""))
+        if row.get("job_id") != job_id or message.startswith("Served "):
+            continue
+        when = time.strftime("%H:%M:%S", time.localtime(row.get("at", 0)))
+        node = f"{row['node_id']}: " if row.get("node_id") else ""
+        rows.append((row.get("sequence"), f"{when} {node}{message}"))
+    return rows
+
+
+def wait_job(url, job, *, quiet=False, logs=()):
+    """Watch an Overlord job until it ends, drawing each device's progress and
+    what the Overlord says about it. A poll that fails is retried: the job runs
+    on the Overlord whether or not this is watching."""
     if not quiet:
-        print(f"Job {job['id']} · {url.rstrip('/')}/", flush=True)
+        print(f"Watching job {job['id']} on {url.rstrip('/')}/  (Ctrl-C detaches; ./fw watch reattaches)", flush=True)
+    activity, misses = job_activity(logs, job['id']), 0
     with ProgressDisplay(enabled=not quiet) as display:
         while True:
             devices = {node: {"state": "queued"} for node in job.get("device_ids") or []}
@@ -227,17 +276,41 @@ def wait_job(url, job, *, quiet=False):
             if devices:
                 title += f" | {done}/{len(devices)} complete | {failed} failed"
             note = "Bar = bytes served; reboot verification is a separate stage." if devices else "Waiting for device discovery or job results."
-            display.draw(title, devices, job.get("error") or note)
+            if misses:
+                note = f"Overlord not answering ({misses}/{POLL_FAILURES}); retrying. The job keeps running there."
+            display.draw(title, devices, job.get("error") or note, activity)
             if job["state"] in {"completed", "failed", "interrupted"}:
                 if job["state"] != "completed":
                     raise RuntimeError(job.get("error", job["state"]))
                 return job
-            time.sleep(2)
+            time.sleep(POLL_SECONDS)
             try:
-                job = request(url, "/jobs/" + job["id"])["job"]
+                state = request(url)
             except (OSError, ValueError, RuntimeError) as exc:
-                display.draw(title, devices, f"Status unavailable: {exc}; the OTA job may still be running.")
-                raise
+                misses += 1
+                if misses >= POLL_FAILURES:
+                    display.draw(title, devices, f"Status unavailable: {exc}; the OTA job may still be running.", activity)
+                    raise
+                continue
+            misses = 0
+            job = next((row for row in state.get("jobs", []) if row["id"] == job["id"]), job)
+            activity = job_activity(state.get("logs", []), job["id"])
+
+
+def watch(url, job_id=None):
+    """Attach to a job already on the Overlord: the one named, else the one
+    running, else the most recent."""
+    state = request(url)
+    jobs = state.get("jobs", [])
+    if job_id:
+        job = next((row for row in jobs if row["id"] == job_id), None)
+        if not job:
+            raise ValueError(f"no job {job_id} on the Overlord")
+    else:
+        job = next((row for row in jobs if row["id"] == state.get("active_job")), jobs[0] if jobs else None)
+        if not job:
+            raise ValueError("the Overlord has no jobs to watch")
+    return wait_job(url, job, logs=state.get("logs", []))
 
 
 def upload_and_queue(url, path, manifest, rows, *, wait=True):
@@ -323,7 +396,12 @@ Other ways to select nodes:
 Filters work with list, build, and flash. Values within a filter are alternatives;
 --type, --env, and --id are intersected when combined. Flash builds only the
 selected environments and updates matching known nodes, preserving each node's
-firmware profile. Without filters, flash selects all known nodes.
+firmware profile.
+
+With no filters, flash chooses from your git changes: it maps each changed file to
+the firmware it affects (tools/firmware_changes.py), builds only those, and prints
+which patterns it matched and why. --all flashes every known node instead, and
+--since REF reads the changes since a commit rather than since HEAD.
 
 Add --usb to use attached USB boards. Run ./fw flash --help for all flash options.
 Run ./fw envs to see production firmware environments and their node types.
@@ -351,14 +429,17 @@ followed by reboot/hash verification before a device is confirmed.""")
             sub.add_argument("--json", action="store_true", help="machine-readable device list")
         else:
             sub.add_argument("--dry-run", action="store_true", help="show selection without building, uploading or flashing")
+            sub.add_argument("--verbose", "-v", action="store_true", help="show the compiler's output instead of a status line per firmware type")
         if name == "flash":
-            sub.add_argument("--no-wait", action="store_true", help="return after queueing an OTA job")
+            sub.add_argument("--all", action="store_true", help="every known node, ignoring git changes (the default is only the firmware your changes touch)")
+            sub.add_argument("--since", metavar="REF", help="choose firmware from changes since REF (e.g. HEAD~3, origin/main) instead of since HEAD")
+            sub.add_argument("--no-wait", action="store_true", help="return after queueing an OTA job (by default fw stays and watches the Overlord until it finishes)")
             sub.add_argument("--manifest", type=Path, help="OTA: upload an existing bundle instead of rebuilding")
+    watching = commands.add_parser("watch", help="watch a firmware job on the Overlord: the running one, the latest, or JOB_ID")
+    transport_options(watching, inherited=True)
+    watching.add_argument("job", nargs="?", help="job ID (default: the running job, else the latest)")
     envs = commands.add_parser("envs", help="list production firmware environments and node types")
     envs.add_argument("--json", action="store_true")
-    release = commands.add_parser("release", help="build the complete release bundle; add --publish to publish it")
-    release.add_argument("--tag", help="vMAJOR.MINOR.PATCH; required unless --publish auto-increments")
-    release.add_argument("--publish", action="store_true", help="publish all production images to GitHub Releases")
     return result
 
 
@@ -377,19 +458,23 @@ def main(argv=None):
                 for row in rows:
                     print(f"{row['type']:<8} {row['env']}")
             return 0
-        if args.command == "release":
-            if not args.tag and not args.publish:
-                raise ValueError("release builds require --tag vMAJOR.MINOR.PATCH; --publish can choose the next version")
-            bundles.release_bundle(args.tag, publish=args.publish)
+        if args.command == "watch":
+            watch(args.url, args.job)
             return 0
         choice = filters(args)
+        by_changes = None
+        if args.command == "flash":
+            choice, by_changes = choose_by_changes(args, choice)
+            if choice is None:
+                print("Nothing to build or flash. Use --all to flash every known node anyway.")
+                return 0
         if values(args.port) and not args.usb:
             raise ValueError("--port requires --usb")
         if args.command == "build":
             envs = selected_build_envs(args, choice)
             print("Build environments: " + ", ".join(envs), flush=True)
             if not args.dry_run:
-                build_development(envs)
+                build_development(envs, verbose=args.verbose)
             return 0
         rows, names = inventory(args, provision=args.command == "flash")
         rows = select_devices(rows, choice)
@@ -397,6 +482,9 @@ def main(argv=None):
             print_devices(rows, names, json_output=args.json)
             return 0
         if not rows:
+            if by_changes:
+                raise ValueError("no known device runs the firmware your changes touch (" + ", ".join(by_changes.envs) +
+                                 "); nothing built or flashed. --all flashes every known node.")
             raise ValueError("no devices match; nothing built or flashed")
         envs = list(dict.fromkeys(row.get("env") for row in rows))
         if any(env not in environments() for env in envs):
@@ -424,14 +512,14 @@ def main(argv=None):
             if manifest.get("schema") != 1 or not isinstance(manifest.get("firmware"), dict):
                 raise ValueError("manifest must use release schema 1")
         else:
-            path, manifest = build_development(envs)
+            path, manifest = build_development(envs, verbose=args.verbose)
         if args.usb:
             flash_usb(rows, manifest)
         else:
             upload_and_queue(args.url, path, manifest, rows, wait=not args.no_wait)
         return 0
     except KeyboardInterrupt:
-        print("Interrupted; any queued OTA job continues on the Overlord.", file=sys.stderr)
+        print("Detached; any queued OTA job continues on the Overlord. Reattach with ./fw watch.", file=sys.stderr)
         return 130
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"fw: {exc}", file=sys.stderr)

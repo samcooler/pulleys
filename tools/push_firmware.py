@@ -3,9 +3,10 @@
 
 Example:
   python3 tools/push_firmware.py --url http://overlord.local:8080 \
-    --manifest dist/v0.2.0/manifest.json --device 59A4 --wait
+    --manifest dist/<timestamp>/manifest.json --device 59A4 --wait
 """
 import argparse
+import errno
 import json
 from pathlib import Path
 import sys
@@ -48,6 +49,14 @@ def request(base, path="", body=None, binary=False, progress=None):
         except (ValueError, AttributeError):
             message = str(exc)
         raise RuntimeError(message) from exc
+    except urllib.error.URLError as exc:
+        if sys.platform == "darwin" and getattr(exc.reason, "errno", None) == errno.EHOSTUNREACH:
+            raise RuntimeError(
+                f"cannot reach the Overlord at {base}: no route to host. If `curl {base.rstrip('/')}/api/firmware` "
+                "works but this does not, macOS Local Network privacy is blocking this Python (it exempts "
+                "Apple's own tools). Allow your terminal app in System Settings > Privacy & Security > "
+                f"Local Network and restart it, or run fw with /usr/bin/python3 ({sys.executable} is blocked).") from exc
+        raise
 
 
 def main():

@@ -52,12 +52,47 @@ Run `./fw` for help. The default transport is **OTA through the Overlord**, usin
 ./fw flash --type sensor,screen                # all known nodes of these broad roles
 ./fw flash --env component_state_display       # exact running firmware environment
 ./fw flash --id E857,EC52 --dry-run             # inspect targets without building/flashing
-./fw flash --id 59A4 --no-wait                  # return after queueing; follow the dashboard
-./fw flash --id 59A4 --manifest dist/v0.2.0/manifest.json # reuse a bundle without rebuilding
+./fw flash --id 59A4 --no-wait                  # return after queueing instead of watching
+./fw watch                                     # watch the running job (else the latest); ./fw watch JOB_ID for one
+./fw flash --id 59A4 --manifest dist/<timestamp>/manifest.json # reuse a bundle without rebuilding
 ./fw list --usb                                # attached boards, timestamps and identities
 ./fw flash --usb --id 59A4                      # build and upload over USB, verify reboot
 ./fw flash --usb --port /dev/cu.usbserial-0001 --env bridge_esp32 # first flash / reassignment
 ```
+
+Builds show one line per firmware type (`[--]` queued, `[..]` building with a
+timer, `[ok]` built, `[!!]` failed), ticked off as each finishes. The compiler's
+output is hidden unless a build fails, and then that build's output is printed in
+full. `fw build -v` / `fw flash -v` shows everything the compiler says instead.
+
+`./fw flash` builds, uploads the images to the Overlord, queues the update, and then
+**stays and watches the Overlord until it finishes**: a bar per device, plus the
+Overlord's own words about the job (retries, timeouts, reboot checks) underneath.
+A failed poll is retried, so a network blip does not end the watch. Ctrl-C
+detaches without stopping anything; `./fw watch` reattaches. Exit status is
+nonzero if the job fails.
+
+**`./fw flash` with nothing selected builds only the firmware your changes touch.**
+It reads `git` (the working tree against `HEAD`, staged or not, plus new files),
+looks each changed file up in the table in `tools/firmware_changes.py`, and prints
+a banner before building: every pattern that matched, the files that triggered it,
+the firmware types it rebuilds, and what is being built and skipped. For example,
+a change under `src/screen/` rebuilds the screen family; one under
+`lib/pulleys_install/` (the tables every board carries) rebuilds all eleven; a
+README or `overlord/` change builds nothing and `fw` says so.
+
+```sh
+./fw flash                      # only what your uncommitted changes touch
+./fw flash --since origin/main  # what changed since a commit, not since HEAD
+./fw flash --all                # every known node, ignoring git
+./fw flash --env sensor         # you choose: git is not consulted (also --id, --type)
+```
+
+After you commit, the working tree is clean again, so use `--since` (for example
+`--since HEAD~1`) to flash what a recent commit changed. The table is hand-written;
+`test/test_firmware_changes.py` re-derives which libraries each firmware includes
+and fails if the table says less, or if a new `src/` or `lib/` directory is missing
+from it, so adding a library means adding a line there.
 
 `--id`, `--type`, and `--env` accept comma-separated lists and repeated flags.
 Values within one filter are alternatives; different filters are intersected.
@@ -100,24 +135,24 @@ USB requires pyserial in the Python environment
 running `fw`; PlatformIO is discovered on PATH or under `~/.platformio/penv/`, or
 can be selected with `PLATFORMIO_CMD`.
 
-### Release bundle
+### Build batches and versions
 
-```sh
-./fw release --tag v0.3.0                     # all production images + manifest; no publish
-./fw release --publish                       # next minor GitHub Release
-./fw release --tag v0.3.0 --publish           # explicit published version
-```
+There are no semantic versions and no GitHub Releases. Every `./fw build` or
+`./fw flash` is one batch, stamped with the Unix time it was triggered. Every
+image in the batch shares that timestamp (the manifest's `tag` and `built_at`),
+and the bundle lands in `dist/<timestamp>/`. Each image also embeds its own
+build hash, which is what a device reports and what the Overlord matches.
 
-Release builds require a clean Git working tree, use identities tied to the tag
-and source commit, and always include every production environment. Push the
-source commit before publishing. GitHub publishing additionally requires `gh`
-and an authenticated account. `release` does not apply device filters.
+The Overlord dashboard and `./fw list` show a build's hash and its date and
+time in Pacific time (PST/PDT). To build every production image as one batch
+without flashing: `python3 tools/release_firmware.py` (`--env` narrows it).
+Builds never require a clean tree and nothing is published.
 
 The older scripts remain available:
 
 | Script | Purpose |
 | --- | --- |
-| `tools/release_firmware.py` | Legacy release entry point; shares the CLI's bundle builder and publisher |
+| `tools/release_firmware.py` | Bundle builder shared with the CLI; run directly it builds every production env as one batch |
 | `tools/push_firmware.py` | Upload an already-built manifest/binaries and queue selected API updates |
 | `flash_all.sh` | Legacy USB flashing plus install-map provisioning, reset and mesh survey workflows |
 | `go.sh` | Legacy build → USB flash → serial monitor workflow |
@@ -131,17 +166,7 @@ SHA-256 values and updates the selected nodes sequentially. The bridge's open `p
 `MESH_WIFI_CHANNEL`; node downloads are served from firmware chunks requested
 from the Overlord over UART.
 
-Publish active firmware environments with:
-
-```sh
-python3 tools/release_firmware.py
-```
-
-This builds `sensor`, `screen`, `component_state_display`, `screen_extractor`,
-`screen_diorama`, `screen_party`, `arbiter_mesh`, `bridge`, and `bridge_esp32`, then creates the next minor GitHub Release with the images and
-`manifest.json`. Use `--build-only` to create local assets only. `./flash_all.sh
---ota` is retired; updates are pushed with `./fw flash`. Publishing a GitHub
-Release is optional and the Overlord does not read it.
+`./flash_all.sh --ota` is retired; updates are pushed with `./fw flash`.
 
 The first migration requires one USB flash of the new bridge environment,
 because the old bridge image cannot receive the new serial update protocol:

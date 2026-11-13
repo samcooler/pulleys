@@ -1,7 +1,10 @@
 """Small dependency-free progress display for fw's HTTP and OTA transfers."""
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
+import time
 import unicodedata
 
 
@@ -55,6 +58,24 @@ def device_line(node, item, width):
     return text + " " * (label_width - cells(text)) + f" [{bar}] {right}"
 
 
+BUILD_MARKS = {"queued": "[--]", "building": "[..]", "built": "[ok]", "failed": "[!!]"}
+
+
+def build_line(env, item, width):
+    """One firmware type being compiled: its state on the left, how long on the right."""
+    state = clean(item.get("state", "queued"))
+    seconds = item.get("seconds")
+    right = f"{state} {seconds}s" if seconds is not None else state
+    label = f"{BUILD_MARKS.get(state, '[??]')} {clean(env)}"
+    if width <= len(right) + 2:
+        return fit(label, width)
+    text = fit(label, width - len(right) - 1)
+    return text + " " * (width - cells(text) - len(right)) + right
+
+
+ACTIVITY_LINES = 4   # how many of the Overlord's recent messages sit under the bars
+
+
 class ProgressDisplay:
     def __init__(self, *, enabled=True, stream=None):
         self.stream = stream if stream is not None else sys.stdout
@@ -66,6 +87,7 @@ class ProgressDisplay:
         self.log_title = None
         self.log_rows = {}
         self.log_note = None
+        self.log_activity = set()
         self.last = None
 
     def __enter__(self):
@@ -74,24 +96,36 @@ class ProgressDisplay:
             self.stream.flush()
         return self
 
-    def draw(self, title, items, note=""):
+    def draw(self, title, items, note="", activity=(), render=None):
+        """activity: (key, text) pairs, oldest first -- what the Overlord has been
+        saying about this job. The newest few are shown under the device bars;
+        plain output prints each one once, by key."""
         if not self.enabled:
             return
+        ordered = render is not None   # a custom row keeps the order it was given
+        render = render or device_line
         self.last = (title, items, note)
         if not self.interactive:
-            self._log(title, items, note)
+            self._log(title, items, note, render=render)
+            for key, text in activity:
+                if key not in self.log_activity:
+                    self.log_activity.add(key)
+                    print("  · " + clean(text), file=self.stream, flush=True)
             return
+        activity = list(activity)[-ACTIVITY_LINES:]
         size = shutil.get_terminal_size(fallback=(80, 24))
         width, height = max(1, size.columns - 1), max(1, size.lines - 2)
         rows = list(items.items())
         # Keep active work and failures visible when the fleet exceeds the screen.
         priority = {"failed": 1, "uploading": 0, "validating": 0, "offering": 0, "connecting": 0,
                     "transferring": 0, "verifying": 0, "queued": 3}
-        rows.sort(key=lambda row: (priority.get(row[1].get("state"), 2), row[0]))
-        limit = max(0, height - 2)
+        if not ordered:
+            rows.sort(key=lambda row: (priority.get(row[1].get("state"), 2), row[0]))
+        limit = max(0, height - 2 - len(activity))
         hidden = max(0, len(rows) - limit)
         lines = [fit(title, width)]
-        lines += [device_line(node, item, width) for node, item in rows[:limit]]
+        lines += [render(node, item, width) for node, item in rows[:limit]]
+        lines += ["  · " + fit(text, max(0, width - 4)) for _, text in activity]
         detail = note or next((f"{node}: {item.get('error') or item.get('message')}" for node, item in rows
                                if item.get("error") or item.get("message")), "")
         if hidden:
@@ -111,7 +145,8 @@ class ProgressDisplay:
         self.stream.flush()
         self.height, self.size, self.previous = len(lines), size, frame
 
-    def _log(self, title, items, note="", *, final=False):
+    def _log(self, title, items, note="", *, final=False, render=None):
+        render = render or device_line
         title = clean(title)
         if title != self.log_title:
             print(title, file=self.stream, flush=True)
@@ -121,7 +156,7 @@ class ProgressDisplay:
             mark = (item.get("state"), item.get("attempt"), value // 10 if value is not None else None,
                     item.get("error"), item.get("message"))
             if final or self.log_rows.get(node) != mark:
-                print("  " + device_line(node, item, 78), file=self.stream, flush=True)
+                print("  " + render(node, item, 78), file=self.stream, flush=True)
                 detail = item.get("error") or item.get("message")
                 if detail:
                     print("    " + clean(detail), file=self.stream, flush=True)
@@ -143,3 +178,62 @@ class ProgressDisplay:
                 failures = {node: item for node, item in self.last[1].items() if item.get("error")}
                 if failures:
                     self._log("Device errors:", failures, final=True)
+
+
+class BuildProgress:
+    """A line per firmware type while PlatformIO compiles them one after another,
+    updated as each finishes. The compiler's output is captured and printed only
+    for a build that fails. Handed to release_firmware.build_bundle(progress=...)."""
+
+    def __init__(self, *, enabled=True, stream=None, tick=0.5):
+        self.display = ProgressDisplay(enabled=enabled, stream=stream)
+        self.error_stream = sys.stderr
+        self.items = {}
+        self.tick = tick
+
+    def __enter__(self):
+        self.display.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self.display.__exit__(*exc)
+
+    def begin(self, envs):
+        self.items = {env: {"state": "queued"} for env in envs}
+        self._draw()
+
+    def _draw(self):
+        built = sum(item["state"] == "built" for item in self.items.values())
+        failed = sum(item["state"] == "failed" for item in self.items.values())
+        title = f"Building firmware | {built}/{len(self.items)} built"
+        if failed:
+            title += f" | {failed} failed"
+        self.display.draw(title, self.items, "Compiler output is hidden unless a build fails (fw -v shows it).",
+                          render=build_line)
+
+    def run(self, env, command, cwd, child_env):
+        item = self.items[env]
+        started = time.monotonic()
+        item.update(state="building", seconds=0)
+        self._draw()
+        with tempfile.TemporaryFile() as captured:
+            process = subprocess.Popen(command, cwd=cwd, env=child_env, stdout=captured, stderr=subprocess.STDOUT)
+            try:
+                while True:
+                    try:
+                        code = process.wait(timeout=self.tick)
+                        break
+                    except subprocess.TimeoutExpired:
+                        item["seconds"] = int(time.monotonic() - started)
+                        self._draw()
+            except BaseException:
+                process.terminate()
+                process.wait()
+                raise
+            captured.seek(0)
+            output = captured.read().decode("utf-8", "replace")
+        item.update(state="built" if code == 0 else "failed", seconds=int(time.monotonic() - started))
+        self._draw()
+        if code != 0:
+            print(f"\n--- {env}: compiler output ---\n{output.rstrip()}\n--- end of {env} ---", file=self.error_stream, flush=True)
+            raise RuntimeError(f"{env}: build failed (exit {code}); its compiler output is above")

@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from tools import firmware_cli as cli
-from tools.firmware_progress import ProgressDisplay, cells, clean, device_line, percent
+from tools.firmware_progress import BuildProgress, ProgressDisplay, build_line, cells, clean, device_line, percent
 from tools.push_firmware import UploadBody, request
 
 
@@ -32,6 +32,28 @@ class ProgressTests(unittest.TestCase):
         stack.enter_context(patch('tools.firmware_progress.shutil.get_terminal_size', return_value=os.terminal_size((width, height))))
         self.addCleanup(stack.close)
         return Terminal()
+
+    def test_activity_lines_sit_under_the_bars_and_only_the_newest_few_show(self):
+        output = self.terminal(height=30)
+        items = {'6C37': {'state': 'transferring', 'bytes': 25, 'total': 100}}
+        activity = [(n, f'message {n}') for n in range(10)]
+        with ProgressDisplay(stream=output) as display:
+            display.draw('Job test', items, 'note', activity)
+        text = output.getvalue()
+        self.assertIn('message 9', text)
+        self.assertNotIn('message 5', text)
+        self.assertLess(text.index(' 25%'), text.index('message 9'))
+
+    def test_plain_output_prints_each_activity_message_once(self):
+        output = io.StringIO()
+        with ProgressDisplay(stream=output) as display:
+            for _ in range(3):
+                display.draw('Job test', {}, '', [(1, 'timed out'), (2, 'retrying')])
+            display.draw('Job test', {}, '', [(1, 'timed out'), (2, 'retrying'), (3, 'confirmed')])
+        text = output.getvalue()
+        self.assertEqual(text.count('timed out'), 1)
+        self.assertEqual(text.count('retrying'), 1)
+        self.assertIn('confirmed', text)
 
     def test_redraws_same_region_and_suppresses_identical_frames(self):
         output = self.terminal()
@@ -100,15 +122,16 @@ class ProgressTests(unittest.TestCase):
                 output = self.terminal()
                 initial = job()
                 if outcome == 'success':
-                    reply = {'job': job('completed', 'confirmed', 100)}
+                    replies = [{'jobs': [job('completed', 'confirmed', 100)], 'logs': []}]
                     error = None
                 elif outcome == 'failure':
-                    reply = {'job': job('failed', 'failed', 75, error='checksum mismatch')}
+                    replies = [{'jobs': [job('failed', 'failed', 75, error='checksum mismatch')], 'logs': []}]
                     error = RuntimeError
                 else:
-                    reply = KeyboardInterrupt() if outcome == 'interrupt' else RuntimeError('connection lost')
-                    error = type(reply)
-                with contextlib.redirect_stdout(output), patch.object(cli.time, 'sleep'), patch.object(cli, 'request', side_effect=[reply]):
+                    # A lost connection is retried before the watch gives up on it.
+                    replies = [KeyboardInterrupt()] if outcome == 'interrupt' else [RuntimeError('connection lost')] * cli.POLL_FAILURES
+                    error = type(replies[0])
+                with contextlib.redirect_stdout(output), patch.object(cli.time, 'sleep'), patch.object(cli, 'request', side_effect=replies):
                     if error:
                         with self.assertRaises(error): cli.wait_job('http://test', initial)
                     else:
@@ -198,3 +221,69 @@ class ProgressTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+
+class BuildProgressTests(unittest.TestCase):
+    def terminal(self):
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch.dict(os.environ, {'TERM': 'xterm'}))
+        stack.enter_context(patch('tools.firmware_progress.shutil.get_terminal_size', return_value=os.terminal_size((80, 24))))
+        self.addCleanup(stack.close)
+        return Terminal()
+
+    def python(self, code):
+        import sys
+        return [sys.executable, '-c', code]
+
+    def test_lists_every_env_up_front_and_hides_compiler_output_when_all_succeed(self):
+        output, errors = self.terminal(), io.StringIO()
+        with BuildProgress(stream=output, tick=.01) as progress:
+            progress.error_stream = errors
+            progress.begin(['sensor', 'screen_extractor'])
+            self.assertIn('[--] screen_extractor', output.getvalue())   # listed before it is built
+            progress.run('sensor', self.python("print('COMPILER NOISE')"), '.', os.environ.copy())
+            progress.run('screen_extractor', self.python("print('MORE NOISE')"), '.', os.environ.copy())
+        text = output.getvalue()
+        self.assertIn('[ok] sensor', text)
+        self.assertIn('[ok] screen_extractor', text)
+        self.assertIn('2/2 built', text)
+        self.assertNotIn('NOISE', text + errors.getvalue())
+
+    def test_a_failed_build_prints_its_compiler_output_and_stops(self):
+        output, errors = io.StringIO(), io.StringIO()
+        with BuildProgress(stream=output, tick=.01) as progress:
+            progress.error_stream = errors
+            progress.begin(['sensor', 'screen'])
+            with self.assertRaisesRegex(RuntimeError, 'sensor: build failed'):
+                progress.run('sensor', self.python("import sys; print('error: boom on line 7'); sys.exit(1)"), '.', os.environ.copy())
+        self.assertIn('error: boom on line 7', errors.getvalue())
+        self.assertIn('[!!] sensor', output.getvalue())
+        self.assertIn('1 failed', output.getvalue())
+        self.assertIn('[--] screen', output.getvalue())   # never started
+
+    def test_long_builds_keep_ticking_their_elapsed_time(self):
+        output = self.terminal()
+        with BuildProgress(stream=output, tick=.05) as progress:
+            progress.begin(['sensor'])
+            progress.run('sensor', self.python("import time; time.sleep(1.3)"), '.', os.environ.copy())
+        self.assertIn('building 1s', output.getvalue())
+
+    def test_build_line_fits_the_width(self):
+        for width in (10, 30, 79):
+            self.assertLessEqual(cells(build_line('component_state_display', {'state': 'building', 'seconds': 12}, width)), width)
+
+    def test_bundle_hands_each_env_to_the_progress_hook_in_order(self):
+        from tools import release_firmware as bundles
+        calls = []
+        class Hook:
+            def begin(self, envs): calls.append(('begin', list(envs)))
+            def run(self, env, command, cwd, child_env):
+                calls.append(('run', env))
+                path = bundles.ROOT / '.pio/build' / env / 'firmware.bin'
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(child_env['PULLEYS_FIRMWARE_BUILD_HASH'].encode())
+        with tempfile.TemporaryDirectory() as directory, patch.object(bundles, 'ROOT', Path(directory)), \
+             contextlib.redirect_stdout(io.StringIO()):
+            bundles.build_bundle(['sensor', 'screen', 'sensor'], 1763000000, {'sensor': 'a' * 64, 'screen': 'b' * 64},
+                                 Path(directory) / 'out', pio='pio', progress=Hook())
+        self.assertEqual(calls, [('begin', ['sensor', 'screen']), ('run', 'sensor'), ('run', 'screen')])
