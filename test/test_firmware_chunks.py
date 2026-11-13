@@ -101,3 +101,19 @@ class ChunkTests(unittest.TestCase):
             source_path.write_text(prefix + functions + suffix)
             subprocess.run(['clang++', '-std=c++11', '-I', str(ROOT / 'lib/pulleys_fw_serial'), str(source_path), '-o', str(binary_path)], check=True)
             subprocess.run([str(binary_path)], check=True, capture_output=True)
+
+
+class SelfUpdateTests(unittest.TestCase):
+    """The bridge's own flash update must never overlap a serial answer with a flash write."""
+
+    def body(self, name):
+        start = source.index(f'static void {name}(')
+        return source[start:source.index('\nstatic void ', start + 1)]
+
+    def test_self_update_is_never_pipelined_but_the_wifi_stream_is(self):
+        # Update.write erases/writes flash with the UART interrupt blocked (CONFIG_UART_ISR_IN_IRAM is off),
+        # so an answer arriving mid-write is lost: 0.6 KB/s, a 5 s timeout per chunk. Hardware found it, not the
+        # host tests, so this guards the one argument that matters.
+        self.assertRegex(self.body('updateBridgeSelf'), r'FW_CHUNK_BYTES,\s*size,\s*false\)')
+        self.assertIn('Update.write', self.body('updateBridgeSelf'))
+        self.assertRegex(self.body('serveFirmware'), r'FW_CHUNK_BYTES,\s*fwSize,\s*BRIDGE_PIPELINE\)')

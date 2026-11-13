@@ -76,9 +76,11 @@
 #ifndef BRIDGE_BAUD
   #define BRIDGE_BAUD   pulleys::FW_SERIAL_BAUD
 #endif
-// Ask the Pi for firmware chunk N+1 while chunk N is still going out (see
-// pulleys_fw_pipe.h): about a third faster than one at a time. -D BRIDGE_PIPELINE=0
-// goes back to strictly one at a time, as a fallback if it ever misbehaves.
+// Ask the Pi for firmware chunk N+1 while chunk N is still going out over WiFi
+// (see pulleys_fw_pipe.h): about a third faster than one at a time. -D BRIDGE_PIPELINE=0
+// goes back to strictly one at a time, as a fallback if it ever misbehaves. It does
+// NOT apply to the bridge's own flash update, which must never overlap serial
+// receive with a flash write (see updateBridgeSelf).
 #ifndef BRIDGE_PIPELINE
   #define BRIDGE_PIPELINE 1
 #endif
@@ -312,12 +314,17 @@ static void updateBridgeSelf(uint32_t size, const char* sha) {
     uint32_t off = 0;
     fwRefused = false;
     FirmwareLink link;
+    // Never pipelined, whatever BRIDGE_PIPELINE says: Update.write erases and writes a
+    // flash sector, and the serial receive interrupt is not in IRAM in this SDK
+    // (CONFIG_UART_ISR_IN_IRAM is off), so it cannot run during that. A prefetched answer
+    // arriving then overflows the 128-byte UART FIFO and is lost: every chunk timed out
+    // for 5 s before the retry got it through (0.6 KB/s). Ask, receive it whole, THEN write.
     pulleys::ChunkPipe<FirmwareLink> pipe(link, fwChunkBuffer, fwChunkBuffer2,
-                                          pulleys::FW_CHUNK_BYTES, size, BRIDGE_PIPELINE);
+                                          pulleys::FW_CHUNK_BYTES, size, false);
     bool ok = pipe.first();
     if (ok) {
         do {
-            pipe.prefetch();   // the next chunk arrives over the serial link while this one is written to flash
+            pipe.prefetch();   // a no-op here: the pipe is not pipelined
             size_t got = pipe.length();
             if (Update.write(pipe.data(), got) != got) { ok = false; break; }
             mbedtls_sha256_update_ret(&hash, pipe.data(), got);
