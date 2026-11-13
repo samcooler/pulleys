@@ -69,14 +69,34 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(snapshot["jobs"][0]["state"], "interrupted")
         self.assertEqual(snapshot["devices"][0]["id"], "59A4")
 
-    def test_online_means_heard_within_a_few_scans_and_widens_during_a_job(self):
+    def test_offline_after_three_minutes_and_the_window_stretches_during_a_job(self):
         node = lambda: next(row for row in self.manager.snapshot()["devices"] if row["id"] == "59A4")
-        self.manager.transport._last_seen["59A4"] = time.time() - 5
+        self.manager.transport._last_seen["59A4"] = time.time() - 120
         self.assertTrue(node()["online"])
-        self.manager.transport._last_seen["59A4"] = time.time() - 30
+        self.manager.transport._last_seen["59A4"] = time.time() - 200
         self.assertFalse(node()["online"])
         self.manager._active = "job"      # no scans run during a job, so be patient
+        self.manager._jobs.append({"id": "job", "kind": "update", "state": "running", "started_at": time.time() - 600})
         self.assertTrue(node()["online"])
+
+    def test_offline_devices_are_not_queued_and_broad_selections_skip_them(self):
+        release = self.uploaded()
+        self.manager.transport._last_seen["59A4"] = time.time() - 400
+        with self.assertRaisesRegex(ValueError, "59A4 offline"):
+            self.manager.enqueue("update", release, ["59A4"])
+        with self.assertRaisesRegex(ValueError, "no known devices"):
+            self.manager.enqueue("update", release)            # the only matching device is offline
+        self.manager.handle_line("PULLEYS-CENSUS id=59A4 env=screen sha256=unknown name=Gauge build=old")
+        self.assertTrue(self.manager.enqueue("update", release)["id"])   # heard again: allowed
+
+    def test_a_device_that_comes_back_is_marked_as_returned(self):
+        node = lambda: next(row for row in self.manager.snapshot()["devices"] if row["id"] == "59A4")
+        self.assertIsNone(node()["returned_at"])
+        self.manager.handle_line("PULLEYS-CENSUS id=59A4 env=screen sha256=unknown name=Gauge build=old")
+        self.assertIsNone(node()["returned_at"])                 # never went away
+        self.manager.transport._last_seen["59A4"] = time.time() - 400
+        self.manager.handle_line("PULLEYS-CENSUS id=59A4 env=screen sha256=unknown name=Gauge build=old")
+        self.assertIsNotNone(node()["returned_at"])
 
     def test_scan_asks_for_one_census_and_does_nothing_without_a_bridge(self):
         sent = []

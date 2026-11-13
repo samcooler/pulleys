@@ -8,8 +8,7 @@ import threading
 import time
 import uuid
 
-from firmware import (ACTIVE_ENVS, OPTIONAL_ENVS, CACHE, FirmwareUpdater,
-                      ONLINE_SECONDS, ONLINE_SECONDS_DURING_JOB)
+from firmware import ACTIVE_ENVS, OPTIONAL_ENVS, CACHE, FirmwareUpdater, ONLINE_SECONDS
 
 ENVS = ACTIVE_ENVS | OPTIONAL_ENVS
 MAX_IMAGE = 7 * 1024 * 1024
@@ -119,7 +118,7 @@ class FirmwareManager:
                 return
             device = job["devices"].setdefault(node_id, {})
             if kind in {"status", "progress"}:
-                self.transport._last_seen[node_id] = time.time()
+                self.transport.touch(node_id)
             if kind == "status":
                 state = fields.get("state")
                 # An install ACK is followed by a separate reboot/hash check.
@@ -170,6 +169,17 @@ class FirmwareManager:
         with self._lock:
             self._save()
 
+    def _online_window(self, now):
+        """Seconds of silence a device may have and still count as online. Scans
+        stop while a job runs, so the window grows with the job."""
+        job = next((row for row in self._jobs if row["id"] == self._active), None)
+        return ONLINE_SECONDS + (now - job["started_at"] if job and job.get("started_at") else 0)
+
+    def _is_online(self, key, now=None):
+        now = now or time.time()
+        seen = self.transport._last_seen.get(key)
+        return bool(seen and now - seen < self._online_window(now))
+
     def _validate_update(self, release_id, device_ids, env):
         """Check a selection the same way for a new job and for edits to a queued
         one. Returns the device IDs normalised (or None for "every outdated device")."""
@@ -184,8 +194,13 @@ class FirmwareManager:
             device_ids = list(dict.fromkeys(value.upper() for value in device_ids))
             if any(value not in self.transport._inventory for value in device_ids):
                 raise ValueError("a selected device has not been discovered")
+        if device_ids is not None:
+            offline = [key for key in device_ids if not self._is_online(key)]
+            if offline:
+                raise ValueError(f"{', '.join(offline)} offline (not heard from in over {ONLINE_SECONDS // 60} minutes); not queued")
         known = [(key, node) for key, node in self.transport._inventory.items()
-                 if (device_ids is None or key in device_ids) and (env is None or node.get("env") == env)]
+                 if (device_ids is None or key in device_ids) and (env is None or node.get("env") == env)
+                 and (device_ids is not None or self._is_online(key))]    # a broad selection skips offline devices
         if not known:
             raise ValueError("no known devices match this selection; scan the mesh first")
         images = self._releases[release_id]["manifest"]
@@ -460,10 +475,11 @@ class FirmwareManager:
     def snapshot(self):
         with self._lock:
             now = time.time()
-            window = ONLINE_SECONDS_DURING_JOB if self._active else ONLINE_SECONDS
+            window = self._online_window(now)
             devices = []
             for node_id, fields in sorted(self.transport._inventory.items()):
-                node = dict(fields, id=node_id, last_seen=self.transport._last_seen.get(node_id))
+                node = dict(fields, id=node_id, last_seen=self.transport._last_seen.get(node_id),
+                            returned_at=self.transport._back_at.get(node_id))
                 node["online"] = bool(node["last_seen"] and now - node["last_seen"] < window)
                 node["release_ids"] = [release["id"] for release in self._releases.values()
                                        if release["manifest"].get(node.get("env"), {}).get("build_hash") == node.get("sha256")]
@@ -518,6 +534,7 @@ class FirmwareManager:
         finally:
             with self._lock:
                 job["finished_at"] = time.time()
+                self.transport._job_end = job["finished_at"]
                 self._active = None
                 self.transport._transfer_target = None
                 self._save()

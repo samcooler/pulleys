@@ -415,6 +415,26 @@ def upload_and_queue(url, path, manifest, rows, *, wait=True, verbose=False):
     return job
 
 
+PIO_CORE = Path(os.environ.get("PLATFORMIO_CORE_DIR", Path.home() / ".platformio"))
+OTADATA = "0xe000"   # every partition table in platformio.ini puts the OTA-selection data here
+
+
+def select_new_app_slot(port):
+    """Make the board boot the image just written.
+
+    PlatformIO's upload writes only the app image, at 0x10000. A board whose last update
+    came over the air boots from the *other* app slot, chosen by the OTA data at 0xe000, so
+    it would carry on running its old firmware with the new image sitting unused (the
+    flash "succeeds" and the identity check then fails). Writing boot_app0.bin there resets
+    the choice to the slot just written, as flash_all.sh does."""
+    esptool = PIO_CORE / "packages/tool-esptoolpy/esptool.py"
+    boot_app0 = PIO_CORE / "packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
+    if not esptool.is_file() or not boot_app0.is_file():
+        raise RuntimeError(f"PlatformIO's esptool or boot_app0.bin is missing under {PIO_CORE}")
+    subprocess.run([sys.executable, str(esptool), "--port", port, "--baud", "460800", "--before", "default_reset",
+                    "--after", "hard_reset", "write_flash", OTADATA, str(boot_app0)], check=True)
+
+
 def flash_usb(rows, manifest):
     executable = bundles.pio_path()
     for row in rows:
@@ -426,6 +446,7 @@ def flash_usb(rows, manifest):
         # uploading it to each matching board, with PlatformIO's chip checks.
         subprocess.run([executable, "run", "-e", env, "-t", "nobuild", "-t", "upload", "--upload-port", port],
                        cwd=ROOT, env=child_env, check=True)
+        select_new_app_slot(port)   # after the upload, so a failed upload leaves the old image selected
         verified = usb_devices([port])
         expected = manifest["firmware"][env]["build_hash"]
         if not any(item.get("sha256") == expected and item.get("env") == env and
@@ -558,6 +579,16 @@ def main(argv=None):
         if args.command == "list":
             print_devices(rows, names, json_output=args.json)
             return 0
+        if args.command == "flash" and not args.usb:
+            # An offline device (silent for over 3 minutes) is not flashed; the Overlord
+            # would refuse it anyway. Rows without the flag (USB) are never skipped.
+            offline = [row for row in rows if row.get("online") is False]
+            if offline:
+                print("Skipping offline: " + ", ".join(row["id"] for row in offline) +
+                      " (not heard from in over 3 minutes)", flush=True)
+                rows = [row for row in rows if row.get("online") is not False]
+                if not rows:
+                    raise ValueError("every selected device is offline; nothing built or flashed")
         if not rows:
             if by_changes:
                 raise ValueError("no known device runs the firmware your changes touch (" + ", ".join(by_changes.envs) +

@@ -112,6 +112,23 @@ class CLITests(unittest.TestCase):
         self.assertEqual(len(first.args[2]["sensor"]), 64)
         self.assertIsInstance(first.args[1], int)
 
+    def test_offline_devices_are_skipped_and_all_offline_flashes_nothing(self):
+        data = snapshot()
+        data["devices"][1]["online"] = False           # EC52 has been silent for minutes
+        with patch.object(cli, "request", return_value=data), patch.object(cli, "build_development") as build, \
+             patch.object(cli, "upload_and_queue") as upload:
+            build.return_value = (Path("m.json"), {"firmware": {}})
+            code, out, _ = self.invoke(["flash", "--env", "sensor"])
+        self.assertEqual(code, 0)
+        self.assertIn("Skipping offline: EC52", out)
+        self.assertEqual([row["id"] for row in upload.call_args.args[3]], ["E857"])
+        data["devices"][0]["online"] = False
+        with patch.object(cli, "request", return_value=data), patch.object(cli, "build_development") as build:
+            code, _, errors = self.invoke(["flash", "--env", "sensor"])
+        self.assertEqual(code, 1)
+        self.assertIn("every selected device is offline", errors)
+        build.assert_not_called()
+
     def test_failed_build_cannot_upload(self):
         with patch.object(cli, "request", return_value=snapshot()), \
              patch.object(cli, "build_development", side_effect=subprocess.CalledProcessError(1, "pio")), \
@@ -175,11 +192,18 @@ class CLITests(unittest.TestCase):
         row = {"id": "E857", "env": "sensor", "port": "/dev/test"}
         manifest = {"firmware": {"sensor": {"build_hash": "a" * 64}}}
         with patch.object(bundles, "pio_path", return_value="pio"), patch.object(cli.subprocess, "run") as run, \
+             patch.object(cli.Path, "is_file", return_value=True), \
              patch.object(cli, "usb_devices", return_value=[dict(row, sha256="a" * 64)]), contextlib.redirect_stdout(io.StringIO()):
             cli.flash_usb([row], manifest)
-        self.assertIn("nobuild", run.call_args.args[0])
-        self.assertIn("upload", run.call_args.args[0])
-        self.assertEqual(run.call_args.kwargs["env"]["PULLEYS_FIRMWARE_BUILD_HASH"], "a" * 64)
+        upload, slot = run.call_args_list[0], run.call_args_list[1]
+        self.assertIn("nobuild", upload.args[0])
+        self.assertIn("upload", upload.args[0])
+        self.assertEqual(upload.kwargs["env"]["PULLEYS_FIRMWARE_BUILD_HASH"], "a" * 64)
+        # Then the board is told to boot the slot just written (an OTA-updated board would keep its old image).
+        self.assertIn("write_flash", slot.args[0])
+        self.assertEqual(slot.args[0][slot.args[0].index("write_flash") + 1], "0xe000")
+        self.assertTrue(slot.args[0][-1].endswith("boot_app0.bin"))
+        self.assertEqual(slot.args[0][slot.args[0].index("--port") + 1], "/dev/test")
 
     def test_a_batch_shares_one_unix_timestamp(self):
         with patch.object(bundles, "build_bundle") as build, patch.object(bundles.time, "time", return_value=1763000000.9):
@@ -528,6 +552,36 @@ class FlashLineTests(unittest.TestCase):
             self.assertIn("Done", text)
             self.assertNotIn("Bar = bytes served", text)
             self.assertEqual("03:" in text or "00:00:00" in text or "Connecting" in text.replace("Connecting...", ""), verbose, verbose)
+
+
+class SlotSelectionTests(unittest.TestCase):
+    def test_a_failed_upload_leaves_the_old_image_selected(self):
+        row = {"id": "E857", "env": "sensor", "port": "/dev/test"}
+        manifest = {"firmware": {"sensor": {"build_hash": "a" * 64}}}
+        def run(command, **kwargs):
+            if "upload" in command:
+                raise subprocess.CalledProcessError(1, command)
+        with patch.object(bundles, "pio_path", return_value="pio"), patch.object(cli.subprocess, "run", side_effect=run) as call, \
+             contextlib.redirect_stdout(io.StringIO()), self.assertRaises(subprocess.CalledProcessError):
+            cli.flash_usb([row], manifest)
+        self.assertEqual(call.call_count, 1, "the OTA selection is only reset after a good upload")
+
+    def test_missing_platformio_tools_are_an_explained_error(self):
+        with patch.object(cli, "PIO_CORE", Path("/nonexistent")), self.assertRaisesRegex(RuntimeError, "boot_app0.bin is missing"):
+            cli.select_new_app_slot("/dev/test")
+
+    def test_every_partition_table_in_use_keeps_the_ota_data_where_fw_writes_it(self):
+        import configparser
+        parser = configparser.RawConfigParser(strict=False)
+        parser.read(cli.ROOT / "platformio.ini")
+        tables = {parser.get(section, "board_build.partitions") for section in parser.sections()
+                  if parser.has_option(section, "board_build.partitions")}
+        directory = cli.PIO_CORE / "packages/framework-arduinoespressif32/tools/partitions"
+        if not directory.is_dir():
+            self.skipTest("the PlatformIO Arduino framework is not installed here")
+        for table in tables:
+            rows = [line.replace(" ", "") for line in (directory / table).read_text().splitlines() if line.startswith("otadata")]
+            self.assertTrue(rows and rows[0].split(",")[3] == cli.OTADATA, f"{table}: otadata is not at {cli.OTADATA}")
 
 
 if __name__ == "__main__":

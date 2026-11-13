@@ -14,12 +14,10 @@ CACHE = Path(os.environ.get("OVERLORD_FIRMWARE_CACHE",
 # The background scan: replies are spread over this window (ms) so a few dozen
 # boards do not answer at once, and a scan starts as the last one ends.
 SCAN_SPREAD_MS = 2000
-# A device is online if it has answered (or reported) within this many seconds:
-# about four scans, so one or two lost replies do not flicker it offline.
-ONLINE_SECONDS = 12
-# While a firmware job runs no scans are made (they would share the radio with the
-# transfer), so everything not being flashed keeps its status for longer.
-ONLINE_SECONDS_DURING_JOB = 90
+# A device is offline once it has been silent this long (seconds). It is not
+# flashed while offline, and it is shown last, in red. Scans run every couple of
+# seconds, so this is many missed scans, not a flicker.
+ONLINE_SECONDS = 180
 
 
 class FirmwareUpdater:
@@ -35,6 +33,8 @@ class FirmwareUpdater:
         self.observer = observer
         self.cache = Path(cache) if cache is not None else CACHE
         self._last_seen = {}
+        self._back_at = {}      # node -> when it last came back after being offline
+        self._job_end = 0.0     # no scans run during a job, so silence across one means nothing
         self._transfer_target = None
         self._lock = threading.RLock()
         self._inventory = {}
@@ -52,6 +52,14 @@ class FirmwareUpdater:
         # only this one is updated over the UART, the rest over the mesh.
         self._bridge_id = None
 
+    def touch(self, key):
+        """A device was heard. If it had been offline, remember when it came back."""
+        now = time.time()
+        prev = self._last_seen.get(key)
+        if prev is not None and now - prev > ONLINE_SECONDS and prev >= self._job_end:
+            self._back_at[key] = now
+        self._last_seen[key] = now
+
     def handle_line(self, line):
         if line.startswith("PULLEYS-CENSUS "):
             fields = _fields(line)
@@ -60,7 +68,7 @@ class FirmwareUpdater:
                 with self._condition:
                     key = node_id.upper()
                     self._inventory[key] = {**self._inventory.get(key, {}), **fields}
-                    self._last_seen[key] = time.time()
+                    self.touch(key)
                     self._emit("inventory", node_id=key)
                     self._condition.notify_all()
             return True
@@ -73,7 +81,7 @@ class FirmwareUpdater:
                         self._bridge_id = node_id.upper()
                     key = node_id.upper()
                     self._inventory[key] = {**self._inventory.get(key, {}), **fields}
-                    self._last_seen[key] = time.time()
+                    self.touch(key)
                     self._emit("inventory", node_id=key)
                     self._condition.notify_all()
             return True
