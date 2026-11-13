@@ -194,7 +194,8 @@ counters:
 
 Whole numbers a game keeps across states: hits, misses, rounds won. A reaction
 changes one with `add:` (a negative amount takes away) or sets it back to 0
-with `clear:`. A counter with a `reach` sends the event `<name>_reached` when
+with `clear:`. A counter never goes below 0: taking away from an empty one leaves
+it at 0, so a forgiving reaction cannot bank credit. A counter with a `reach` sends the event `<name>_reached` when
 it climbs from below its mark to the mark or past it -- once per climb, so
 after a `clear` it can be reached again. All counters are 0 when a game loads.
 Up to 8 counters, names up to 15 characters.
@@ -317,6 +318,27 @@ step has `set` and/or `cue` and no `goto` -- `after` is for leaving.
 then every `delay` after that, whatever else happens -- unlike `idle`, which
 any event puts off. No `goto` here either.
 
+`every` may also be a list of up to four entries, each on its own clock, and an
+entry may have an `if:` that is checked each time it comes due. When the
+condition is false that run is skipped, and the entry keeps its schedule:
+
+| `if`             | Holds when                                              |
+| ---------------- | ------------------------------------------------------- |
+| `goal_active`    | some goal component is lit                              |
+| `no_goal_charge` | goals are dealt and every goal component has no charge  |
+
+```yaml
+    every:
+      - delay: 8s
+        if: goal_active          # keeps cheering while a goal is lit
+        cue: [video_once_janis_encouragement_*]
+      - delay: 15s
+        if: no_goal_charge       # however busy the other ropes are
+        cue: [video_once_janis_nag_maintain_*]
+```
+
+Only `every` has an `if`; `idle`, `at` and events do not.
+
 ```yaml
     every:
       delay: $shift_every        # the ropes swap colours every 30 s
@@ -370,7 +392,10 @@ leaving cancels it. `after` runs alongside and is unaffected.
 
 - Every pull is an event before anything else happens to it: `pull` for any
   rope, then `goal_pull`, `nongoal_pull` or `final_pull` for the kind of rope
-  it was. Then the pull's charge goes in, where things stand after any
+  it was. A pull of a major that is not a goal then also says its colour:
+  `nongoal_red_pull`, `nongoal_blue_pull`, `nongoal_green_pull`,
+  `nongoal_yellow_pull` or `nongoal_orange_pull` (purple is `final_pull`), so a
+  state can answer each colour its own way. Then the pull's charge goes in, where things stand after any
   reaction -- so a `pull` that starts a round whose entry resets the
   components lands its charge in the new round. A pull is activity for `idle`
   even when it lights nothing.

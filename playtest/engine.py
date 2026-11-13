@@ -87,7 +87,7 @@ class Engine:
         self.enters = 0
         self._after = None      # (due, goto)
         self._idle = None       # (due, period)
-        self._every = None      # (due, period)
+        self._every = []        # [[due, period, block]] one per `every` entry
         self._at = []           # [(due, key)] still to run in this state
         self._listeners = []
         self._seq = itertools.count()
@@ -140,9 +140,12 @@ class Engine:
         cls = self.classify(ch)
         if cls is None:
             return
-        self._emit("pull", ch=ch, color=COLORS[self.palette[ch]], cls=cls)
+        color = COLORS[self.palette[ch]]
+        self._emit("pull", ch=ch, color=color, cls=cls)
         self._deliver("pull")
         self._deliver(cls + "_pull")
+        if cls == "nongoal":
+            self._deliver(f"nongoal_{color}_pull")
 
         # A reaction may have recoloured the ropes or re-dealt the goals:
         # the charge goes where things stand now.
@@ -258,17 +261,20 @@ class Engine:
         self.state = name
         self.entered_at = self.t
         self.enters += 1
-        self._after = self._idle = self._every = None
+        self._after = self._idle = None
+        self._every = []
         st = self.states[name] or {}
         self._emit("state", name=name, prev=prev)
         after = st.get("after")
         if after:
             delay = resolve_duration(after["delay"], self.params) if "delay" in after else spec.DEFAULT_AFTER
             self._after = (self.t + delay, after["goto"])
-        for key, block in (("idle", "_idle"), ("every", "_every")):
-            if st.get(key):
-                period = resolve_duration(st[key]["delay"], self.params)
-                setattr(self, block, (self.t + period, period))
+        if st.get("idle"):
+            period = resolve_duration(st["idle"]["delay"], self.params)
+            self._idle = (self.t + period, period)
+        for block in spec.every_blocks(st):
+            period = resolve_duration(block["delay"], self.params)
+            self._every.append([self.t + period, period, block])
         self._at = sorted((self.t + resolve_duration(k, self.params), next(self._seq), k)
                           for k in (st.get("at") or {}))
         # Timers first: an entry cue can finish Simon's goal set and move the
@@ -347,6 +353,7 @@ class Engine:
         return False
 
     def _count(self, name, value, reached):
+        value = max(0, value)   # a count of misses cannot go below none
         old = self.counters[name]
         if value == old:
             return
@@ -413,6 +420,17 @@ class Engine:
         roped = [ch for ch in self.roped if self.palette[ch] == PURPLE]
         return bool(roped) and all(self.finals[ch].on for ch in roped)
 
+    def _holds(self, condition):
+        """An `every` entry's `if:` (spec.EVERY_CONDITIONS), as things stand now."""
+        if not condition:
+            return True
+        goals = [self.majors[i] for i in range(MAJOR_COUNT) if self.goal_mask & (1 << i)]
+        if condition == "goal_active":
+            return any(c.on for c in goals)
+        if condition == "no_goal_charge":
+            return bool(goals) and all(self._charge_now(c) <= EPS for c in goals)
+        return False
+
     def _check_simon(self):
         if self.goal_mask and self._lit_mask() == self.goal_mask:
             self._deliver("all_components_activated")
@@ -433,8 +451,8 @@ class Engine:
             offer(self._idle[0], "idle")
         if self._at:
             offer(self._at[0][0], "at")
-        if self._every:
-            offer(self._every[0], "every")
+        for i, entry in enumerate(self._every):
+            offer(entry[0], "every", i)
         rate = self.decay_rate
         for i, c in enumerate(self.majors):
             if c.on:
@@ -457,9 +475,11 @@ class Engine:
             self._emit("timer", name="idle")
             self._act(st.get("idle"))
         elif kind == "every":
-            self._every = (self.t + self._every[1], self._every[1])
-            self._emit("timer", name="every")
-            self._act(st.get("every"))
+            entry = self._every[data]
+            entry[0] = self.t + entry[1]
+            if self._holds(entry[2].get("if")):
+                self._emit("timer", name="every")
+                self._act(entry[2])
         elif kind == "at":
             _, _, key = self._at.pop(0)
             self._emit("timer", name=f"at {key}")

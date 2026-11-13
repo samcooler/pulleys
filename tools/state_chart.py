@@ -28,6 +28,12 @@ except ImportError:
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_CONFIG = os.path.join(ROOT, "game_state_machine", "state_config.yaml")
 
+def every_blocks(state):
+    """A state's `every`: one entry, or a list of them."""
+    every = state.get("every")
+    return [] if not every else (every if isinstance(every, list) else [every])
+
+
 FONT = "Helvetica"
 INK = "#1f2937"
 MUTED = "#6b7280"
@@ -89,10 +95,10 @@ def state_label(name, state, is_start):
     idle = state.get("idle")
     if idle and (idle.get("cue") or idle.get("set")):
         rows += section_rows(f"IDLE every {idle['delay']}", idle.get("cue") or [], idle.get("set"))
-    every = state.get("every")
-    if every:
+    for every in every_blocks(state):
         moves = [f"{k}: {every[k]}" for k in ("colors", "goals") if every.get(k) is not None]
-        rows += section_rows(f"EVERY {every['delay']}", (every.get("cue") or []) + moves, every.get("set"))
+        when = f" if {every['if']}" if every.get("if") else ""
+        rows += section_rows(f"EVERY {every['delay']}{when}", (every.get("cue") or []) + moves, every.get("set"))
     for delay, step in (state.get("at") or {}).items():
         step = step or {}
         rows += section_rows(f"AT {delay}", step.get("cue") or [], step.get("set"))

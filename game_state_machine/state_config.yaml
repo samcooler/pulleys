@@ -9,10 +9,14 @@
 #              all_components_activated (goals lit, non-goals dark),
 #              all_components_deactivated, final_component_activated/deactivated,
 #              all_final_components_activated (every roped purple channel lit)
+#              pulls: pull, goal_pull, nongoal_pull, final_pull, and nongoal_<colour>_pull
+#              (nongoal_red_pull ...) for a non-goal major's rope, by its colour
 #   on         per-state reactions; unlisted events ignored
 #   enter      cues on arrival
 #   choose_one a list entry in any cue list; fires one at random
 #   idle       cues after `delay` with no pull, repeating until a pull
+#   every      cues every `delay` whatever happens; a list of them is fine, and an
+#              entry may say `if: goal_active | no_goal_charge`
 #   after      goto another state after this long
 #   charge     0-100; pulls add, decay drains
 #   gain       volume multiplier for a clip, 1 = unchanged
@@ -72,10 +76,25 @@ params:
     max: 4m
     note: how long a Simon round lasts before it gives up and goes back to passive
   nag_delay:
-    value: 20s
-    min: 10s
-    max: 45s
-    note: quiet time before Janis nags in a round
+    value: 12s
+    min: 6s
+    max: 30s
+    note: quiet time (no pulls at all) before Janis nags in a round
+  encourage_every:
+    value: 8s
+    min: 5s
+    max: 20s
+    note: how often Janis encourages while a goal component is lit
+  productivity_every:
+    value: 15s
+    min: 8s
+    max: 40s
+    note: how often Janis asks for productivity while no goal component has any charge
+  stray_limit:
+    value: 3
+    min: 2
+    max: 6
+    note: non-goal pulls (each goal pull forgives one) before Janis is annoyed
   easy_goals:
     value: 1
     min: 1
@@ -97,6 +116,11 @@ params:
     min: 1m
     max: 3m
     note: how long the purple phase lasts before the kickout
+
+# Whole numbers the states keep. One with a reach sends <name>_reached at that count.
+counters:
+  stray:
+    reach: $stray_limit             # non-goal pulls, less the goal ones: Janis's patience
 
 # Percent of full per second; applies to all components.
 default_decay_rate: $decay_rate
@@ -146,6 +170,9 @@ cues:
     - video_once_janis_warn_*
     - video_once_janis_beg_*
     - video_once_janis_anger_*
+    - video_once_janis_nag_maintain_*           # asking for productivity
+    - video_once_janis_suspicion_what_doing_*   # annoyed at the wrong ropes
+    - video_once_janis_anger_no_*
     - video_once_janis_threatening_*
     - video_once_janis_panic_*
     # janis_encouragement (13)
@@ -223,6 +250,13 @@ cues:
     - audio_once_lever_yellow
     - audio_once_lever_orange
     - audio_once_lever_purple
+    # Error sound per colour, played in a round when a lever that is not a goal is pulled.
+    - audio_once_lever_red_error
+    - audio_once_lever_blue_error
+    - audio_once_lever_green_error
+    - audio_once_lever_yellow_error
+    - audio_once_lever_orange_error
+    - audio_once_lever_purple_error
     - audio_once_component_powerup  # placeholder
     - audio_once_component_powerdown  # placeholder
     - audio_once_encouragement
@@ -252,6 +286,39 @@ cues:
 # Story: ropes are levers extracting spirit souls for Janis. Party opens the diorama at
 # 10 s; its "free the spirits" button is fake (purple flash, bad noise, Janis disables it).
 # Real way out: light all purple ropes in the final.
+# Fragments the three rounds share (YAML anchors: `<<: *round_on` merges a map in).
+# The arbiter never sees this section; the anchors are already resolved in its JSON.
+shared:
+  round_on: &round_on
+    # A lever that is not a goal sounds its own error, over the arbiter's lever sound.
+    # Purple is never a goal in a round; in `final` it is the goal and has none of this.
+    nongoal_red_pull:    { cue: [audio_once_lever_red_error] }
+    nongoal_blue_pull:   { cue: [audio_once_lever_blue_error] }
+    nongoal_green_pull:  { cue: [audio_once_lever_green_error] }
+    nongoal_yellow_pull: { cue: [audio_once_lever_yellow_error] }
+    nongoal_orange_pull: { cue: [audio_once_lever_orange_error] }
+    final_pull:          { cue: [audio_once_lever_purple_error] }
+    # Janis's patience: each non-goal pull is a strike, each goal pull forgives one.
+    nongoal_pull:
+      add: { stray: 1 }
+    goal_pull:
+      add: { stray: -1 }
+    stray_reached:
+      clear: [stray]
+      cue:
+        - choose_one:
+            - video_once_janis_suspicion_what_doing_*   # What are you doing?
+            - video_once_janis_anger_no_*               # No!
+  round_every: &round_every
+    - delay: $encourage_every         # keeps cheering while a goal is lit
+      if: goal_active
+      cue:
+        - video_once_janis_encouragement_*
+    - delay: $productivity_every      # nothing on the goals, whatever else is going on
+      if: no_goal_charge
+      cue:
+        - video_once_janis_nag_maintain_*
+
 # Janis: encourages correct goals, nags when idle, warn/beg/anger at purple by round;
 # final = threats idle, panic at purple, ignores majors. Placeholder = timing not final.
 states:
@@ -281,7 +348,9 @@ states:
 
   easy_round:
     on:
+      <<: *round_on
       enter:
+        clear: [stray]
         set: { queue.sign: wait }     # a group is in; it stays wait until passive
         goals: $easy_goals            # deal this many goal colours
         cue:
@@ -303,13 +372,16 @@ states:
       delay: $nag_delay
       cue:
         - video_once_janis_nag_*
+    every: *round_every
     after:
       delay: $round_time
       goto: passive
 
   medium_round:
     on:
+      <<: *round_on
       enter:
+        clear: [stray]
         goals: $medium_goals
         cue:
           - game_reset_components
@@ -336,13 +408,16 @@ states:
       delay: $nag_delay
       cue:
         - video_once_janis_nag_*
+    every: *round_every
     after:
       delay: $round_time
       goto: passive
 
   hard_round:
     on:
+      <<: *round_on
       enter:
+        clear: [stray]
         goals: $hard_goals
         cue:
           - game_reset_components
@@ -369,6 +444,7 @@ states:
       delay: $nag_delay
       cue:
         - video_once_janis_nag_*
+    every: *round_every
     after:
       delay: $round_time
       goto: passive

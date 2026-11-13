@@ -20,7 +20,9 @@
 //
 // Every pull is also an event of its own, before its charge goes in: `pull`,
 // then `goal_pull`, `nongoal_pull` or `final_pull`. A state can react to a
-// pull itself (bop-it, a score) and not only to a component filling.
+// pull itself (bop-it, a score) and not only to a component filling. A pull of
+// a non-goal major also says its colour, after `nongoal_pull`: nongoal_red_pull
+// and so on.
 //
 // It also publishes every component's charge for the displays (MeshComponents):
 // on each change, and once a second otherwise.
@@ -38,6 +40,9 @@ uint8_t components_goal_color_mask();
 // are ignored; zero clears them.
 void components_set_goal_colors(uint8_t colorMask);
 // Send every component's charge (and, while the state cares, the goals) now.
+// What an `every` entry's `if:` asks (playtest/spec.py EVERY_CONDITIONS).
+bool components_goal_active();     // some goal component is lit
+bool components_goals_empty();     // goals are dealt and every goal component has no charge
 void components_publish();
 void components_reset();   // charges, lit finals and goals back to nothing
 void components_check_simon_complete();

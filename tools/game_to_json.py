@@ -68,7 +68,7 @@ GAME1_COLORS = ("red", "blue", "green", "yellow", "orange")
 MAX_DECAY_RATE = 65.0
 
 # Sections only the Pis read; the arbiter's JSON leaves them out.
-OVERLORD_ONLY = ("ambient_sounds", "players", "show_goals", "milestones")
+OVERLORD_ONLY = ("ambient_sounds", "players", "show_goals", "milestones", "shared")
 
 # Addressing a cue to a player: "shrine__audio_once_bell" is for the Pi named
 # shrine; no prefix is the Overlord's. Keep in step with overlord/players.py.
@@ -356,13 +356,13 @@ def validate(cfg):
 
     # One reaction: what an event, idle, every or at step does. Keys run in the
     # order spec.ACTION_KEYS lists them; goto only where an event moves the game.
-    def check_action(where, block, may_goto, timer=False):
+    def check_action(where, block, may_goto, timer=False, extra_keys=frozenset()):
         if block is None:
             return
         if not isinstance(block, dict):
             errors.append(f"{where}: must be a map of {', '.join(spec.ACTION_KEYS)}")
             return
-        allowed = set(spec.ACTION_KEYS) | ({"delay"} if timer else set())
+        allowed = set(spec.ACTION_KEYS) | ({"delay"} if timer else set()) | extra_keys
         for key in set(block) - allowed:
             errors.append(f"{where}: unknown key '{key}'; use {', '.join(sorted(allowed))}")
         if "goto" in block:
@@ -432,11 +432,22 @@ def validate(cfg):
                 errors.append(f"{name}.after: missing goto")
             if "delay" in after:
                 check_value(f"{name}.after.delay", after["delay"], "duration")
-        for key in ("idle", "every"):
-            block = state.get(key)
-            if block is not None:
-                check_timer(f"{name}.{key}", block)
-                check_action(f"{name}.{key}", block, may_goto=False, timer=True)
+        block = state.get("idle")
+        if block is not None:
+            check_timer(f"{name}.idle", block)
+            check_action(f"{name}.idle", block, may_goto=False, timer=True)
+        every = state.get("every")
+        if every is not None:
+            # one entry, or a list of them, each on its own clock and with an optional `if:`
+            entries = every if isinstance(every, list) else [every]
+            if len(entries) > spec.EVERY_MAX:
+                errors.append(f"{name}.every: at most {spec.EVERY_MAX} entries")
+            for i, entry in enumerate(entries):
+                where = f"{name}.every" + (f"[{i}]" if isinstance(every, list) else "")
+                check_timer(where, entry)
+                check_action(where, entry, may_goto=False, timer=True, extra_keys={"if"})
+                if isinstance(entry, dict) and "if" in entry and entry["if"] not in spec.EVERY_CONDITIONS:
+                    errors.append(f"{where}.if: must be one of {', '.join(spec.EVERY_CONDITIONS)}")
         at = state.get("at")
         if at is not None:
             if not isinstance(at, dict) or len(at) > AT_MAX:

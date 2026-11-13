@@ -269,6 +269,67 @@ SC_EVERY = (mini({
 }), sc_every_and_idle, [["audio_once_a"] * 4, 1])
 
 
+COLOR_CUES = {"game": ["game_reset_components"],
+              "audio_once": [f"audio_once_{c}_x" for c in COLORS]}
+
+
+def sc_nongoal_colors(E):
+    """A non-goal rope says its colour; a goal rope does not."""
+    E.take_cues()
+    goals = E.goals()
+    seen = []
+    for color in COLORS:
+        E.pull(chan(color))
+        E.wait(0.3)
+        want = [] if color in goals else [f"audio_once_{color}_x"]
+        if color == "purple":
+            want = ["audio_once_purple_x"]       # final_pull, not a colour of the majors
+        seen.append(E.take_cues() == want)
+    return seen
+
+SC_NONGOAL_COLORS = (mini({
+    "round": {"on": dict({"enter": {"goals": 4}},
+                         **{f"nongoal_{c}_pull": {"cue": [f"audio_once_{c}_x"]} for c in COLORS[:5]},
+                         final_pull={"cue": ["audio_once_purple_x"]})},
+}, cues=COLOR_CUES), sc_nongoal_colors, [True] * 6)
+
+
+def sc_every_if(E):
+    """Two `every` entries on their own clocks, each only while its `if` holds."""
+    E.take_cues()
+    E.wait(3.2)                                  # goals dealt, nothing charged
+    seen = [E.take_cues()]
+    burst(E, chan(E.goals()[0]), 6)              # fills the goal: it stays lit 15 s
+    E.take_cues()
+    E.wait(3.0)
+    seen.append(E.take_cues())
+    E.wait(20)                                   # drained again
+    E.take_cues()
+    E.wait(3.2)
+    seen.append(E.take_cues())
+    return seen
+
+SC_EVERY_IF = (mini({
+    "round": {"on": {"enter": {"goals": 1}},
+              "every": [{"delay": "1.5s", "if": "goal_active", "cue": ["audio_once_a"]},
+                        {"delay": "1.5s", "if": "no_goal_charge", "cue": ["audio_once_b"]}]},
+}), sc_every_if, [["audio_once_b"] * 2, ["audio_once_a"] * 2, ["audio_once_b"] * 2])
+
+
+def sc_counter_floor(E):
+    """A counter does not go below 0, so forgiveness cannot be banked."""
+    E.take_cues()
+    E.input("nongoal_pull")
+    E.input("nongoal_pull")
+    E.input("goal_pull")
+    return [E.take_cues()]
+
+SC_COUNTER_FLOOR = (mini({
+    "s": {"on": {"nongoal_pull": {"add": {"n": -1}}, "goal_pull": {"add": {"n": 1}},
+                 "n_reached": {"cue": ["audio_once_a"]}}},
+}, counters={"n": {"reach": 1}}), sc_counter_floor, [["audio_once_a"]])
+
+
 def sc_params(E):
     seen = [E.param("wait", 99), E.param("fixed", 5)]
     E.wait(10.1)                     # the running timer kept its 10 s
@@ -330,6 +391,8 @@ SCENARIOS = {
     "charge": SC_CHARGE, "simon": SC_SIMON, "pull_first": SC_PULL_FIRST,
     "counters": SC_COUNTERS, "reach_beats_goto": SC_REACH, "every_and_idle": SC_EVERY,
     "params": SC_PARAMS, "production": SC_PRODUCTION,
+    "nongoal_colors": SC_NONGOAL_COLORS, "every_if": SC_EVERY_IF,
+    "counter_floor": SC_COUNTER_FLOOR,
 }
 
 

@@ -48,10 +48,13 @@ static bool     s_idleOn = false;
 static uint32_t s_idleMs = 0;
 static uint32_t s_idleAt = 0;
 
-// The state's `every` block: runs every `delay` from entry, whatever happens.
-static bool     s_everyOn = false;
-static uint32_t s_everyMs = 0;
-static uint32_t s_everyAt = 0;
+// The state's `every` block, or list of blocks (at most MAX_EVERY): each runs
+// every `delay` from entry, on its own clock, whatever happens -- unless it has
+// an `if:` that is false at that moment, when that run is skipped.
+static const uint8_t MAX_EVERY = 4;
+static uint8_t  s_everyN = 0;
+static uint32_t s_everyMs[MAX_EVERY];
+static uint32_t s_everyAt[MAX_EVERY];
 
 // The state's `at` block: timed steps, each run once, `delay` after entry.
 // Bit i is entry i of the block, in file order.
@@ -210,6 +213,26 @@ static bool delayOf(JsonVariantConst v, uint32_t& ms) { return delayText(v.as<co
 static bool numberOf(JsonVariantConst v, float& out) {
     if (v.is<float>()) { out = v.as<float>(); return true; }
     return lookup(v.as<const char*>(), out);
+}
+
+// A state's `every` is one block or a list of them (spec.every_blocks).
+static uint8_t everyCount(JsonVariant every) {
+    if (every.isNull()) return 0;
+    size_t n = every.is<JsonArray>() ? every.size() : 1;
+    return n > MAX_EVERY ? MAX_EVERY : (uint8_t)n;
+}
+static JsonVariant everyEntry(JsonVariant every, uint8_t i) {
+    if (every.is<JsonArray>()) return every[i].as<JsonVariant>();
+    return every;
+}
+
+// An `every` entry's `if:` (playtest/spec.py EVERY_CONDITIONS). No `if` always holds.
+static bool everyHolds(JsonVariant condition) {
+    const char* c = condition.as<const char*>();
+    if (!c) return true;
+    if (strcmp(c, "goal_active") == 0)    return components_goal_active();
+    if (strcmp(c, "no_goal_charge") == 0) return components_goals_empty();
+    return false;
 }
 
 // Is this cue named under `cues`? Cues are sent by name, so that list is only a
@@ -436,17 +459,34 @@ static bool validate(JsonDocument& doc, String& why) {
             if (!ev.value()["goto"].isNull() &&
                 badGoto(where, ev.value()["goto"].as<const char*>())) return false;
         }
-        for (const char* key : {"idle", "every"}) {
-            JsonVariant block = state[key];
-            if (block.isNull()) continue;
-            String where = name + "." + key;
+        // idle is one block; every is one block or a list, each with an optional if:
+        auto badTimer = [&](const String& where, JsonVariant block, bool every) {
             uint32_t ms;
-            if (!delayOf(block["delay"], ms) || ms == 0) {
+            if (!block.is<JsonObject>() || !delayOf(block["delay"], ms) || ms == 0) {
                 why = where + ": delay must look like 10s, 1.5s or 2m (or a param), above 0";
+                return true;
+            }
+            if (!block["goto"].isNull()) { why = where + ": no goto here; use after"; return true; }
+            if (!block["if"].isNull()) {
+                const char* c = every ? block["if"].as<const char*>() : nullptr;
+                if (!c || (strcmp(c, "goal_active") != 0 && strcmp(c, "no_goal_charge") != 0)) {
+                    why = where + ".if: only an every entry has one: goal_active or no_goal_charge";
+                    return true;
+                }
+            }
+            return badAction(where, block);
+        };
+        if (!state["idle"].isNull() && badTimer(name + ".idle", state["idle"], false)) return false;
+        JsonVariant every = state["every"];
+        if (!every.isNull()) {
+            if (every.is<JsonArray>() && (every.size() == 0 || every.size() > MAX_EVERY)) {
+                why = name + ".every: a list of 1 to " + MAX_EVERY + " entries";
                 return false;
             }
-            if (!block["goto"].isNull()) { why = where + ": no goto here; use after"; return false; }
-            if (badAction(where, block)) return false;
+            for (uint8_t i = 0; i < everyCount(every); i++) {
+                String where = name + ".every" + (every.is<JsonArray>() ? "[" + String(i) + "]" : String(""));
+                if (badTimer(where, everyEntry(every, i), true)) return false;
+            }
         }
         JsonVariant at = state["at"];
         if (!at.isNull()) {
@@ -487,6 +527,7 @@ static int findCounter(const char* name) {
 // Set a counter; mark it in `reached` if that took it up to its mark.
 static void setCounter(uint8_t i, int32_t v, uint8_t& reached) {
     Counter& c = s_counters[i];
+    if (v < 0) v = 0;   // a count cannot go below none
     if (v == c.value) return;
     int32_t old = c.value;
     c.value = v;
@@ -500,6 +541,7 @@ static void setCounter(uint8_t i, int32_t v, uint8_t& reached) {
 
 // ── The machine ───────────────────────────────────────────────────────────────
 static void enter(const char* name);
+
 
 // `enter` marks cues a state fires on entry; the players treat those as
 // interrupting (see MESH_CUE_FLAG_ENTER). True in `dealt` if a cue dealt goals.
@@ -568,7 +610,7 @@ static void enter(const char* name) {
     s_enteredAt = millis();
     s_timerOn = false;
     s_idleOn  = false;
-    s_everyOn = false;
+    s_everyN  = 0;
     s_atDone  = 0;
     s_enters++;
 
@@ -599,10 +641,10 @@ static void enter(const char* name) {
         s_idleAt = s_enteredAt + s_idleMs;
         s_idleOn = true;
     }
-    JsonVariant every = state["every"];
-    if (!every.isNull() && delayOf(every["delay"], s_everyMs) && s_everyMs > 0) {
-        s_everyAt = s_enteredAt + s_everyMs;
-        s_everyOn = true;
+    s_everyN = everyCount(state["every"]);
+    for (uint8_t i = 0; i < s_everyN; i++) {   // slot i is entry i; a bad delay was refused on load
+        if (!delayOf(everyEntry(state["every"], i)["delay"], s_everyMs[i])) s_everyMs[i] = 0;
+        s_everyAt[i] = s_enteredAt + s_everyMs[i];
     }
 
     // State entry is represented in the YAML like other reactions, under
@@ -668,7 +710,7 @@ bool gamestate_load(const String& json, String& why) {
     s_state[0] = 0;
     s_timerOn = false;
     s_idleOn  = false;
-    s_everyOn = false;
+    s_everyN  = 0;
     installcfg_game_restore();   // a shuffle belonged to the old game
     devices_load(s_doc);
     Serial.printf(GAME_PREFIX " loaded '%s'\n", s_game);
@@ -763,10 +805,15 @@ static void timers() {
         act(step.value());
         if (s_enters != enters) return;   // that step's cue moved the machine on
     }
-    if (s_everyOn && (int32_t)(millis() - s_everyAt) >= 0) {
-        s_everyAt = millis() + s_everyMs;
+    for (uint8_t i = 0; i < s_everyN; i++) {
+        if (!s_everyMs[i] || (int32_t)(millis() - s_everyAt[i]) < 0) continue;
+        s_everyAt[i] = millis() + s_everyMs[i];
+        JsonVariant entry = everyEntry(s_doc["states"][s_state]["every"], i);
+        if (!everyHolds(entry["if"])) continue;
         record('T', "every in %s", s_state);
-        act(s_doc["states"][s_state]["every"]);
+        uint32_t enters = s_enters;
+        act(entry);
+        if (s_enters != enters) return;   // that entry's cue moved the machine on
     }
 }
 

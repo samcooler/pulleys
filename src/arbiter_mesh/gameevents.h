@@ -36,10 +36,17 @@ enum GameEvent : uint8_t {
     GE_GOAL_PULL,
     GE_NONGOAL_PULL,
     GE_FINAL_PULL,
+    // A pull of a major's rope that is not a goal, by its colour, after
+    // GE_NONGOAL_PULL. In colour order, so GE_NONGOAL_RED_PULL + colour index.
+    GE_NONGOAL_RED_PULL,
+    GE_NONGOAL_BLUE_PULL,
+    GE_NONGOAL_GREEN_PULL,
+    GE_NONGOAL_YELLOW_PULL,
+    GE_NONGOAL_ORANGE_PULL,
     GE_COUNT
 };
 
-inline bool gameevent_is_pull(GameEvent e) { return e >= GE_PULL && e <= GE_FINAL_PULL; }
+inline bool gameevent_is_pull(GameEvent e) { return e >= GE_PULL && e <= GE_NONGOAL_ORANGE_PULL; }
 
 inline const char* gameevent_name(GameEvent e) {
     static const char* const names[GE_COUNT] = {
@@ -56,6 +63,11 @@ inline const char* gameevent_name(GameEvent e) {
         "goal_pull",
         "nongoal_pull",
         "final_pull",
+        "nongoal_red_pull",
+        "nongoal_blue_pull",
+        "nongoal_green_pull",
+        "nongoal_yellow_pull",
+        "nongoal_orange_pull",
     };
     return e < GE_COUNT ? names[e] : "?";
 }

@@ -48,7 +48,11 @@ COMPONENT_EVENTS = (
 )
 # One per pull, before the pull's charge goes in: `pull` for any rope, then
 # the kind of rope it was.
-PULL_EVENTS = ("pull", "goal_pull", "nongoal_pull", "final_pull")
+# A pull of a major's rope that is not a goal also says which colour it was
+# (nongoal_red_pull ...), after `nongoal_pull`, so a state can answer each
+# colour its own way. Purple is `final_pull`.
+NONGOAL_COLOR_EVENTS = tuple(f"nongoal_{c}_pull" for c in COLORS[:MAJOR_COUNT])
+PULL_EVENTS = ("pull", "goal_pull", "nongoal_pull", "final_pull") + NONGOAL_COLOR_EVENTS
 KNOWN_EVENTS = frozenset(COMPONENT_EVENTS + PULL_EVENTS)
 
 # A state that reacts to any of these cares about goals, and only then does the
@@ -72,6 +76,21 @@ REACHED = "_reached"
 
 NAME = re.compile(r"[a-z][a-z0-9_]*")
 DURATION = re.compile(r"\s*(\d+(?:\.\d+)?)\s*(s|m)\s*")
+
+# What an `every` entry may ask of the room before it runs (`if:`).
+#   goal_active     some goal component is lit
+#   no_goal_charge  every goal component is empty (and goals are dealt)
+EVERY_CONDITIONS = ("goal_active", "no_goal_charge")
+EVERY_MAX = 4   # `every` may be a list of this many entries; keep in step with gamestate.cpp
+
+
+def every_blocks(state):
+    """The state's `every` entries: a map is one, a list is several."""
+    every = (state or {}).get("every")
+    if not every:
+        return []
+    return list(every) if isinstance(every, list) else [every]
+
 
 # The keys an action block may hold, in the order they run.
 ACTION_KEYS = ("set", "clear", "add", "colors", "goals", "cue", "goto")

@@ -45,6 +45,12 @@ EVENTS = {
     "final_component_activated": "a purple rope is pulled",
     "final_component_deactivated": "a purple component goes dark",
     "all_final_components_activated": "every purple rope lit",
+    "nongoal_red_pull": "a red rope is pulled and red is not a goal",
+    "nongoal_blue_pull": "a blue rope is pulled and blue is not a goal",
+    "nongoal_green_pull": "a green rope is pulled and green is not a goal",
+    "nongoal_yellow_pull": "a yellow rope is pulled and yellow is not a goal",
+    "nongoal_orange_pull": "an orange rope is pulled and orange is not a goal",
+    "final_pull": "a purple rope is pulled",
 }
 PURPLE_EVENTS = {e for e in EVENTS if e.startswith("final_") or e.startswith("all_final")}
 
@@ -222,11 +228,13 @@ class Doc:
                      f'<span>after {self.delay_html(name, "idle", idle["delay"])} without a pull, then every {esc(idle["delay"])}</span>'
                      f'<div class="timer-cues">{self.block_html(idle)}</div></div>'
                      if idle else "")
-        every = st.get("every")
-        every_html = (f'<div class="timer"><span class="tag t-idle">every</span>'
-                      f'<span>every {esc(every["delay"])} in this state, whatever happens</span>'
-                      f'<div class="timer-cues">{self.block_html(every)}</div></div>'
-                      if every else "")
+        every = st.get("every") or []
+        every_html = "".join(
+            f'<div class="timer"><span class="tag t-idle">every</span>'
+            f'<span>every {esc(e["delay"])} in this state'
+            f'{", while " + esc(e["if"].replace("_", " ")) if e.get("if") else ", whatever happens"}</span>'
+            f'<div class="timer-cues">{self.block_html(e)}</div></div>'
+            for e in (every if isinstance(every, list) else [every]))
         at = st.get("at") or {}
         at_html = "".join(f'<div class="timer"><span class="tag t-at">at</span>'
                           f'<span>{esc(delay)} into this state</span>'

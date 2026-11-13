@@ -186,6 +186,21 @@ static void publish(bool urgent) {
 
 void components_publish() { publish(true); }
 
+bool components_goal_active() {
+    return (litMajorMask(millis()) & s_goalMask) != 0;
+}
+
+bool components_goals_empty() {
+    if (!s_goalMask) return false;
+    uint32_t now = millis();
+    for (uint8_t i = 0; i < MAJOR_COUNT; i++) {
+        if (!(s_goalMask & (1u << i))) continue;
+        settle(s_major[i], now);
+        if (s_major[i].charge > 0.0f) return false;
+    }
+    return true;
+}
+
 static void resetAll() {
     memset(s_major, 0, sizeof(s_major));
     memset(s_final, 0, sizeof(s_final));
@@ -252,6 +267,9 @@ void components_on_mesh_event(const pulleys::MeshEvent& ev) {
         bool goal = (s_goalMask & (1u << idx)) != 0;
         gamestate_event(GE_PULL);
         gamestate_event(goal ? GE_GOAL_PULL : GE_NONGOAL_PULL);
+        uint8_t color = gamestate_major_color((uint8_t)idx);
+        if (!goal && color < GAME_MAJOR_COMPONENTS)   // game1 colours are 0-4, in event order
+            gamestate_event((GameEvent)(GE_NONGOAL_RED_PULL + color));
     }
 
     // Then the charge, where things stand now: a reaction may have recoloured

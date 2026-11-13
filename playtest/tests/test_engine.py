@@ -280,5 +280,144 @@ class Validation(unittest.TestCase):
             self.assertEqual(game_to_json.validate(spec.load(p)), [], p)
 
 
+class EveryValidation(unittest.TestCase):
+    def check(self, every):
+        cfg = {"game": "t", "start": "s",
+               "components": {"major": ["red", "blue", "green", "yellow", "orange"]},
+               "cues": {"audio_once": ["audio_once_a"]},
+               "states": {"s": {"every": every}}}
+        return game_to_json.validate(cfg)
+
+    def test_a_list_with_conditions_is_fine(self):
+        self.assertEqual(self.check([{"delay": "5s", "if": "goal_active", "cue": ["audio_once_a"]},
+                                     {"delay": "9s", "if": "no_goal_charge"}]), [])
+
+    def test_unknown_condition(self):
+        self.assertTrue(any("s.every[0].if" in e for e in
+                            self.check([{"delay": "5s", "if": "moon_up"}])))
+
+    def test_too_many_entries(self):
+        many = [{"delay": "5s"}] * (spec.EVERY_MAX + 1)
+        self.assertTrue(any("at most" in e for e in self.check(many)))
+
+    def test_if_belongs_to_every_only(self):
+        cfg = {"game": "t", "start": "s",
+               "components": {"major": ["red", "blue", "green", "yellow", "orange"]},
+               "cues": {"audio_once": ["audio_once_a"]},
+               "states": {"s": {"idle": {"delay": "5s", "if": "goal_active"}}}}
+        self.assertTrue(any("s.idle" in e and "if" in e for e in game_to_json.validate(cfg)))
+
+
+class Janis(unittest.TestCase):
+    """The installation's game: how Janis reacts in a round."""
+
+    def setUp(self):
+        self.cfg = spec.load(os.path.join(ROOT, "game_state_machine", "state_config.yaml"))
+        self.e, self.log = run(self.cfg, seed=3)
+        self.pull_until_round()
+
+    def pull_until_round(self):
+        self.e.pull(RED)
+        self.e.advance(0.1)
+        self.assertEqual(self.e.state, "easy_round")
+        self.log.clear()
+
+    def cues(self):
+        out = [r["name"] for r in self.log if r["kind"] == "cue"]
+        self.log.clear()
+        return out
+
+    def channel_of(self, color):
+        return 1 + spec.COLORS.index(color)
+
+    def stray_colors(self):
+        return [c for c in spec.COLORS[:5] if c not in self.e.goal_colors()]
+
+    def test_each_non_goal_lever_has_its_own_error(self):
+        for color in self.stray_colors():
+            self.e.pull(self.channel_of(color))
+            self.e.advance(0.3)
+            self.assertIn(f"audio_once_lever_{color}_error", self.cues())
+
+    def test_a_goal_lever_has_no_error(self):
+        goal = self.e.goal_colors()[0]
+        self.e.pull(self.channel_of(goal))
+        self.e.advance(0.3)
+        self.assertFalse([c for c in self.cues() if c.endswith("_error")])
+
+    def test_purple_errors_in_a_round(self):
+        self.e.pull(PURPLE_CH)
+        self.assertIn("audio_once_lever_purple_error", self.cues())
+
+    def test_annoyed_after_three_strays_and_goal_pulls_forgive(self):
+        stray = self.channel_of(self.stray_colors()[0])
+        goal = self.channel_of(self.e.goal_colors()[0])
+        annoyed = lambda cues: any("what_doing" in c or "anger_no" in c for c in cues)
+        for _ in range(2):
+            self.e.pull(stray)
+            self.e.advance(0.3)
+        self.assertFalse(annoyed(self.cues()))
+        self.e.pull(goal)                      # forgives one
+        self.e.advance(0.3)
+        self.e.pull(stray)
+        self.e.advance(0.3)
+        self.assertFalse(annoyed(self.cues()))
+        self.e.pull(stray)                     # the third net stray
+        self.e.advance(0.3)
+        self.assertEqual(self.e.counters["stray"], 0)   # it reached the limit and cleared
+        self.assertTrue(any(r["kind"] == "cue" and ("what_doing" in r["name"] or "anger_no" in r["name"])
+                            for r in self.log))
+
+    def test_strays_start_fresh_each_round(self):
+        stray = self.channel_of(self.stray_colors()[0])
+        self.e.pull(stray)
+        self.assertEqual(self.e.counters["stray"], 1)
+        self.e.react({"goto": "medium_round"})
+        self.assertEqual(self.e.counters["stray"], 0)
+
+    def test_nags_sooner_when_everything_is_idle(self):
+        self.e.advance(float(self.e.params["nag_delay"].value) + 0.5)
+        self.assertTrue(any("janis_nag_" in c for c in self.cues()))
+        self.assertLess(self.e.params["nag_delay"].value, 20)
+
+    def test_encourages_while_a_goal_is_lit(self):
+        # Medium has two goals, so lighting one leaves the round running (in easy,
+        # lighting its only goal wins the round at once).
+        self.e.react({"goto": "medium_round"})
+        goal = self.channel_of(self.e.goal_colors()[0])
+        for _ in range(6):
+            self.e.pull(goal)
+            self.e.advance(0.05)
+        self.assertEqual(self.e.state, "medium_round")
+        self.cues()
+        self.e.advance(self.e.params["encourage_every"].value + 0.5)
+        self.assertGreaterEqual(sum("encouragement_" in c for c in self.cues()), 1)
+
+    def test_no_encouragement_when_no_goal_is_lit(self):
+        self.e.react({"goto": "medium_round"})
+        self.cues()
+        self.e.advance(self.e.params["encourage_every"].value * 2 + 0.5)
+        self.assertFalse(any("encouragement_" in c for c in self.cues()))
+
+    def test_asks_for_productivity_when_no_goal_has_charge(self):
+        stray = self.channel_of(self.stray_colors()[0])
+        every = self.e.params["productivity_every"].value
+        for _ in range(int(every / 2.0) + 1):          # keep tweaking the wrong ones
+            self.e.pull(stray)
+            self.e.advance(2.0)
+        self.assertTrue(any("nag_maintain_" in c for c in self.cues()))
+
+    def test_no_productivity_ask_while_a_goal_has_charge(self):
+        goal = self.channel_of(self.e.goal_colors()[0])
+        every = self.e.params["productivity_every"].value
+        t = 0.0
+        while t < every * 2:
+            self.e.pull(goal)                          # a pull per 5 s never quite fills it
+            self.e.advance(5.0)
+            t += 5.0
+        self.assertEqual(self.e.state, "easy_round")
+        self.assertFalse(any("nag_maintain_" in c for c in self.cues()))
+
+
 if __name__ == "__main__":
     unittest.main()
