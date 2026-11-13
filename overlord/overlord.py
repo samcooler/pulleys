@@ -289,6 +289,13 @@ def main():
         ("audio_once_", "audio_once", sounds.play),
     ]
 
+    def cue_media(cue):
+        """The media files a cue may play, sorted (for the Gain tab's waveforms)."""
+        for prefix, folder, _action in prefixed:
+            if cue.startswith(prefix):
+                return players.media_files(MEDIA, folder, cue[len(prefix):], prefix)
+        return []
+
     def dispatch(event_name, enter=False):
         """Play the cue. Returns what it played (the media file's name), None if
         the name is no cue, False if there is no media for it, or "skipped" for
@@ -534,7 +541,7 @@ def main():
     if args.control_port:
         try:
             api = ControlServer(control, args.control_bind, args.control_port, firmware=firmware_updater, installation=installation,
-                            sessions=sessions, gains=gains)
+                            sessions=sessions, gains=gains, media=cue_media)
             api.start()
             print(f"control: http://{api.address[0]}:{api.address[1]}/status", flush=True)
         except OSError as e:  # the player matters more than its remote control

@@ -65,6 +65,20 @@ def _matching(d, stem):
         return []
 
 
+def media_files(root, folder, name, prefix=""):
+    """Every file a cue could play from <root>/<folder>/, sorted: those matching
+    the full cue name if there are any, else the bare name. The same files
+    find_media chooses among, without choosing."""
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        return []
+    d = Path(root) / folder
+    for stem in ([prefix + name] if prefix else []) + [name]:
+        matches = _matching(d, stem)
+        if matches:
+            return matches
+    return []
+
+
 def find_media(root, folder, name, prefix="", player=None):
     """The file for a cue in <root>/[<player>/]<folder>/, or None. Rejects path tricks.
 
