@@ -23,6 +23,14 @@ SCAN_INTERVAL_SECONDS = 10
 ONLINE_SECONDS = 180
 # Silent this long (or never heard) and the dashboard calls it simply "offline".
 OFFLINE_SECONDS = 2 * 3600
+# A device that has been offered an image must show a sign of life (an
+# FW-STATUS line, or a request for the next chunk) at least this often. Without
+# it the offer is abandoned long before the overall transfer timeout: a device
+# that is off, out of range or wedged used to hold the whole queue for ~5
+# minutes per attempt, three attempts, and a lost final status after a complete
+# download cost the same again. Chunks arrive many times a second, so this only
+# has to ride out a slow flash erase or a busy radio.
+OFFER_IDLE_SECONDS = 60
 
 
 class FirmwareUpdater:
@@ -41,6 +49,7 @@ class FirmwareUpdater:
         self._back_at = {}      # node -> when it last came back after being offline
         self._job_end = 0.0     # no scans run during a job, so silence across one means nothing
         self._transfer_target = None
+        self._activity = {}     # node -> (monotonic time of last sign of life, bytes served)
         self._lock = threading.RLock()
         self._inventory = {}
         self._statuses = {}
@@ -95,6 +104,7 @@ class FirmwareUpdater:
             node_id = fields.get("id", "").upper()
             with self._condition:
                 self._statuses[node_id] = fields
+                self._note_activity(node_id)
                 self._emit("status", node_id=node_id, **{k: v for k, v in fields.items() if k != "node_id"})
                 self._condition.notify_all()
             return True
@@ -102,6 +112,14 @@ class FirmwareUpdater:
             self._answer_chunk(line)
             return True
         return False
+
+    def _note_activity(self, node_id, served=None, reset=False):
+        """Record a sign of life from a device being flashed. `served` is the end
+        offset of the chunk just sent to it; `reset` starts a fresh offer."""
+        with self._condition:
+            _, before = self._activity.get(node_id, (0, 0))
+            self._activity[node_id] = (time.monotonic(),
+                                       0 if reset else max(before, served or 0))
 
     def _emit(self, kind, **fields):
         if self.observer:
@@ -241,6 +259,7 @@ class FirmwareUpdater:
                     break
                 with self._condition:
                     self._statuses.pop(node_id, None)
+                self._note_activity(node_id, reset=True)
                 self._emit("device", node_id=node_id, state="offering", attempt=attempt,
                            bytes=0, total=table[env]["size"])
                 if not self.serial.write_line(command):
@@ -251,7 +270,10 @@ class FirmwareUpdater:
                 # Keep a conservative timeout for legacy 115200-baud bridges
                 # while newer bridges use 921600 baud and 4 KiB chunks.
                 timeout = max(180, table[env]["size"] / 4000 + 60)
-                status = self._wait_status(node_id, timeout)
+                # Our own bridge is updated over the UART and answers nothing
+                # until it reboots, so only the mesh devices get the idle limit.
+                status = self._wait_status(node_id, timeout, size=table[env]["size"],
+                                           idle=None if is_own_bridge else OFFER_IDLE_SECONDS)
                 if status and status.get("state") == "cancelled":
                     results[node_id] = {"state": "cancelled", "message": "cancelled while downloading; the device keeps its current firmware"}
                     self._emit("device", node_id=node_id, **results[node_id])
@@ -300,6 +322,7 @@ class FirmwareUpdater:
                 results[node_id] = {"state": "failed", "error":
                                     "reboot identity not confirmed" if status and status.get("state") == "ok"
                                     else f"update failed ({status.get('err', 'unknown')})" if status
+                                    else "device did not respond to the offer" if self._activity.get(node_id, (0, 0))[1] == 0
                                     else "update timed out"}
                 self._emit("device", node_id=node_id, **results[node_id])
                 if attempt < 3:
@@ -307,7 +330,12 @@ class FirmwareUpdater:
         self._transfer_target = None
         return results
 
-    def _wait_status(self, node_id, seconds):
+    def _wait_status(self, node_id, seconds, size=None, idle=None):
+        """Wait for a device's final FW-STATUS: `seconds` at most, and, with `idle`,
+        not past that long without a sign of life from it. If it goes quiet after
+        being served the whole image, its install may well have happened with only
+        the status lost, so that case is returned as "ok" and left to the
+        hash check that follows; any other silence returns None."""
         end = time.monotonic() + seconds
         with self._condition:
             while time.monotonic() < end:
@@ -316,7 +344,20 @@ class FirmwareUpdater:
                     return value
                 if self._cancel:
                     return {"state": "cancelled"}
-                self._condition.wait(max(0, end - time.monotonic()))
+                wait = end - time.monotonic()
+                if idle is not None:
+                    last, served = self._activity.get(node_id, (0, 0))
+                    quiet = time.monotonic() - last
+                    if quiet >= idle:
+                        if size and served >= size:
+                            print(f"firmware: {node_id} sent no status after a complete download; "
+                                  f"checking its build", flush=True)
+                            return {"state": "ok", "inferred": "status lost"}
+                        print(f"firmware: {node_id} silent for {idle}s after {served} bytes; giving up this attempt",
+                              flush=True)
+                        return None
+                    wait = min(wait, idle - quiet)
+                self._condition.wait(max(0, wait))
         return None
 
     def _wait_inventory(self, node_id, seconds, expected=None, after=0):
@@ -351,6 +392,7 @@ class FirmwareUpdater:
                 chunk = stream.read(length)
             encoded = base64.b64encode(chunk).decode("ascii")
             if self.serial.write_line(f"FW-DATA sha256={digest} offset={offset} crc32={zlib.crc32(chunk):08x} b64={encoded}"):
+                self._note_activity(self._transfer_target, served=offset + len(chunk))
                 self._emit("progress", node_id=self._transfer_target, bytes=offset + len(chunk), sha256=digest)
         except Exception as exc:
             self.serial.write_line(f"FW-ERROR sha256={digest} offset={fields.get('offset','?')} reason=unavailable")

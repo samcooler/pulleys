@@ -7,7 +7,7 @@ Events (one per line):
   video_loop_<name>  switch the background video loop to media/video_loops/<name>.*
   audio_loop_<name>  switch the background audio loop to media/audio_loops/<name>.*
   audio_loop_off     stop the background audio loop
-  audio_bed_<name>   a second background loop, under audio_loop_*, from media/audio_beds/<name>.*
+  audio_bed_<name>   a second background loop, under audio_loop_*, from media/audio_loops/<name>.*
                      (a cue for a bed already playing leaves it running)
   audio_bed_off      stop the bed
   cue <name>         the arbiter's game fired a cue; play <name> as above (what the bridge sends)
@@ -277,7 +277,7 @@ def main():
     prefixed = [
         ("video_loop_", "video_loops", set_video_loop),
         ("audio_loop_", "audio_loops", set_audio_loop),
-        ("audio_bed_", "audio_beds", set_audio_bed),
+        ("audio_bed_", "audio_loops", set_audio_bed),
         ("video_once_", "video_once", play_clip),
         ("audio_once_", "audio_once", sounds.play),
     ]
