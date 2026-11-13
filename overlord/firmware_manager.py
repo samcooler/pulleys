@@ -8,7 +8,8 @@ import threading
 import time
 import uuid
 
-from firmware import ACTIVE_ENVS, OPTIONAL_ENVS, CACHE, FirmwareUpdater
+from firmware import (ACTIVE_ENVS, OPTIONAL_ENVS, CACHE, FirmwareUpdater,
+                      ONLINE_SECONDS, ONLINE_SECONDS_DURING_JOB)
 
 ENVS = ACTIVE_ENVS | OPTIONAL_ENVS
 MAX_IMAGE = 7 * 1024 * 1024
@@ -55,6 +56,7 @@ class FirmwareManager:
         self._logs = []
         self._active = None
         self._sequence = 0
+        self._saved_at = 0.0
         self._last_progress_log = {}
         self._load()
 
@@ -95,6 +97,7 @@ class FirmwareManager:
                  "jobs": self._jobs[-100:], "logs": self._logs[-500:],
                  "inventory": self.transport._inventory, "last_seen": self.transport._last_seen,
                  "assets": {key: str(path.relative_to(self.cache)) for key, path in self.transport._assets.items()}}
+        self._saved_at = time.monotonic()
         temporary = self.cache / "dashboard.json.tmp"
         temporary.write_text(json.dumps(state))
         temporary.replace(self.cache / "dashboard.json")
@@ -457,10 +460,11 @@ class FirmwareManager:
     def snapshot(self):
         with self._lock:
             now = time.time()
+            window = ONLINE_SECONDS_DURING_JOB if self._active else ONLINE_SECONDS
             devices = []
             for node_id, fields in sorted(self.transport._inventory.items()):
                 node = dict(fields, id=node_id, last_seen=self.transport._last_seen.get(node_id))
-                node["online"] = bool(node["last_seen"] and now - node["last_seen"] < 90)
+                node["online"] = bool(node["last_seen"] and now - node["last_seen"] < window)
                 node["release_ids"] = [release["id"] for release in self._releases.values()
                                        if release["manifest"].get(node.get("env"), {}).get("build_hash") == node.get("sha256")]
                 devices.append(node)
@@ -527,7 +531,7 @@ class FirmwareManager:
             job, signalled = None, True
             with self._wake:
                 if self._paused or not self._pending:
-                    signalled = self._wake.wait(30)
+                    signalled = self._wake.wait(0.3)
                 if self._stop.is_set():
                     break
                 if self._pending and not self._paused:
@@ -535,14 +539,16 @@ class FirmwareManager:
                     job = next(row for row in self._jobs if row["id"] == job_id)
             if job is None:
                 if not signalled:
-                    # Idle for 30 s: passive discovery shares this worker, so it
-                    # never issues control traffic in the middle of a transfer.
+                    # Nothing to flash: scan the mesh, over and over. This shares
+                    # the worker, so it never puts control traffic in the middle
+                    # of a transfer.
                     try:
                         self.transport.begin_job()
-                        self.transport.discover(timeout=5)
-                        with self._lock:
-                            self._save()
+                        self.transport.scan()
+                        if time.monotonic() - self._saved_at >= 30:
+                            with self._lock:
+                                self._save()
                     except Exception:
-                        pass
+                        time.sleep(1)   # e.g. no bridge: do not spin
                 continue
             self._run_job(job)

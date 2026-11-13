@@ -69,6 +69,27 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(snapshot["jobs"][0]["state"], "interrupted")
         self.assertEqual(snapshot["devices"][0]["id"], "59A4")
 
+    def test_online_means_heard_within_a_few_scans_and_widens_during_a_job(self):
+        node = lambda: next(row for row in self.manager.snapshot()["devices"] if row["id"] == "59A4")
+        self.manager.transport._last_seen["59A4"] = time.time() - 5
+        self.assertTrue(node()["online"])
+        self.manager.transport._last_seen["59A4"] = time.time() - 30
+        self.assertFalse(node()["online"])
+        self.manager._active = "job"      # no scans run during a job, so be patient
+        self.assertTrue(node()["online"])
+
+    def test_scan_asks_for_one_census_and_does_nothing_without_a_bridge(self):
+        sent = []
+        class Quiet:
+            connected = True
+            def write_line(self, line): sent.append(line); return True
+        transport = FirmwareManager(Quiet(), cache=self.directory.name).transport
+        transport.scan(spread_ms=100)
+        self.assertEqual(sent, ["FW-CENSUS spread=100"])
+        Quiet.connected = False
+        transport.scan(spread_ms=100)
+        self.assertEqual(len(sent), 1)
+
     def test_built_at_must_be_a_unix_timestamp(self):
         manifest, _ = fixture()
         for bad in ("2025-11-12", 0, -5, 1.5, True):

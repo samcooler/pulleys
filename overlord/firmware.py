@@ -11,6 +11,17 @@ CACHE = Path(os.environ.get("OVERLORD_FIRMWARE_CACHE",
                             str(Path.home() / ".cache" / "overlord" / "firmware")))
 
 
+# The background scan: replies are spread over this window (ms) so a few dozen
+# boards do not answer at once, and a scan starts as the last one ends.
+SCAN_SPREAD_MS = 2000
+# A device is online if it has answered (or reported) within this many seconds:
+# about four scans, so one or two lost replies do not flicker it offline.
+ONLINE_SECONDS = 12
+# While a firmware job runs no scans are made (they would share the radio with the
+# transfer), so everything not being flashed keeps its status for longer.
+ONLINE_SECONDS_DURING_JOB = 90
+
+
 class FirmwareUpdater:
     """Coordinate firmware updates over the bridge. Images are pushed to the
     Overlord (see FirmwareManager); nothing is downloaded from the internet.
@@ -150,6 +161,14 @@ class FirmwareUpdater:
         with self._condition:
             return {key: dict(value) for key, value in self._inventory.items()
                     if self._last_seen.get(key, 0) >= started}
+
+    def scan(self, spread_ms=SCAN_SPREAD_MS):
+        """One light census: ask everyone once, wait out the reply window. Cheap
+        enough to repeat every couple of seconds; discover() is the thorough one."""
+        if not self.serial.connected:
+            return
+        self.serial.write_line(f"FW-CENSUS spread={spread_ms}")
+        self._settle(spread_ms / 1000 + 0.5)
 
     def update_release(self, release, device_ids=None, env=None):
         fresh = self.discover()
