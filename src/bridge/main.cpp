@@ -6,6 +6,7 @@
 #include <pulleys_ota.h>
 #include <pulleys_census.h>
 #include <pulleys_fw_serial.h>
+#include <pulleys_fw_pipe.h>
 #include <WebServer.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
@@ -75,6 +76,12 @@
 #ifndef BRIDGE_BAUD
   #define BRIDGE_BAUD   pulleys::FW_SERIAL_BAUD
 #endif
+// Ask the Pi for firmware chunk N+1 while chunk N is still going out (see
+// pulleys_fw_pipe.h): about a third faster than one at a time. -D BRIDGE_PIPELINE=0
+// goes back to strictly one at a time, as a fallback if it ever misbehaves.
+#ifndef BRIDGE_PIPELINE
+  #define BRIDGE_PIPELINE 1
+#endif
 
 // Where the Pi's lines go, and whether the console shares that port.
 #if BRIDGE_PI_USB
@@ -97,12 +104,21 @@ static bool fwOfferActive = false;
 // Shared by the HTTP stream and self-update, which run one at a time. These
 // buffers cannot live on the 8 KiB Arduino loop stack with 4 KiB chunks.
 static uint8_t fwChunkBuffer[pulleys::FW_CHUNK_BYTES];
+static uint8_t fwChunkBuffer2[pulleys::FW_CHUNK_BYTES];   // the chunk arriving while fwChunkBuffer's goes out
 static char fwChunkLine[pulleys::FW_LINE_BYTES];
+// The Pi has told us to stop (it cancelled the update): do not retry, give up now.
+static bool fwRefused = false;
 static void drainQueue();
 
-static bool requestFirmwareChunkOnce(uint32_t offset, uint8_t* out, size_t want, size_t& got) {
+// Ask the Pi for a chunk. Does not wait: the answer is read by receiveFirmwareChunk,
+// and meanwhile the serial driver buffers it on its own.
+static void sendFirmwareChunkRequest(uint32_t offset, size_t want) {
     PI_LINK.printf("FW-READ sha256=%s offset=%lu length=%u\n", fwSha,
                    (unsigned long)offset, (unsigned)want);
+}
+
+// Wait for the answer to a request for `offset`, and check it (base64, length, CRC).
+static bool receiveFirmwareChunk(uint32_t offset, uint8_t* out, size_t want, size_t& got) {
     char* line = fwChunkLine;
     uint32_t start = millis();
     size_t used = 0;
@@ -137,6 +153,15 @@ static bool requestFirmwareChunkOnce(uint32_t offset, uint8_t* out, size_t want,
                     got = decoded;
                     return true;
                 }
+                if (strncmp(line, "FW-ERROR ", 9) == 0 && strstr(line, fwSha)) {
+                    // The Pi cannot or will not serve this chunk. If it is the one we are
+                    // waiting for, stop waiting at once instead of timing out; a cancel is final.
+                    const char* off = strstr(line, "offset=");
+                    if (off && strtoul(off + 7, nullptr, 10) == offset) {
+                        if (strstr(line, "reason=cancelled")) fwRefused = true;
+                        return false;
+                    }
+                }
                 used = 0;
             } else if (used < pulleys::FW_LINE_BYTES - 1) {
                 line[used++] = c;
@@ -151,15 +176,33 @@ static bool requestFirmwareChunkOnce(uint32_t offset, uint8_t* out, size_t want,
     return false;
 }
 
+static bool requestFirmwareChunkOnce(uint32_t offset, uint8_t* out, size_t want, size_t& got) {
+    sendFirmwareChunkRequest(offset, want);
+    return receiveFirmwareChunk(offset, out, want, got);
+}
+
 static bool requestFirmwareChunk(uint32_t offset, uint8_t* out, size_t want, size_t& got) {
     // Chunks are addressed by offset, so requesting one again is safe. Recover
     // from a lost USB control record before the node's HTTP read times out.
-    for (uint8_t attempt = 0; attempt < 3; ++attempt) {
+    for (uint8_t attempt = 0; attempt < 3 && !fwRefused; ++attempt) {
         got = 0;
         if (requestFirmwareChunkOnce(offset, out, want, got) && got == want) return true;
     }
     return false;
 }
+
+// The serial link to the Pi, as pulleys::ChunkPipe wants it (see pulleys_fw_pipe.h).
+struct FirmwareLink {
+    void request(uint32_t offset, size_t want) { sendFirmwareChunkRequest(offset, want); }
+    bool receive(uint32_t offset, uint8_t* out, size_t want) {
+        size_t got = 0;
+        return receiveFirmwareChunk(offset, out, want, got) && got == want;
+    }
+    bool fetch(uint32_t offset, uint8_t* out, size_t want) {
+        size_t got = 0;
+        return requestFirmwareChunk(offset, out, want, got) && got == want;
+    }
+};
 
 static void serveFirmware() {
     String requested = fwServer.uri();
@@ -172,21 +215,23 @@ static void serveFirmware() {
     fwServer.setContentLength(fwSize);
     fwServer.send(200, "application/octet-stream", "");
     WiFiClient client = fwServer.client();
-    uint8_t* data = fwChunkBuffer;
+    fwRefused = false;
+    FirmwareLink link;
+    pulleys::ChunkPipe<FirmwareLink> pipe(link, fwChunkBuffer, fwChunkBuffer2,
+                                          pulleys::FW_CHUNK_BYTES, fwSize, BRIDGE_PIPELINE);
     uint32_t offset = 0;
-    while (offset < fwSize && client.connected()) {
-        size_t want = fwSize - offset;
-        if (want > pulleys::FW_CHUNK_BYTES) want = pulleys::FW_CHUNK_BYTES;
-        size_t got = 0;
-        if (!requestFirmwareChunk(offset, data, want, got) || got > want) break;
-        size_t sent = 0;
-        while (sent < got && client.connected()) {
-            size_t n = client.write(data + sent, got - sent);
-            if (!n) break;
-            sent += n;
-        }
-        if (sent != got) break;
-        offset += got;
+    if (pipe.first()) {
+        do {
+            pipe.prefetch();   // the next chunk starts arriving over the serial link while this one goes out over WiFi
+            size_t sent = 0;
+            while (sent < pipe.length() && client.connected()) {
+                size_t n = client.write(pipe.data() + sent, pipe.length() - sent);
+                if (!n) break;
+                sent += n;
+            }
+            if (sent != pipe.length()) break;
+            offset += sent;
+        } while (client.connected() && pipe.next());
     }
     Serial.printf("[FW] HTTP served %lu/%lu bytes\n", (unsigned long)offset,
                   (unsigned long)fwSize);
@@ -204,11 +249,16 @@ static void benchmarkFirmware(char* command) {
     mbedtls_sha256_init(&hash);
     mbedtls_sha256_starts_ret(&hash, 0);
     uint32_t started = millis(), offset = 0;
-    while (offset < size) {
-        size_t want = min((size_t)(size - offset), pulleys::FW_CHUNK_BYTES), got = 0;
-        if (!requestFirmwareChunk(offset, fwChunkBuffer, want, got)) break;
-        mbedtls_sha256_update_ret(&hash, fwChunkBuffer, got);
-        offset += got;
+    fwRefused = false;
+    FirmwareLink link;
+    pulleys::ChunkPipe<FirmwareLink> pipe(link, fwChunkBuffer, fwChunkBuffer2,
+                                          pulleys::FW_CHUNK_BYTES, size, BRIDGE_PIPELINE);
+    if (pipe.first()) {
+        do {
+            pipe.prefetch();
+            mbedtls_sha256_update_ret(&hash, pipe.data(), pipe.length());
+            offset += pipe.length();
+        } while (pipe.next());
     }
     uint8_t sum[32]; char actual[65];
     mbedtls_sha256_finish_ret(&hash, sum);
@@ -259,20 +309,24 @@ static void updateBridgeSelf(uint32_t size, const char* sha) {
     mbedtls_sha256_context hash;
     mbedtls_sha256_init(&hash);
     mbedtls_sha256_starts_ret(&hash, 0);
-    uint8_t* buf = fwChunkBuffer;
     uint32_t off = 0;
-    bool ok = true;
-    while (off < size) {
-        size_t want = size - off;
-        if (want > pulleys::FW_CHUNK_BYTES) want = pulleys::FW_CHUNK_BYTES;
-        size_t got = 0;
-        if (!requestFirmwareChunk(off, buf, want, got) || got > want ||
-            Update.write(buf, got) != got) { ok = false; break; }
-        mbedtls_sha256_update_ret(&hash, buf, got);
-        off += got;
-        if (off == size || off / 65536 != (off - got) / 65536)
-            PI_LINK.printf("FW-STATUS id=%04X env=" PULLEYS_ENV " state=downloading offset=%lu\n",
-                           pulleys::identity_id(), (unsigned long)off);
+    fwRefused = false;
+    FirmwareLink link;
+    pulleys::ChunkPipe<FirmwareLink> pipe(link, fwChunkBuffer, fwChunkBuffer2,
+                                          pulleys::FW_CHUNK_BYTES, size, BRIDGE_PIPELINE);
+    bool ok = pipe.first();
+    if (ok) {
+        do {
+            pipe.prefetch();   // the next chunk arrives over the serial link while this one is written to flash
+            size_t got = pipe.length();
+            if (Update.write(pipe.data(), got) != got) { ok = false; break; }
+            mbedtls_sha256_update_ret(&hash, pipe.data(), got);
+            off += got;
+            if (off == size || off / 65536 != (off - got) / 65536)
+                PI_LINK.printf("FW-STATUS id=%04X env=" PULLEYS_ENV " state=downloading offset=%lu\n",
+                               pulleys::identity_id(), (unsigned long)off);
+        } while (pipe.next());
+        if (pipe.failed()) ok = false;
     }
     uint8_t digest[32];
     mbedtls_sha256_finish_ret(&hash, digest);
@@ -479,8 +533,8 @@ static void handlePiLine(char* buf) {
     if (strncmp(buf, "FW-BENCH ", 9) == 0) { benchmarkFirmware(buf + 9); return; }
     if (strncmp(buf, "FW-", 3) == 0) startFirmwareHost();
     if (strncmp(buf, "FW-PING", 7) == 0) {
-        PI_LINK.printf("FW-BRIDGE id=%04X env=" PULLEYS_ENV " sha256=%s baud=%lu chunk=%u\n",
-                       pulleys::identity_id(), pulleys::whoami_firmware_hash(), (unsigned long)BRIDGE_BAUD, (unsigned)pulleys::FW_CHUNK_BYTES);
+        PI_LINK.printf("FW-BRIDGE id=%04X env=" PULLEYS_ENV " sha256=%s baud=%lu chunk=%u pipe=%d\n",
+                       pulleys::identity_id(), pulleys::whoami_firmware_hash(), (unsigned long)BRIDGE_BAUD, (unsigned)pulleys::FW_CHUNK_BYTES, (int)BRIDGE_PIPELINE);
     } else if (strncmp(buf, "FW-CENSUS", 9) == 0 ||
                strncmp(buf, "FW-QUERY", 8) == 0) {
         int spread = 3000;
@@ -643,8 +697,8 @@ void setup() {
 
     pulleys::census_set_detail(BRIDGE_PI_USB ? "usb" : "uart1");
     pulleys::whoami_reply();
-    PI_LINK.printf("FW-BRIDGE id=%04X env=" PULLEYS_ENV " sha256=%s baud=%lu chunk=%u\n",
-                   pulleys::identity_id(), pulleys::whoami_firmware_hash(), (unsigned long)BRIDGE_BAUD, (unsigned)pulleys::FW_CHUNK_BYTES);
+    PI_LINK.printf("FW-BRIDGE id=%04X env=" PULLEYS_ENV " sha256=%s baud=%lu chunk=%u pipe=%d\n",
+                   pulleys::identity_id(), pulleys::whoami_firmware_hash(), (unsigned long)BRIDGE_BAUD, (unsigned)pulleys::FW_CHUNK_BYTES, (int)BRIDGE_PIPELINE);
     Serial.println("Bridge ready — forwarding mesh events to the Pi.\n");
 }
 

@@ -160,6 +160,19 @@ re-probes after its own bridge's successful self-update ACK. Upgrade Overlord
 first; old bridges continue using 115200 baud and 384-byte requests during
 migration. Native USB CDC does not have the UART rate limit.
 
+**Pipelined chunks.** A bridge asks the Overlord for chunk N+1 *before* it hands chunk
+N on (over WiFi to a node, or to its own flash), so the serial transfer overlaps the
+hand-off instead of adding to it. Measured before this, at 921600 baud one chunk took
+about 176 ms (about 60 ms on the wire plus about 116 ms of WiFi and device flash
+writes): 23 KB/s. Overlapped, the cycle is the slower of the two, so about 35 KB/s is
+expected. Nothing changes for the Overlord: it answers each `FW-READ` by offset, as
+before. The bridge reports `pipe=1` in its `FW-BRIDGE` line (`pipe=0` for a build
+made with `-D BRIDGE_PIPELINE=0`, which goes back to one chunk at a time). If the
+answer to a prefetched chunk is lost or damaged the bridge simply asks again, so
+pipelining can only fall back to the old behaviour. A bridge also stops waiting at
+once when the Overlord answers `FW-ERROR` for the chunk it asked for (a cancelled
+job), instead of timing out three times.
+
 Each `FW-DATA` record now includes `crc32=<8 hex digits>` before its final `b64`
 field. Old bridges ignore the extra field; new bridges check it and retry a
 corrupted chunk up to three times. The 4 KiB binary buffer and ~5.6 KiB line
