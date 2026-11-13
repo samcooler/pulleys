@@ -10,6 +10,18 @@ const releaseLabel = row => row?.built_at ? built(row.built_at) : row?.tag || ''
 const age = timestamp => {if (!timestamp) return 'Never'; const n = Math.max(0, Math.floor(Date.now()/1000-timestamp)); return n < 5 ? 'Just now' : n < 60 ? `${n}s ago` : n < 3600 ? `${Math.floor(n/60)}m ago` : `${Math.floor(n/3600)}h ago`;};
 const badge = value => `<span class="badge ${esc(value)}">${esc(value.replaceAll('_',' '))}</span>`;
 const release = () => state?.releases.find(row => row.id === selected);
+// The image a device of this environment should be running: the selected release's own, or, when that
+// release was a partial flash without this environment, the newest older release that has one.
+// Releases arrive newest first, so a role you did not reflash stays current on its last image.
+function imageFor(env) {
+  const releases = state?.releases || [], start = releases.findIndex(row => row.id === selected);
+  if (start < 0) return undefined;
+  for (const row of releases.slice(start)) {
+    const image = row.manifest[env];
+    if (image) return {...image, release_id: row.id};
+  }
+  return undefined;
+}
 function notify(message, error=false) {$('notice').textContent=message; $('notice').className=error?'error':''; $('notice').hidden=false;}
 async function api(path='', options={}) {
   const response = await fetch(`/api/firmware${path}`, options);
@@ -29,9 +41,8 @@ async function action(path, body={}) {
 }
 function renderButtons() {
   $('scan').disabled=posting || !state;
-  const target = release();
   const outdated = state?.devices.some(node => {
-    const image=target?.manifest[node.env];
+    const image=imageFor(node.env);
     return node.online && image?.uploaded && node.sha256!==image.build_hash;
   });
   $('update-all').disabled=posting || !outdated;
@@ -65,17 +76,16 @@ function render() {
   releaseOptionsKey=nextReleaseOptionsKey;
   }
   if($('release').value!==selected) $('release').value=selected;
-  const target = release();
   $('connection').className=`connection${state.bridge.connected?'':' offline'}`;
   $('connection').innerHTML=`<span class="dot${state.bridge.connected?' green':''}"></span> ${state.bridge.connected?'USB linked':'Bridge disconnected'}${state.bridge.id?' · '+esc(state.bridge.id):''}`;
   $('device-count').textContent=state.devices.length;
   // Devices that have gone quiet sink to the bottom; otherwise the order stays as the Overlord gave it.
   // Quiet devices sink to the bottom. One that has just come back and needs an update goes to the very top.
-  const needsUpdate=n=>{const image=target?.manifest[n.env]; return !!(n.online&&image?.uploaded&&n.sha256!==image.build_hash);};
+  const needsUpdate=n=>{const image=imageFor(n.env); return !!(n.online&&image?.uploaded&&n.sha256!==image.build_hash);};
   const rank=n=>needsUpdate(n)&&n.returned_at?0:n.online?1:2;
   const devices=[...state.devices].sort((a,b)=>rank(a)-rank(b)||(rank(a)===0?b.returned_at-a.returned_at:0));
   $('devices').innerHTML=devices.length?devices.map(node=>{
-    const image=target?.manifest[node.env], work=latestDeviceWork(node.id), status=deviceStatus(node,image,work);
+    const image=imageFor(node.env), work=latestDeviceWork(node.id), status=deviceStatus(node,image,work);
     const known=releases.find(row=>node.release_ids.includes(row.id));
     const percent=work?.total?Math.min(100, Math.floor((work.bytes||0)/work.total*100)):0;
     const active=work?.job.state==='running' && !['confirmed','skipped','failed'].includes(work.state);
@@ -119,7 +129,18 @@ async function refresh() {
 $('queue').addEventListener('toggle',event=>{if(event.target.matches('details.waiting')) queueOpen=event.target.open;},true);
 $('release').addEventListener('change',()=>{selected=$('release').value; localStorage.setItem('overlord-release',selected); render();});
 $('scan').addEventListener('click',()=>action('/scan'));
-$('update-all').addEventListener('click',()=>action('/updates',{release_id:selected,all:true}));
+$('update-all').addEventListener('click',async()=>{
+  // Outdated devices may need images from different releases; queue one job per release.
+  const byRelease = new Map();
+  for (const node of state.devices) {
+    const image = imageFor(node.env);
+    if (node.online && image?.uploaded && node.sha256 !== image.build_hash) {
+      if (!byRelease.has(image.release_id)) byRelease.set(image.release_id, []);
+      byRelease.get(image.release_id).push(node.id);
+    }
+  }
+  for (const [release_id, device_ids] of byRelease) await action('/updates', {release_id, device_ids});
+});
 async function control(path, message, method='POST', body={}) {
   if (posting) return;
   posting=true; renderButtons();
@@ -135,7 +156,7 @@ document.addEventListener('click',event=>{
   const expand=event.target.closest('[data-expand]'), update=event.target.closest('[data-update]'), retry=event.target.closest('[data-retry]'), cancel=event.target.closest('[data-cancel]');
   if(cancel){const job=state.jobs.find(row=>row.id===cancel.dataset.cancel); if(job?.state!=='running'||confirm('Stop this update now? The device being flashed keeps its current firmware.')) control(`/jobs/${encodeURIComponent(cancel.dataset.cancel)}/cancel`,'Cancelling…');}
   if(expand){const id=expand.dataset.expand; expanded.has(id)?expanded.delete(id):expanded.add(id); render();}
-  if(update) action('/updates',{release_id:selected,device_ids:[update.dataset.update]});
+  if(update){const node=state.devices.find(d=>d.id===update.dataset.update); action('/updates',{release_id:imageFor(node?.env)?.release_id||selected,device_ids:[update.dataset.update]});}
   if(retry) action(`/jobs/${encodeURIComponent(retry.dataset.retry)}/retry`);
 });
 $('upload-form').addEventListener('submit',async event=>{
