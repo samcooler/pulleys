@@ -62,6 +62,11 @@ enum : uint8_t {
     MESH_MSG_GAME_PARAM   = 0xA3,   // bridge (from its Pi): tune the game
     MESH_MSG_INSTALL_REQ  = 0xA4,   // bounded JSON request to the arbiter
     MESH_MSG_INSTALL_RES  = 0xA5,   // correlated installation response chunks
+    // Body: ASCII rope channel number. The Overlord's debug lever button, through
+    // its bridge: the arbiter plays it into the game as a pull on that channel,
+    // as if a sensor had sent it. Not logged as a sensor event, and ignored while
+    // the mapping screen holds the ropes.
+    MESH_MSG_GAME_PULL    = 0xA6,   // bridge (from its Pi): pull a rope by hand
 };
 
 // Clock sync: every node beacons its own mesh clock, and each listener pulls a

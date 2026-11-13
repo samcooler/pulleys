@@ -117,6 +117,26 @@ static void ropePulled(const pulleys::MeshEvent& ev) {
     components_on_mesh_event(ev);
 }
 
+// A debug pull from the Overlord's installation page (MESH_MSG_GAME_PULL, body
+// the channel in ASCII): played into the game like a sensor's pull, so it
+// charges, lights, fires cues and reaches the play log. Not a sensor event, so it
+// is not logged to the SD card and never reaches the mapping screen, which would
+// take it for a rope; while that screen holds the ropes, it is dropped.
+static void onDebugPull(const pulleys::MeshFlood& f, bool /*relayed*/) {
+    char body[8];
+    uint8_t n = f.len < sizeof(body) - 1 ? f.len : sizeof(body) - 1;
+    memcpy(body, f.body, n);
+    body[n] = 0;
+    int channel = atoi(body);
+    if (channel < 1 || channel >= pulleys::CHANNEL_COUNT || installui_is_open()) return;
+    pulleys::MeshEvent ev = {};
+    ev.channel   = (uint8_t)channel;
+    ev.magnitude = 90;
+    ev.originId  = f.h.originId;
+    Serial.printf("  [GAME] debug pull on channel %d from 0x%04X\n", channel, f.h.originId);
+    ropePulled(ev);
+}
+
 static void handleSerial() {
     static char buf[96];
     static uint8_t len = 0;
@@ -436,6 +456,7 @@ void setup() {
         if (installui_on_event(ev)) return;
         if (pull) ropePulled(ev);
     });
+    pulleys::mesh_on_flood(pulleys::MESH_MSG_GAME_PULL, onDebugPull);
     ui_init();
     clockui_init(&s_rtc);
     installui_init();

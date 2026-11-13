@@ -593,6 +593,16 @@ static void handlePiLine(char* buf) {
             pulleys::mesh_send_flood(pulleys::MESH_MSG_GAME_PARAM, body, (uint8_t)n, 3, 120);
         return;
     }
+    if (strncmp(buf, "GAME-PULL ", 10) == 0) {
+        // "GAME-PULL 10": a debug pull on rope channel 10, for the arbiter. Two
+        // copies, in case one is lost; the mesh dedupes them, so it pulls once.
+        const char* body = buf + 10;
+        size_t n = strlen(body);
+        int channel = atoi(body);
+        if (n > 0 && n < 4 && channel >= 1 && channel < pulleys::CHANNEL_COUNT)
+            pulleys::mesh_send_flood(pulleys::MESH_MSG_GAME_PULL, body, (uint8_t)n, 2, 60);
+        return;
+    }
     if (strncmp(buf, "FW-BENCH ", 9) == 0) { benchmarkFirmware(buf + 9); return; }
     if (strncmp(buf, "FW-", 3) == 0) startFirmwareHost();
     if (strncmp(buf, "FW-PING", 7) == 0) {
