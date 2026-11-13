@@ -21,6 +21,9 @@ prefix = r'''
 #include "pulleys_fw_serial.h"
 static uint32_t ticks;
 uint32_t millis(){return ticks++;}
+uint32_t micros(){return ticks*1000;}
+static uint32_t fwRequestedUs=0, fwLatencyUs=0, fwStreamUs=0, fwParseUs=0, fwTimedChunks=0;
+static uint8_t fwRx[512]; static size_t fwRxHead=0, fwRxTail=0;
 void delay(int n){ticks+=n;}
 void drainQueue(){}
 namespace pulleys { void mesh_poll(){} }
@@ -52,6 +55,7 @@ struct Port {
  }
  int available(){return bytes.size();}
  char read(){char c=bytes.front(); bytes.pop_front(); return c;}
+ size_t readBytes(uint8_t* out,size_t n){size_t i=0; while(i<n && !bytes.empty()){out[i++]=(uint8_t)bytes.front(); bytes.pop_front();} return i;}
 } pi, Serial;
 #define PI_LINK pi
 int mbedtls_base64_decode(uint8_t* out,size_t cap,size_t* n,const unsigned char* in,size_t size){
@@ -88,7 +92,20 @@ int main(){
    link.request(12,3); assert(pi.requests==1);        // lost
    assert(!link.receive(12,out,3));                   // nothing comes: times out, false
    assert(link.fetch(12,out,3) && !std::memcmp(out,"abc",3)); }
- puts("PASS stale/lost/corrupt chunks, bounded retries, 4 KiB framing, refusal and prefetched answers");
+ // Block reads must not lose what follows a line: two answers back to back (a retry leaves a duplicate in
+ // flight, or a prefetch lands next to a stray), read by two separate calls, are both found.
+ pi=Port(); pi.mode=0; ticks=0; fwRxHead=fwRxTail=0; fwRefused=false;
+ pi.enqueue(12); pi.enqueue(15);
+ { size_t n=0; uint8_t out[8];
+   assert(receiveFirmwareChunk(12,out,3,n) && n==3);
+   assert(fwRxHead<fwRxTail);                          // the second answer was already read into the staging buffer
+   assert(receiveFirmwareChunk(15,out,3,n) && n==3 && !std::memcmp(out,"abc",3)); }
+ // The same with a block boundary landing in the middle of a line: 700 bytes of filler lines first.
+ pi=Port(); pi.mode=0; ticks=0; fwRxHead=fwRxTail=0;
+ { for(int i=0;i<30;i++){ std::string noise="CENSUS filler line number "+std::to_string(i)+" xxxxxxxxxxxxxxxxxxxxxxx\n"; for(char c:noise) pi.bytes.push_back(c);} }
+ pi.enqueue(21);
+ { size_t n=0; uint8_t out[8]; assert(receiveFirmwareChunk(21,out,3,n) && n==3 && !std::memcmp(out,"abc",3)); }
+ puts("PASS stale/lost/corrupt chunks, bounded retries, 4 KiB framing, refusal, prefetched answers and block reads");
 }
 '''
 

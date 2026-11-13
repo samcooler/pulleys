@@ -110,13 +110,35 @@ static uint8_t fwChunkBuffer2[pulleys::FW_CHUNK_BYTES];   // the chunk arriving 
 static char fwChunkLine[pulleys::FW_LINE_BYTES];
 // The Pi has told us to stop (it cancelled the update): do not retry, give up now.
 static bool fwRefused = false;
+// Diagnostic: where one chunk's time goes (microseconds, summed per transfer, printed by
+// serveFirmware): request sent -> first byte back, first byte -> end of the line, line -> parsed.
+static uint32_t fwRequestedUs = 0, fwLatencyUs = 0, fwStreamUs = 0, fwParseUs = 0, fwTimedChunks = 0;
+// Bytes from the Pi are read in blocks, not one at a time. available()+read() per byte each
+// take a lock in the serial driver (about 27 us a byte measured here), which is slower than
+// the wire at 921600 baud: a 5.5 KB chunk took 153 ms to read where it needs 61 ms on the
+// wire. Bytes read but not yet used stay here between calls, so none is lost.
+static uint8_t fwRx[512];
+static size_t fwRxHead = 0, fwRxTail = 0;
 static void drainQueue();
 
 // Ask the Pi for a chunk. Does not wait: the answer is read by receiveFirmwareChunk,
 // and meanwhile the serial driver buffers it on its own.
 static void sendFirmwareChunkRequest(uint32_t offset, size_t want) {
+    fwRequestedUs = micros();
     PI_LINK.printf("FW-READ sha256=%s offset=%lu length=%u\n", fwSha,
                    (unsigned long)offset, (unsigned)want);
+}
+
+// The next byte from the Pi, or -1 if none is waiting.
+static int fwReadByte() {
+    if (fwRxHead == fwRxTail) {
+        size_t waiting = PI_LINK.available();
+        if (!waiting) return -1;
+        fwRxTail = PI_LINK.readBytes(fwRx, waiting < sizeof(fwRx) ? waiting : sizeof(fwRx));
+        fwRxHead = 0;
+        if (!fwRxTail) return -1;
+    }
+    return fwRx[fwRxHead++];
 }
 
 // Wait for the answer to a request for `offset`, and check it (base64, length, CRC).
@@ -124,11 +146,15 @@ static bool receiveFirmwareChunk(uint32_t offset, uint8_t* out, size_t want, siz
     char* line = fwChunkLine;
     uint32_t start = millis();
     size_t used = 0;
+    uint32_t firstByteUs = 0, lineEndUs = 0;
     while (millis() - start < 5000) {
-        while (PI_LINK.available()) {
-            char c = (char)PI_LINK.read();
+        int next;
+        while ((next = fwReadByte()) >= 0) {
+            if (!firstByteUs) firstByteUs = micros();
+            char c = (char)next;
             if (c == '\n' || c == '\r') {
                 if (!used) continue;
+                lineEndUs = micros();
                 line[used] = 0;
                 if (strncmp(line, "FW-DATA ", 8) == 0) {
                     char* off = strstr(line, "offset=");
@@ -153,6 +179,10 @@ static bool receiveFirmwareChunk(uint32_t offset, uint8_t* out, size_t want, siz
                     if (end != check + 14 || *end != ' ' ||
                         pulleys::fw_chunk_crc32(out, decoded) != expected) return false;
                     got = decoded;
+                    fwLatencyUs += firstByteUs - fwRequestedUs;
+                    fwStreamUs += lineEndUs - firstByteUs;
+                    fwParseUs += micros() - lineEndUs;
+                    ++fwTimedChunks;
                     return true;
                 }
                 if (strncmp(line, "FW-ERROR ", 9) == 0 && strstr(line, fwSha)) {
@@ -222,21 +252,47 @@ static void serveFirmware() {
     pulleys::ChunkPipe<FirmwareLink> pipe(link, fwChunkBuffer, fwChunkBuffer2,
                                           pulleys::FW_CHUNK_BYTES, fwSize, BRIDGE_PIPELINE);
     uint32_t offset = 0;
-    if (pipe.first()) {
+    // Where does the time go? Summed per transfer and printed at the end: waiting on the
+    // serial link for chunks (first, and every next()), versus blocked writing to the device.
+    uint32_t began = millis(), firstMs = 0, waitMs = 0, writeMs = 0, maxWriteMs = 0, chunks = 0, writes = 0;
+    fwLatencyUs = fwStreamUs = fwParseUs = fwTimedChunks = 0;
+    uint32_t mark = millis();
+    bool started = pipe.first();
+    firstMs = millis() - mark;
+    if (started) {
         do {
             pipe.prefetch();   // the next chunk starts arriving over the serial link while this one goes out over WiFi
             size_t sent = 0;
+            mark = millis();
             while (sent < pipe.length() && client.connected()) {
                 size_t n = client.write(pipe.data() + sent, pipe.length() - sent);
+                ++writes;
                 if (!n) break;
                 sent += n;
             }
+            uint32_t took = millis() - mark;
+            writeMs += took;
+            if (took > maxWriteMs) maxWriteMs = took;
+            ++chunks;
             if (sent != pipe.length()) break;
             offset += sent;
-        } while (client.connected() && pipe.next());
+            mark = millis();
+            bool more = client.connected() && pipe.next();
+            waitMs += millis() - mark;
+            if (!more) break;
+        } while (true);
     }
     Serial.printf("[FW] HTTP served %lu/%lu bytes\n", (unsigned long)offset,
                   (unsigned long)fwSize);
+    Serial.printf("[FW] timing: %lu ms total, first chunk %lu ms, serial wait %lu ms, device write %lu ms "
+                  "(max %lu ms), %lu chunks, %lu write calls, pipe=%d\n",
+                  (unsigned long)(millis() - began), (unsigned long)firstMs, (unsigned long)waitMs,
+                  (unsigned long)writeMs, (unsigned long)maxWriteMs, (unsigned long)chunks,
+                  (unsigned long)writes, (int)BRIDGE_PIPELINE);
+    if (fwTimedChunks)
+        Serial.printf("[FW] per chunk: request->first byte %.1f ms, first byte->line end %.1f ms, parse %.1f ms (%lu chunks timed)\n",
+                      fwLatencyUs / 1000.0 / fwTimedChunks, fwStreamUs / 1000.0 / fwTimedChunks,
+                      fwParseUs / 1000.0 / fwTimedChunks, (unsigned long)fwTimedChunks);
 }
 
 // Bench-test the same checked transfer path without writing an OTA partition.

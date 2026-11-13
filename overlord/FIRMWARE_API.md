@@ -160,18 +160,30 @@ re-probes after its own bridge's successful self-update ACK. Upgrade Overlord
 first; old bridges continue using 115200 baud and 384-byte requests during
 migration. Native USB CDC does not have the UART rate limit.
 
-**Pipelined chunks.** A bridge asks the Overlord for chunk N+1 *before* it hands chunk
-N on (over WiFi to a node, or to its own flash), so the serial transfer overlaps the
-hand-off instead of adding to it. Measured before this, at 921600 baud one chunk took
-about 176 ms (about 60 ms on the wire plus about 116 ms of WiFi and device flash
-writes): 23 KB/s. Overlapped, the cycle is the slower of the two, so about 35 KB/s is
-expected. Nothing changes for the Overlord: it answers each `FW-READ` by offset, as
-before. The bridge reports `pipe=1` in its `FW-BRIDGE` line (`pipe=0` for a build
-made with `-D BRIDGE_PIPELINE=0`, which goes back to one chunk at a time). If the
-answer to a prefetched chunk is lost or damaged the bridge simply asks again, so
-pipelining can only fall back to the old behaviour. A bridge also stops waiting at
-once when the Overlord answers `FW-ERROR` for the chunk it asked for (a cancelled
-job), instead of timing out three times.
+**Throughput.** At 921600 baud one 4 KB chunk is about 5.5 KB on the wire, so the serial
+link alone allows about 68 KB/s. Measured on a classic-ESP32 node over WiFi, 1 MB took
+42 s (23 KB/s) before the fixes below and 21 s (47 KB/s) after. Two changes got there:
+
+- The bridge reads the serial link in blocks. It used to read one byte at a time, and
+  each `available()` + `read()` takes a lock in the serial driver (about 27 us a byte),
+  so reading a chunk took 153 ms where the wire needs 61 ms.
+- A bridge asks the Overlord for chunk N+1 *before* it hands chunk N on (over WiFi to a
+  node), so the serial transfer overlaps the hand-off. That was worth about 27% on its
+  own (18 -> 23 KB/s) while the byte-wise read was still the limit.
+
+Per chunk the bridge now spends about 13 ms from request to first byte, 62 ms receiving
+the line, and 10 ms parsing it; the WiFi write to the node is about 12 ms. After each
+transfer the bridge prints `[FW] timing:` and `[FW] per chunk:` lines (they appear in
+the Overlord's journal) so a regression shows up as numbers, not a feeling.
+
+Nothing changes for the Overlord: it answers each `FW-READ` by offset, as before. The
+bridge reports `pipe=1` in its `FW-BRIDGE` line (`pipe=0` for a build made with
+`-D BRIDGE_PIPELINE=0`, which goes back to one chunk at a time). If the answer to a
+prefetched chunk is lost or damaged the bridge simply asks again, so pipelining can only
+fall back to the old behaviour. A bridge's own flash update is never pipelined, because
+the serial interrupt cannot run during a flash write. A bridge also stops waiting at
+once when the Overlord answers `FW-ERROR` for the chunk it asked for (a cancelled job),
+instead of timing out three times.
 
 Each `FW-DATA` record now includes `crc32=<8 hex digits>` before its final `b64`
 field. Old bridges ignore the extra field; new bridges check it and retry a
