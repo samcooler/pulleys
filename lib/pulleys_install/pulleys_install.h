@@ -88,10 +88,15 @@ static const ChannelAssignment CHANNEL_ASSIGNMENT[] = {
     { 0x2452,  7, LIN },   // N-2452
     { 0x6007,  7, LIN },   // N-6007
     { 0x08FF,  8, LIN },   // N-08FF
+    { 0xF12F,  8, LIN },   // N-F12F
     { 0x026D,  9, LIN },   // N-026D
+    { 0x51BE,  9, LIN },   // N-51BE
     { 0xA08A, 10, LIN },   // N-A08A
+    { 0xC768, 10, LIN },   // N-C768
     { 0x4B37, 11, LIN },   // N-4B37
+    { 0x0E97, 11, LIN },   // N-0E97
     { 0x2C24, 12, LIN },   // N-2C24
+    { 0x302B, 12, LIN },   // N-302B
     // ASSIGNMENTS END
 };
 static constexpr uint8_t CHANNEL_ASSIGNMENT_COUNT =
@@ -201,11 +206,11 @@ struct DisplayAssignment { uint16_t id; uint8_t display; };
 
 static const DisplayAssignment DISPLAY_ASSIGNMENT[] = {
     // DISPLAYS BEGIN
-    { 0x59A4, SCREEN_RANKING },   // X-59A4
-    { 0xCC6B, SCREEN_COUNTER },   // X-CC6B
-    { 0x460B, SCREEN_COUNTER },   // X-460B
-    { 0x4466, SCREEN_RANKING },   // X-4466
-    { 0x28A2, SCREEN_RANKING },   // X-28A2
+    { 0x59A4, SCREEN_EXTRACTOR_ORANGE },   // X-59A4
+    { 0xCC6B, SCREEN_EXTRACTOR_YELLOW },   // X-CC6B
+    { 0x460B, SCREEN_EXTRACTOR_BLUE },   // X-460B
+    { 0x4466, SCREEN_EXTRACTOR_GREEN },   // X-4466
+    { 0x28A2, SCREEN_EXTRACTOR_RED },   // X-28A2
     { 0xD08E, SCREEN_RANKING },   // X-D08E
     // DISPLAYS END
 };
