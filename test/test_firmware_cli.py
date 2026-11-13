@@ -293,11 +293,11 @@ class WatchTests(unittest.TestCase):
         job["devices"]["59A4"] = {"state": "confirmed" if state == "completed" else "transferring", "bytes": 100, "total": 100}
         return {"jobs": [job], "active_job": None if state == "completed" else "J1", "logs": list(logs)}
 
-    def watch(self, side_effect):
+    def watch(self, side_effect, **options):
         output = io.StringIO()
         with patch.object(cli, "request", side_effect=side_effect), patch.object(cli.time, "sleep"), \
              contextlib.redirect_stdout(output):
-            result = cli.wait_job("http://unit", self.running())
+            result = cli.wait_job("http://unit", self.running(), **options)
         return result, output.getvalue()
 
     def test_a_failed_poll_is_retried_and_the_job_still_finishes(self):
@@ -326,7 +326,7 @@ class WatchTests(unittest.TestCase):
                 {"sequence": 2, "at": 0, "message": "update timed out", "node_id": "59A4", "job_id": "J1"},
                 {"sequence": 3, "at": 0, "message": "another job's line", "node_id": "AAAA", "job_id": "J2"}]
         snaps = iter([self.snapshot("running", logs), self.snapshot("completed", logs)])
-        result, output = self.watch(lambda url, path="": next(snaps))
+        result, output = self.watch(lambda url, path="": next(snaps), verbose=True)
         self.assertEqual(output.count("update timed out"), 1, "each message once")
         self.assertNotIn("Served", output)
         self.assertNotIn("another job", output)
@@ -460,6 +460,74 @@ class QueueCommandTests(unittest.TestCase):
             self.assertIn("PAUSED", out.getvalue())
             self.assertEqual(manager.snapshot()["jobs"][0]["state"], "cancelled")
             self.assertFalse(manager.snapshot()["paused"])
+
+
+class FlashLineTests(unittest.TestCase):
+    """The default display: a device, its firmware type, a status, progress and speed. Nothing else."""
+
+    def test_each_device_is_one_line_with_type_status_progress_and_speed(self):
+        from tools.firmware_progress import flash_line
+        line = flash_line("A9C8", {"state": "transferring", "bytes": 34, "total": 100, "env": "arbiter_crowpanel7", "speed": "62.4 KB/s"}, 100)
+        for expected in ("A9C8", "arbiter_crowpanel7", "Transferring", "34%", "62.4 KB/s", "[########----------------]"):
+            self.assertIn(expected, line)
+        self.assertEqual(len(line.splitlines()), 1)
+
+    def test_inline_status_reads_as_plain_words(self):
+        from tools.firmware_progress import status_text
+        cases = {"queued": "Queued", "offering": "Offering...", "connecting": "Connecting...", "verifying": "Verifying...",
+                 "confirmed": "Done", "skipped": "Already current", "cancelled": "Cancelled"}
+        for state, text in cases.items():
+            self.assertEqual(status_text({"state": state}), text)
+        self.assertEqual(status_text({"state": "failed", "error": "update timed out"}), "FAILED: update timed out")
+        self.assertEqual(status_text({"state": "queued", "message": "queue paused; waiting to resume"}), "Held (queue paused)")
+
+    def test_a_retry_is_marked_only_while_it_is_still_trying(self):
+        from tools.firmware_progress import flash_line
+        self.assertIn("(try 2/3)", flash_line("A9C8", {"state": "transferring", "attempt": 2, "bytes": 1, "total": 2}, 100))
+        self.assertNotIn("try", flash_line("A9C8", {"state": "confirmed", "attempt": 2, "bytes": 2, "total": 2}, 100))
+
+    def test_speed_is_the_recent_rate_while_transferring_and_the_average_afterwards(self):
+        from tools.firmware_progress import SpeedTracker, rate_text
+        now = [100.0]
+        tracker = SpeedTracker(clock=lambda: now[0])
+        sent = lambda n: {"state": "transferring", "bytes": n}
+        self.assertEqual(tracker.text("A", sent(0)), "")                 # nothing yet
+        self.assertEqual(tracker.text("A", sent(10240)), "")             # one sample: no rate
+        now[0] += 2
+        self.assertEqual(tracker.text("A", sent(10240 + 204800)), "100 KB/s")   # 204800 bytes in 2 s
+        now[0] += 2
+        self.assertEqual(tracker.text("A", sent(10240 + 2 * 204800)), "100 KB/s")
+        now[0] += 1
+        self.assertEqual(tracker.text("A", {"state": "verifying", "bytes": 10240 + 2 * 204800}), "avg 100 KB/s")
+        self.assertEqual(tracker.text("A", {"state": "confirmed"}), "avg 100 KB/s")
+        self.assertEqual(tracker.text("B", {"state": "queued"}), "")
+        self.assertEqual((rate_text(512), rate_text(5 * 1024 * 1024)), ("0.5 KB/s", "5.0 MB/s"))
+
+    def test_a_restarted_transfer_does_not_report_a_negative_rate(self):
+        from tools.firmware_progress import SpeedTracker
+        now = [0.0]
+        tracker = SpeedTracker(clock=lambda: now[0])
+        tracker.text("A", {"state": "transferring", "bytes": 50000})
+        now[0] += 2
+        tracker.text("A", {"state": "transferring", "bytes": 90000})
+        now[0] += 2
+        self.assertNotIn("-", tracker.text("A", {"state": "transferring", "bytes": 100}))   # attempt 2 began from zero
+
+    def test_the_watch_output_is_just_those_lines_unless_verbose(self):
+        job = {"id": "34da170472b5", "state": "running", "device_ids": ["A9C8"],
+               "devices": {"A9C8": {"state": "transferring", "bytes": 50, "total": 100}}}
+        done = {"jobs": [{**job, "state": "completed", "devices": {"A9C8": {"state": "confirmed", "bytes": 100, "total": 100}}}],
+                "logs": [{"sequence": 1, "at": 0, "message": "Connecting", "node_id": "A9C8", "job_id": job["id"]}],
+                "devices": [{"id": "A9C8", "env": "arbiter_crowpanel7"}]}
+        for verbose in (False, True):
+            output = io.StringIO()
+            with patch.object(cli, "request", return_value=done), patch.object(cli.time, "sleep"), contextlib.redirect_stdout(output):
+                cli.wait_job("http://unit", job, envs={"A9C8": "arbiter_crowpanel7"}, verbose=verbose)
+            text = output.getvalue()
+            self.assertIn("A9C8 arbiter_crowpanel7", text)
+            self.assertIn("Done", text)
+            self.assertNotIn("Bar = bytes served", text)
+            self.assertEqual("03:" in text or "00:00:00" in text or "Connecting" in text.replace("Connecting...", ""), verbose, verbose)
 
 
 if __name__ == "__main__":

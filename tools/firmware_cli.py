@@ -14,12 +14,12 @@ import time
 if __package__:
     from . import release_firmware as bundles
     from .push_firmware import request
-    from .firmware_progress import BuildProgress, ProgressDisplay
+    from .firmware_progress import BuildProgress, ProgressDisplay, SpeedTracker, flash_line
     from . import firmware_changes as changes
 else:
     import release_firmware as bundles
     from push_firmware import request
-    from firmware_progress import BuildProgress, ProgressDisplay
+    from firmware_progress import BuildProgress, ProgressDisplay, SpeedTracker, flash_line
     import firmware_changes as changes
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -259,28 +259,31 @@ def job_activity(logs, job_id):
     return rows
 
 
-def wait_job(url, job, *, quiet=False, logs=()):
+def wait_job(url, job, *, quiet=False, logs=(), envs=None, verbose=False):
     """Watch an Overlord job until it ends, drawing each device's progress and
     what the Overlord says about it. A poll that fails is retried: the job runs
     on the Overlord whether or not this is watching."""
     if not quiet:
         print(f"Watching job {job['id']} on {url.rstrip('/')}/  (Ctrl-C detaches; ./fw watch reattaches)", flush=True)
-    activity, misses, paused = job_activity(logs, job['id']), 0, False
+    activity, misses, paused = (job_activity(logs, job['id']) if verbose else []), 0, False
+    envs, speeds = dict(envs or {}), SpeedTracker()
     with ProgressDisplay(enabled=not quiet) as display:
         while True:
             devices = {node: {"state": "queued"} for node in job.get("device_ids") or []}
             devices.update(job["devices"])
+            # What is being flashed (its firmware type) and how fast, for the one line per device.
+            devices = {node: {**item, "env": envs.get(node, ""), "speed": speeds.text(node, item)} for node, item in devices.items()}
             done = sum(item.get("state") in {"confirmed", "skipped"} for item in devices.values())
             failed = sum(item.get("state") == "failed" for item in devices.values())
-            title = f"Job {job['id']} | {job['state']}"
+            title = f"Job {job['id'][:6]} · {job['state']}"
             if devices:
-                title += f" | {done}/{len(devices)} complete | {failed} failed"
-            note = "Bar = bytes served; reboot verification is a separate stage." if devices else "Waiting for device discovery or job results."
+                title += f" · {done}/{len(devices)} done" + (f" · {failed} failed" if failed else "")
+            note = "" if devices else "Waiting for device discovery."
             if paused:
                 note = "Queue PAUSED: the device being flashed finishes, then it holds. ./fw resume to continue, ./fw cancel to stop."
             if misses:
                 note = f"Overlord not answering ({misses}/{POLL_FAILURES}); retrying. The job keeps running there."
-            display.draw(title, devices, job.get("error") or note, activity)
+            display.draw(title, devices, job.get("error") or note, activity, render=flash_line)
             if job["state"] in {"completed", "failed", "interrupted", "cancelled"}:
                 if job["state"] != "completed":
                     raise RuntimeError(job.get("error", job["state"]))
@@ -291,13 +294,15 @@ def wait_job(url, job, *, quiet=False, logs=()):
             except (OSError, ValueError, RuntimeError) as exc:
                 misses += 1
                 if misses >= POLL_FAILURES:
-                    display.draw(title, devices, f"Status unavailable: {exc}; the OTA job may still be running.", activity)
+                    display.draw(title, devices, f"Status unavailable: {exc}; the OTA job may still be running.", activity, render=flash_line)
                     raise
                 continue
             misses = 0
             paused = bool(state.get("paused"))
+            envs.update({row["id"]: row.get("env", "") for row in state.get("devices", []) if row.get("id")})
             job = next((row for row in state.get("jobs", []) if row["id"] == job["id"]), job)
-            activity = job_activity(state.get("logs", []), job["id"])
+            if verbose:
+                activity = job_activity(state.get("logs", []), job["id"])
 
 
 def queue_report(url):
@@ -352,7 +357,7 @@ def queue_command(args):
               f"Cancelling {job_id}: stopping the transfer; the device keeps its current firmware.")
 
 
-def watch(url, job_id=None):
+def watch(url, job_id=None, verbose=False):
     """Attach to a job already on the Overlord: the one named, else the one
     running, else the most recent."""
     state = request(url)
@@ -365,10 +370,11 @@ def watch(url, job_id=None):
         job = next((row for row in jobs if row["id"] == state.get("active_job")), jobs[0] if jobs else None)
         if not job:
             raise ValueError("the Overlord has no jobs to watch")
-    return wait_job(url, job, logs=state.get("logs", []))
+    return wait_job(url, job, logs=state.get("logs", []), verbose=verbose,
+                    envs={row["id"]: row.get("env", "") for row in state.get("devices", [])})
 
 
-def upload_and_queue(url, path, manifest, rows, *, wait=True):
+def upload_and_queue(url, path, manifest, rows, *, wait=True, verbose=False):
     needed = {row["env"] for row in rows}
     files = {}
     for env in needed:
@@ -404,7 +410,7 @@ def upload_and_queue(url, path, manifest, rows, *, wait=True):
     ids = list(dict.fromkeys(row["id"] for row in rows))
     job = request(url, "/updates", {"release_id": release_id, "device_ids": ids})["job"]
     if wait:
-        return wait_job(url, job)
+        return wait_job(url, job, envs={row["id"]: row.get("env", "") for row in rows}, verbose=verbose)
     print(f"Queued job {job['id']} · {url.rstrip('/')}/")
     return job
 
@@ -484,7 +490,7 @@ followed by reboot/hash verification before a device is confirmed.""")
             sub.add_argument("--json", action="store_true", help="machine-readable device list")
         else:
             sub.add_argument("--dry-run", action="store_true", help="show selection without building, uploading or flashing")
-            sub.add_argument("--verbose", "-v", action="store_true", help="show the compiler's output instead of a status line per firmware type")
+            sub.add_argument("--verbose", "-v", action="store_true", help="show the compiler's output instead of a status line per firmware type, and the Overlord's activity messages while flashing")
         if name == "flash":
             sub.add_argument("--all", action="store_true", help="every known node, ignoring git changes (the default is only the firmware your changes touch)")
             sub.add_argument("--since", metavar="REF", help="choose firmware from changes since REF (e.g. HEAD~3, origin/main) instead of since HEAD")
@@ -493,6 +499,7 @@ followed by reboot/hash verification before a device is confirmed.""")
     watching = commands.add_parser("watch", help="watch a firmware job on the Overlord: the running one, the latest, or JOB_ID")
     transport_options(watching, inherited=True)
     watching.add_argument("job", nargs="?", help="job ID (default: the running job, else the latest)")
+    watching.add_argument("--verbose", "-v", action="store_true", help="also show the Overlord's activity messages for the job")
     commands.add_parser("queue", help="show the Overlord's update queue: paused or not, running, waiting").add_argument("--url", default=argparse.SUPPRESS)
     for name, help_text in (("pause", "hold the queue: the device being flashed finishes, then nothing new starts"),
                             ("resume", "start the held queue again")):
@@ -526,7 +533,7 @@ def main(argv=None):
                     print(f"{row['type']:<8} {row['env']}")
             return 0
         if args.command == "watch":
-            watch(args.url, args.job)
+            watch(args.url, args.job, args.verbose)
             return 0
         if args.command in {"queue", "pause", "resume", "cancel", "move"}:
             queue_command(args)
@@ -586,7 +593,7 @@ def main(argv=None):
         if args.usb:
             flash_usb(rows, manifest)
         else:
-            upload_and_queue(args.url, path, manifest, rows, wait=not args.no_wait)
+            upload_and_queue(args.url, path, manifest, rows, wait=not args.no_wait, verbose=args.verbose)
         return 0
     except KeyboardInterrupt:
         print("Detached; any queued OTA job continues on the Overlord. Reattach with ./fw watch.", file=sys.stderr)

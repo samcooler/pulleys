@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+from collections import deque
 
 
 def clean(value):
@@ -56,6 +57,89 @@ def device_line(node, item, width):
     filled = int(bar_width * value / 100) if value is not None else 0
     bar = "#" * filled + "-" * (bar_width - filled)
     return text + " " * (label_width - cells(text)) + f" [{bar}] {right}"
+
+
+def rate_text(bytes_per_second):
+    kb = bytes_per_second / 1024
+    return f"{kb / 1024:.1f} MB/s" if kb >= 1024 else f"{kb:.0f} KB/s" if kb >= 100 else f"{kb:.1f} KB/s"
+
+
+class SpeedTracker:
+    """Transfer speed per device, from the byte counts as they are polled: the rate
+    over the last few seconds while transferring, then the average for the transfer
+    once it is over."""
+    WINDOW = 8.0
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.samples = {}   # node -> deque of (time, bytes)
+        self.first = {}     # node -> (time, bytes) of the first byte seen
+        self.last = {}      # node -> (time, bytes) of the latest
+
+    def text(self, node, item):
+        now = self.clock()
+        state, sent = item.get("state"), item.get("bytes", 0)
+        if state == "transferring" and sent > 0:
+            window = self.samples.setdefault(node, deque())
+            if window and sent < window[-1][1]:      # a retry started over
+                window.clear()
+                self.first.pop(node, None)
+            if not window or sent != window[-1][1] or now - window[-1][0] > 1:
+                window.append((now, sent))
+            while len(window) > 1 and now - window[0][0] > self.WINDOW:
+                window.popleft()
+            self.first.setdefault(node, (now, sent))
+            self.last[node] = (now, sent)
+            if len(window) >= 2 and window[-1][0] > window[0][0]:
+                return rate_text((window[-1][1] - window[0][1]) / (window[-1][0] - window[0][0]))
+            return ""
+        if state in ("verifying", "confirmed") and node in self.first:
+            (t0, b0), (t1, b1) = self.first[node], self.last[node]
+            if t1 > t0 and b1 > b0:
+                return "avg " + rate_text((b1 - b0) / (t1 - t0))
+        return ""
+
+
+FLASH_RIGHT_WIDTH = 20   # "100%  avg 999.9 MB/s"
+STATUS_TEXT = {"queued": "Queued", "offering": "Offering...", "connecting": "Connecting...",
+               "transferring": "Transferring", "verifying": "Verifying...", "confirmed": "Done",
+               "skipped": "Already current", "cancelled": "Cancelled"}
+
+
+def status_text(item):
+    """The inline status for a device: what it is doing now, in a word or two."""
+    state = item.get("state", "queued")
+    if state == "failed":
+        return "FAILED" + (f": {clean(item['error'])}" if item.get("error") else "")
+    if state == "queued" and "paused" in str(item.get("message", "")):
+        return "Held (queue paused)"
+    return STATUS_TEXT.get(state, clean(state))
+
+
+def flash_line(node, item, width):  # noqa: E302 (shows_detail is set below)
+    """One device being flashed: ID, its firmware type, status, a bar, percent and speed."""
+    stage = status_text(item)
+    if item.get("attempt", 1) > 1 and item.get("state") not in ("confirmed", "skipped", "failed", "cancelled"):
+        stage += f" (try {item['attempt']}/3)"
+    value = percent(item)
+    right = (f"{value:3d}%" if value is not None else " --%") + (f"  {clean(item['speed'])}" if item.get("speed") else "")
+    if width < 40:
+        return fit(" ".join(part for part in (clean(node), stage) if part), max(0, width - len(right) - 1)) + " " + right
+    # Percent and speed sit in a column of fixed width, so every row's bar lines up.
+    right = right.ljust(FLASH_RIGHT_WIDTH)
+    bar_width = min(24, max(1, (width - len(right)) // 3))
+    label_width = max(1, width - bar_width - len(right) - 4)
+    # If it does not all fit, the firmware type gives way first: the status must stay readable.
+    kind = clean(item.get("env", ""))
+    room = label_width - cells(clean(node)) - cells(stage) - 2
+    if kind and cells(kind) > room:
+        kind = fit(kind, room) if room >= 4 else ""
+    text = fit(" ".join(part for part in (clean(node), kind, stage) if part), label_width)
+    filled = int(bar_width * value / 100) if value is not None else 0
+    return (text + " " * (label_width - cells(text)) + f" [{'#' * filled}{'-' * (bar_width - filled)}] {right}").rstrip()
+
+
+flash_line.shows_detail = True   # its status already says what went wrong, so no detail line under it
 
 
 BUILD_MARKS = {"queued": "[--]", "building": "[..]", "built": "[ok]", "failed": "[!!]"}
@@ -126,8 +210,9 @@ class ProgressDisplay:
         lines = [fit(title, width)]
         lines += [render(node, item, width) for node, item in rows[:limit]]
         lines += ["  · " + fit(text, max(0, width - 4)) for _, text in activity]
-        detail = note or next((f"{node}: {item.get('error') or item.get('message')}" for node, item in rows
-                               if item.get("error") or item.get("message")), "")
+        detail = note or ("" if getattr(render, "shows_detail", False) else
+                          next((f"{node}: {item.get('error') or item.get('message')}" for node, item in rows
+                                if item.get("error") or item.get("message")), ""))
         if hidden:
             detail = f"{hidden} more node(s); " + detail
         if height > 1:
@@ -157,7 +242,7 @@ class ProgressDisplay:
                     item.get("error"), item.get("message"))
             if final or self.log_rows.get(node) != mark:
                 print("  " + render(node, item, 78), file=self.stream, flush=True)
-                detail = item.get("error") or item.get("message")
+                detail = None if getattr(render, "shows_detail", False) else item.get("error") or item.get("message")
                 if detail:
                     print("    " + clean(detail), file=self.stream, flush=True)
                 self.log_rows[node] = mark
