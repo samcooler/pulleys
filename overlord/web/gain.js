@@ -208,3 +208,12 @@ let lastWidth = innerWidth;   // a rotated phone needs the waveforms redrawn at 
 addEventListener('resize', () => { if (innerWidth === lastWidth) return; lastWidth = innerWidth; clearTimeout(timers.resize); timers.resize = setTimeout(() => data && render(), 200); });
 refresh();
 loadWaves();
+
+$('cue-form').onsubmit = e => {   // send any cue by name, including ones for another Pi (player__cue)
+  e.preventDefault();
+  const name = $('cue-name').value.trim(), out = $('cue-result');
+  if (!name) return;
+  fetch('/cue/' + encodeURIComponent(name), {method: 'POST'})
+    .then(r => { out.textContent = r.ok ? `sent ${name}` : `${name} did not play (see the log)`; })
+    .catch(err => { out.textContent = String(err); });
+};
