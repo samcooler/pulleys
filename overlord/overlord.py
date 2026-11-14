@@ -128,7 +128,8 @@ def main():
         except ImportError:  # pyyaml missing
             DEFAULT_GAME = None
         players.run(args, args.player, args.player_kind, MEDIA,
-                    gain_config.load(args.game or DEFAULT_GAME))
+                    gain_config.load(args.game or DEFAULT_GAME),
+                    gain_config.load_ramps(args.game or DEFAULT_GAME))
         return
 
     volume = [settings.load().get("volume", 100)]  # percent; mpv's 100 is unity gain

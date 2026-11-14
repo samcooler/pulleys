@@ -28,6 +28,7 @@ import random
 import re
 import signal
 import threading
+import time
 from pathlib import Path
 
 from mpv_ipc import Mpv, MpvError, SoundPlayer
@@ -128,8 +129,10 @@ class Satellite:
 
     kind = "base"
 
-    def __init__(self, name, media, mpv_args=(), gains=None, volume=100):
+    def __init__(self, name, media, mpv_args=(), gains=None, volume=100, ramps=None):
         self.name = name
+        self.ramps = ramps or {}   # cue -> (start, step, every_s): gain.load_ramps
+        self.cue = None            # the bare cue being played, for its action
         self.media = Path(media)
         self.mpv_args = list(mpv_args)
         self.gains = gains or {}
@@ -186,6 +189,7 @@ class Satellite:
                 if path is None:
                     print(f"cue {cue}: no media in {self.name}/{folder}/ or {folder}/", flush=True)
                     return False
+                self.cue = bare
                 action(path, self.gain(cue, bare))
                 print(f"cue: {cue} ({path.name})", flush=True)
                 return True
@@ -237,6 +241,8 @@ class SoundSatellite(Satellite):
         self.sounds = None
         self.audio = None
         self.audio_loop = None
+        self.ramp_gen = 0          # bumps on every loop change: the running ramp stops
+        self.ramp_level = 1.0      # the loop's share of self.volume, while it ramps
 
     def start(self):
         extra = [f"--volume={self.volume}", *self.mpv_args]
@@ -262,21 +268,49 @@ class SoundSatellite(Satellite):
         return {"audio_loop_off": self.stop_audio_loop}
 
     def set_audio_loop(self, path, gain=1.0):
+        ramp = self.ramps.get(self.cue) if self.cue else None
+        self.cue = None
         with self.lock:
             self.audio_loop = path
+            self.ramp_gen += 1
+            self.ramp_level = ramp[0] if ramp else 1.0
+            self.audio.set("volume", self.volume * self.ramp_level)
             self.audio.play(path, loop=True, gain=gain)
+            if ramp:
+                threading.Thread(target=self._ramp, args=(self.ramp_gen, *ramp[1:]),
+                                 daemon=True, name="audio-ramp").start()
+
+    def _ramp(self, gen, step, every):
+        """Raise the loop by `step` every `every` seconds until full, unless the
+        loop changes or stops first."""
+        while True:
+            time.sleep(every)
+            with self.lock:
+                if gen != self.ramp_gen or self.ramp_level >= 1.0:
+                    return
+                self.ramp_level = min(1.0, round(self.ramp_level + step, 6))
+                try:
+                    self.audio.set("volume", self.volume * self.ramp_level)
+                except MpvError as e:
+                    print(f"audio ramp: {e}", flush=True)
+                    return
+                print(f"audio ramp: {self.audio_loop.name if self.audio_loop else '?'} "
+                      f"at {self.ramp_level:.0%}", flush=True)
 
     def stop_audio_loop(self):
         with self.lock:
             self.audio_loop = None
+            self.ramp_gen += 1
+            self.ramp_level = 1.0
             self.audio.stop()
+            self.audio.set("volume", self.volume)
 
     def set_volume(self, percent):
         super().set_volume(percent)
         if self.sounds:
             self.sounds.volume = self.volume
         if self.audio:
-            self.audio.set("volume", self.volume)
+            self.audio.set("volume", self.volume * self.ramp_level)
 
     def status(self):
         return {**super().status(),
@@ -338,7 +372,7 @@ class ImageSatellite(SoundSatellite):
 KINDS = {"sound": SoundSatellite, "image": ImageSatellite}
 
 
-def run(args, name, kind, media, gains):
+def run(args, name, kind, media, gains, ramps=None):
     """Run a satellite until it is stopped. `args` are overlord.py's parsed
     arguments: the same flags work, minus the Overlord-only ones."""
     from control import ControlServer
@@ -350,7 +384,7 @@ def run(args, name, kind, media, gains):
     if name == PRIMARY or TARGET_SEP in name:
         raise SystemExit(f"a satellite cannot be called {name!r}")
     player = KINDS[kind](name, media, args.mpv_arg, gains,
-                         volume=settings.load().get("volume", 100))
+                         volume=settings.load().get("volume", 100), ramps=ramps)
     print(f"satellite: {name} ({kind}) — playing cues addressed {name}{TARGET_SEP}…", flush=True)
 
     def stop(*_):

@@ -159,6 +159,12 @@ audio_gain:
   audio_once_component_powerdown: 1.17  # placeholder
   audio_once_encouragement: 1.45
 
+# A loop that starts quiet and grows: `start` of its volume, rising by `step`
+# every `every` until full, where it stays (mpv volume fractions, a cubic
+# curve: 0.5 is about -18 dB). Played by a satellite (players.py).
+audio_ramp:
+  audio_loop_spirit_distress: { start: 0.5, step: 0.1, every: 10s }   # the spirits: full after a minute
+
 # CUES: every usable cue; 1-63 chars of a-z 0-9 _ - *. Unlisted cues are rejected.
 cues:
   game:

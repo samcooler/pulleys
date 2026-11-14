@@ -8,6 +8,8 @@ A multiplier on the file's own level, on top of the volume setting. A cue not
 listed plays at 1. Only overlord reads this; the arbiter never sees it.
 """
 
+import re
+
 try:
     import yaml
 except ImportError:
@@ -36,6 +38,35 @@ def load(path):
             continue
         gains[str(cue)] = gain
     return gains
+
+
+def load_ramps(path):
+    """{cue: (start, step, every_s)} from the YAML's `audio_ramp:`. A loop with a
+    ramp starts at `start` of its volume and rises by `step` every `every`
+    until it is at full, where it stays. Levels are mpv volume fractions (a
+    cubic curve: 0.5 is about -18 dB, 0.8 about -6 dB). Bad entries are skipped."""
+    if yaml is None or not path:
+        return {}
+    try:
+        with open(path) as f:
+            config = yaml.safe_load(f) or {}
+    except OSError:
+        return {}
+    ramps = {}
+    for cue, r in (config.get("audio_ramp") or {}).items():
+        try:
+            start, step = float(r["start"]), float(r["step"])
+            m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(s|m)\s*", str(r["every"]))
+            if not m:
+                raise ValueError("every: use e.g. 10s or 1m")
+            every = float(m.group(1)) * (60 if m.group(2) == "m" else 1)
+            if not (0 <= start <= 1 and 0 < step <= 1 and every > 0):
+                raise ValueError("start 0-1, step above 0 up to 1, every a duration")
+        except (KeyError, TypeError, ValueError) as err:
+            print(f"gain: skipping audio_ramp {cue}: {err}", flush=True)
+            continue
+        ramps[str(cue)] = (start, step, every)
+    return ramps
 
 
 # The `cues:` groups whose cues make sound. Only these take a gain.
