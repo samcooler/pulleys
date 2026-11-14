@@ -325,6 +325,9 @@ def validate(cfg):
     add = cfg.get("charge_per_pull")
     if add is not None:
         check_value("charge_per_pull", add, "number", 0, 100)
+    final_add = cfg.get("final_charge_per_pull")
+    if final_add is not None:
+        check_value("final_charge_per_pull", final_add, "number", 0, 100)
 
     # counters: whole numbers the states add to; one with a `reach` sends
     # <name>_reached when it climbs to it

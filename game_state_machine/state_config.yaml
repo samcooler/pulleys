@@ -70,6 +70,11 @@ params:
     min: 10
     max: 60
     note: percent of full charge one pull adds
+  final_charge_per_pull:
+    value: 24
+    min: 10
+    max: 60
+    note: percent of full charge one purple pull adds; lower than charge_per_pull, so the purple levers take about twice the pulls (4 -> 8 pulls at a rope's pace)
   decay_rate:
     value: 6.6667
     min: 3
@@ -132,6 +137,9 @@ default_decay_rate: $decay_rate
 
 # Percent of full per pull; rope counts one pull per ~1.7 s, so 40 ≈ 3 pulls to fill.
 charge_per_pull: $charge_per_pull
+
+# The same for a purple rope: about twice the pulls to light one.
+final_charge_per_pull: $final_charge_per_pull
 
 # Overlord-only: sound every `interval` s ± `variance`.
 ambient_sounds:
@@ -288,6 +296,7 @@ cues:
   video_loop:
     - video_loop_idle
     - video_loop_game1
+    - video_loop_network_idle       # 5 s, in final
   text_show:                        # a message from `messages:`, shown over the Overlord's video
     - text_show_afterword
 
@@ -348,6 +357,8 @@ states:
           party.lights: dark
           queue.sign: enter           # nobody inside: let the next group in
         cue:
+          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
+          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
           - game_reset_components     # the round's lit components go dark
           - audio_loop_idle
           - audio_bed_clock_ambient   # stays on until victory2
@@ -370,6 +381,7 @@ states:
         set: { queue.sign: wait }     # a group is in; it stays wait until passive
         goals: $easy_goals            # deal this many goal colours
         cue:
+          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
           - game_reset_components
           - video_loop_game1
       goal_component_activated:
@@ -400,6 +412,7 @@ states:
         clear: [stray]
         goals: $medium_goals
         cue:
+          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
           - game_reset_components
           - audio_once_level_up
           - video_loop_game1
@@ -436,6 +449,7 @@ states:
         clear: [stray]
         goals: $hard_goals
         cue:
+          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
           - game_reset_components
           - audio_once_level_up
           - video_loop_game1
@@ -472,6 +486,7 @@ states:
         set:
           party.lights: lit
         cue:
+          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
           - audio_once_victory_fanfare
           - choose_one:
               - video_once_janis_progress_confirmation_congrats_1
@@ -533,6 +548,7 @@ states:
         set:
           party.lights: dark          # the victory is over
         cue:
+          - video_loop_network_idle
           - diorama__audio_loop_off   # the distress stops
           - game_reset_components
           - video_once_janis_threatening_*
@@ -570,6 +586,7 @@ states:
           diorama.latch: locked
           party.lights: lit
         cue:
+          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
           - audio_bed_off
           - video_once_puppet_escape_party
     at:                            # sounds over the jailbreak video; tune to the picture

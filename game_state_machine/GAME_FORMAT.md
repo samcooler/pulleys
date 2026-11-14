@@ -14,6 +14,7 @@ strings overlord already accepts (`video_once_test1`, `audio_once_chime`,
 | `components` | Which colour drives each major component            |
 | `default_decay_rate` | How fast a component's charge drains, % per second (optional) |
 | `charge_per_pull` | How much one pull adds to a component's charge, % (optional) |
+| `final_charge_per_pull` | The same for a purple (final) rope; left out, purple uses `charge_per_pull` (optional) |
 | `ambient_sounds` | Sounds overlord repeats on a schedule (optional)    |
 | `audio_gain` | Loudness multiplier per audio cue (optional)        |
 | `players` | Satellite Pis a cue may be addressed to (optional)  |
@@ -134,7 +135,9 @@ When the charge reaches 100 the component counts as activated, and it stays
 activated until it has drained all the way to 0, when it counts as deactivated;
 pulls in between top it up. Left alone from full it stays lit `100 / rate`
 seconds: 6.6667 is 15 seconds, 10 is 10, 5 is 20. Both apply to every component,
-majors and finals alike. `charge_per_pull` must be above 0 and at most 100 (100
+majors and finals alike, except that `final_charge_per_pull`, if given, replaces
+`charge_per_pull` for purple ropes: a smaller number means more pulls to light a
+purple lever. `charge_per_pull` and `final_charge_per_pull` must be above 0 and at most 100 (100
 is the old rule: one pull fills it); if left out it is 20.
 
 The arbiter owns both: it decides when a component lights and goes dark, and

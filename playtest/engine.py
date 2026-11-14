@@ -107,6 +107,12 @@ class Engine:
         return float(resolve_number(self.cfg.get("charge_per_pull", spec.DEFAULT_CHARGE_PER_PULL),
                                     self.params))
 
+    @property
+    def final_charge_per_pull(self):
+        """A purple rope's pull; charge_per_pull when the game gives none."""
+        value = self.cfg.get("final_charge_per_pull")
+        return self.charge_per_pull if value is None else float(resolve_number(value, self.params))
+
     def start(self):
         self._emit("start", game=self.name,
                    params={k: p.value for k, p in self.params.items()},
@@ -150,14 +156,14 @@ class Engine:
         # A reaction may have recoloured the ropes or re-dealt the goals:
         # the charge goes where things stand now.
         if self.palette[ch] == PURPLE:
-            if not self._pour(self.finals[ch]):
+            if not self._pour(self.finals[ch], self.final_charge_per_pull):
                 return
             self._deliver("final_component_activated")
             if self._all_finals_lit():
                 self._deliver("all_final_components_activated")
             return
         idx = self.major_of_color.get(self.palette[ch])
-        if idx is None or not self._pour(self.majors[idx]):
+        if idx is None or not self._pour(self.majors[idx], self.charge_per_pull):
             return
         bit = 1 << idx
         if self.goal_mask & bit:
@@ -404,10 +410,10 @@ class Engine:
     def _charge_now(self, c):
         return max(0.0, c.charge - self.decay_rate * (self.t - c.stamp))
 
-    def _pour(self, c):
+    def _pour(self, c, amount):
         """One pull's charge. True if that filled a dark component."""
         self._settle(c)
-        c.charge = min(100.0, c.charge + self.charge_per_pull)
+        c.charge = min(100.0, c.charge + amount)
         if not c.on and c.charge >= 100.0:
             c.on = True
             return True

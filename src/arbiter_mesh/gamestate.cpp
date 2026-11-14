@@ -89,6 +89,9 @@ static float s_decayRate = DEFAULT_DECAY_RATE;
 static int8_t s_decayParam = -1;
 static float s_chargePerPull = DEFAULT_CHARGE_PER_PULL;
 static int8_t s_chargeParam = -1;
+// final_charge_per_pull: the same for a purple (final) rope; absent = charge_per_pull.
+static float s_finalChargePerPull = 0.0f;
+static int8_t s_finalChargeParam = -1;
 
 // ── Counters ──────────────────────────────────────────────────────────────────
 // Whole numbers a state adds to (`add:`) and clears (`clear:`). One with a
@@ -357,6 +360,10 @@ static bool validate(JsonDocument& doc, String& why) {
     }
     if (!doc["charge_per_pull"].isNull() && !inRange(doc["charge_per_pull"], 0.0f, 100.0f)) {
         why = "charge_per_pull must be a number (or param) above 0 and at most 100 (percent of full charge)";
+        return false;
+    }
+    if (!doc["final_charge_per_pull"].isNull() && !inRange(doc["final_charge_per_pull"], 0.0f, 100.0f)) {
+        why = "final_charge_per_pull must be a number (or param) above 0 and at most 100 (percent of full charge)";
         return false;
     }
 
@@ -689,6 +696,7 @@ bool gamestate_load(const String& json, String& why) {
     };
     knob(s_doc["default_decay_rate"], DEFAULT_DECAY_RATE, s_decayRate, s_decayParam);
     knob(s_doc["charge_per_pull"], DEFAULT_CHARGE_PER_PULL, s_chargePerPull, s_chargeParam);
+    knob(s_doc["final_charge_per_pull"], 0.0f, s_finalChargePerPull, s_finalChargeParam);
 
     s_counterCount = 0;
     for (JsonPair c : s_doc["counters"].as<JsonObject>()) {
@@ -865,6 +873,11 @@ float gamestate_decay_rate() {
 float gamestate_charge_per_pull() {
     float v = s_chargeParam >= 0 ? s_params[s_chargeParam].value : s_chargePerPull;
     return v > 0.0f ? v : DEFAULT_CHARGE_PER_PULL;
+}
+
+float gamestate_final_charge_per_pull() {
+    float v = s_finalChargeParam >= 0 ? s_params[s_finalChargeParam].value : s_finalChargePerPull;
+    return v > 0.0f ? v : gamestate_charge_per_pull();   // unset: purple charges like the rest
 }
 
 int         gamestate_major_for_channel(uint8_t channel) {

@@ -242,9 +242,9 @@ void components_check_simon_complete() {
 
 // Pour one pull into a component. True if that filled it and it was dark: a
 // top-up of one already lit is not a new activation.
-static bool pull(Component& c, uint32_t now) {
+static bool pull(Component& c, uint32_t now, float amount) {
     settle(c, now);
-    c.charge += gamestate_charge_per_pull();
+    c.charge += amount;
     if (c.charge > 100.0f) c.charge = 100.0f;
     bool lights = !c.on && c.charge >= 100.0f;
     if (lights) c.on = true;
@@ -277,7 +277,7 @@ void components_on_mesh_event(const pulleys::MeshEvent& ev) {
     uint32_t now = millis();
 
     if (isFinalChannel(ev.channel)) {
-        if (!pull(s_final[ev.channel], now)) return;
+        if (!pull(s_final[ev.channel], now, gamestate_final_charge_per_pull())) return;
         gamestate_event(GE_FINAL_COMPONENT_ACTIVATED);
         if (allFinalsLit(now)) gamestate_event(GE_ALL_FINAL_COMPONENTS_ACTIVATED);
         return;
@@ -285,7 +285,7 @@ void components_on_mesh_event(const pulleys::MeshEvent& ev) {
 
     int idx = gamestate_major_for_channel(ev.channel);
     if (idx < 0) return;
-    if (!pull(s_major[idx], now)) return;
+    if (!pull(s_major[idx], now, gamestate_charge_per_pull())) return;
     bool isGoal = (s_goalMask & (1u << idx)) != 0;
     if (isGoal) {
         bool noGoalLit = (litMajorMask(now) & s_goalMask) == (uint8_t)(1u << idx);
