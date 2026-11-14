@@ -572,6 +572,13 @@ states:
         cue:
           - audio_bed_off
           - video_once_puppet_escape_party
+    at:                            # sounds over the jailbreak video; tune to the picture
+      4s:
+        cue:
+          - audio_once_cage_unlocking
+      7s:
+        cue:
+          - audio_once_victory_liberation
     after:
       delay: 32s                   # the jailbreak video is 31 s
       goto: afterword
