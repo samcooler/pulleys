@@ -121,6 +121,11 @@ params:
     value: 60s
     min: 30s
     max: 90s
+  diorama_time:
+    value: 3m
+    min: 1m
+    max: 10m
+    note: how long the spirits scream (diorama_unlocked) before giving up and going back to passive, for groups who think the party was the win
   final_time:
     value: 2m
     min: 1m
@@ -545,6 +550,9 @@ states:
       delay: 12s                    # placeholder
       cue:
         - video_once_janis_threatening_*
+    after:
+      delay: $diorama_time          # nobody pulled purple: the group thought the party was the win
+      goto: passive                 # passive's enter stops the screams
 
 
   # Only purple matters; majors unlisted = ignored.
