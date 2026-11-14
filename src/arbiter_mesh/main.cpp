@@ -137,6 +137,18 @@ static void onDebugPull(const pulleys::MeshFlood& f, bool /*relayed*/) {
     ropePulled(ev);
 }
 
+// A debug state change from the Overlord's installation page
+// (MESH_MSG_GAME_STATE, body the state name in ASCII): the game moves there at
+// once. Unknown names are ignored.
+static void onDebugState(const pulleys::MeshFlood& f, bool /*relayed*/) {
+    char name[32];
+    uint8_t n = f.len < sizeof(name) - 1 ? f.len : sizeof(name) - 1;
+    memcpy(name, f.body, n);
+    name[n] = 0;
+    if (gamestate_goto(name))
+        Serial.printf("  [GAME] debug state %s from 0x%04X\n", name, f.h.originId);
+}
+
 static void handleSerial() {
     static char buf[96];
     static uint8_t len = 0;
@@ -457,6 +469,7 @@ void setup() {
         if (pull) ropePulled(ev);
     });
     pulleys::mesh_on_flood(pulleys::MESH_MSG_GAME_PULL, onDebugPull);
+    pulleys::mesh_on_flood(pulleys::MESH_MSG_GAME_STATE, onDebugState);
     ui_init();
     clockui_init(&s_rtc);
     installui_init();

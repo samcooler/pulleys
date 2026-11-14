@@ -30,6 +30,11 @@ bool gamestate_load(const String& json, String& why);
 // its params, the palette and the install map -- is untouched.
 void gamestate_reset();
 
+// Force the game into a named state for debugging, as if a transition had led
+// there: its entry cues, settings and timers run. Counters and charge are kept.
+// False if the game is not loaded or has no such state.
+bool gamestate_goto(const char* name);
+
 void gamestate_event(GameEvent e);
 // An event by name: a device's input ("diorama.door_opened"), or any of the above.
 void gamestate_input(const char* name);

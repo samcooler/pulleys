@@ -71,4 +71,38 @@
     s.setAttribute('aria-label', `Pull ${name}: simulate that component being activated`); s.title = `Pull ${name}`;
   }); }).observe(box, {childList: true, subtree: true});
   colours(); setInterval(colours, 4000);
+
+  // Force state, below the chips: one button per state of the game; a click jumps the game there.
+  const stateBox = $('force-states');
+  let built = '';
+  function markCurrent() {
+    const now = ($('overview-state')?.textContent || '').trim();
+    stateBox.querySelectorAll('button').forEach(b => b.classList.toggle('current', b.dataset.state === now));
+  }
+  async function states() {
+    try {
+      const data = await (await fetch('/states', {cache: 'no-store'})).json();
+      const names = data.states || [];
+      if (names.join('|') !== built) {
+        built = names.join('|');
+        stateBox.replaceChildren(...names.map(name => {
+          const b = document.createElement('button');
+          b.type = 'button'; b.className = 'button secondary state-button'; b.dataset.state = name; b.textContent = name;
+          return b;
+        }));
+      }
+      markCurrent();
+    } catch (e) { /* the page's own status line reports the connection */ }
+  }
+  const stateStatus = text => { const p = $('force-state-status'); if (p) p.textContent = text; };
+  stateBox.addEventListener('click', async event => {
+    const b = event.target.closest('button');
+    if (!b) return;
+    try {
+      const r = await fetch('/state/' + encodeURIComponent(b.dataset.state), {method: 'POST', cache: 'no-store'});
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+      stateStatus(`Forced the game into ${b.dataset.state}.`);
+    } catch (e) { stateStatus(`Could not force ${b.dataset.state}: ${e.message || e}`); }
+  });
+  states(); setInterval(markCurrent, 1000); setInterval(states, 10000);
 })();

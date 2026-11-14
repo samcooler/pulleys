@@ -6,3 +6,8 @@
 .goal-chip .swatch.failed{box-shadow:0 0 0 2px #c0392b}
 @media(max-width:650px){.goal-chip .swatch{width:40px;height:40px}}
 .purple-chip{cursor:default}
+
+/* Force state: one button per game state. */
+.state-buttons{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.state-button.current{box-shadow:0 0 0 2px #6b9a77}
+@media(max-width:650px){.state-button{min-height:44px}}

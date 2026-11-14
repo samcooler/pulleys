@@ -114,6 +114,12 @@ class Game:
             self._catch_up()
             self.engine.pull(channel)
 
+    def goto(self, state):
+        """Force the machine into a state, as if a transition led there."""
+        with self._lock:
+            self._catch_up()
+            self.engine._enter(state)
+
     def set_param(self, name, value):
         with self._lock:
             return self.engine.set_param(name, value)

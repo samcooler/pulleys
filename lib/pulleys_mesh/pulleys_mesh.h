@@ -67,6 +67,10 @@ enum : uint8_t {
     // as if a sensor had sent it. Not logged as a sensor event, and ignored while
     // the mapping screen holds the ropes.
     MESH_MSG_GAME_PULL    = 0xA6,   // bridge (from its Pi): pull a rope by hand
+    // Body: ASCII state name. The Overlord's debug state buttons, through its
+    // bridge: the arbiter moves the game to that state at once, as if a
+    // transition had led there. Ignored if the loaded game has no such state.
+    MESH_MSG_GAME_STATE   = 0xA7,   // bridge (from its Pi): force a game state
 };
 
 // Clock sync: every node beacons its own mesh clock, and each listener pulls a

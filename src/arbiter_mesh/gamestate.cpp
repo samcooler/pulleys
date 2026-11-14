@@ -733,6 +733,12 @@ void gamestate_reset() {
     enter(s_doc["start"].as<const char*>());
 }
 
+bool gamestate_goto(const char* name) {
+    if (!s_ready || !name || s_doc["states"][name].isNull()) return false;
+    enter(name);
+    return true;
+}
+
 void gamestate_event(GameEvent e) { gamestate_input(gameevent_name(e)); }
 
 void gamestate_input(const char* name) {

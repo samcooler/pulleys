@@ -603,6 +603,15 @@ static void handlePiLine(char* buf) {
             pulleys::mesh_send_flood(pulleys::MESH_MSG_GAME_PULL, body, (uint8_t)n, 2, 60);
         return;
     }
+    if (strncmp(buf, "GAME-STATE ", 11) == 0) {
+        // "GAME-STATE attract": force the arbiter's game into that state. Two
+        // copies, as for GAME-PULL; the arbiter ignores a name it does not have.
+        const char* body = buf + 11;
+        size_t n = strlen(body);
+        if (n > 0 && n < 32)
+            pulleys::mesh_send_flood(pulleys::MESH_MSG_GAME_STATE, body, (uint8_t)n, 2, 60);
+        return;
+    }
     if (strncmp(buf, "FW-BENCH ", 9) == 0) { benchmarkFirmware(buf + 9); return; }
     if (strncmp(buf, "FW-", 3) == 0) startFirmwareHost();
     if (strncmp(buf, "FW-PING", 7) == 0) {

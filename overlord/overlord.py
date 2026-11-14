@@ -358,6 +358,22 @@ def main():
         print(f"lever: pull on channel {channel}", flush=True)
         return True
 
+    def game_states():
+        """State names of the game file, start first."""
+        states = list((game_cfg or {}).get("states") or {})
+        start = (game_cfg or {}).get("start")
+        return sorted(states, key=lambda s: s != start)
+
+    def force_state(name):
+        """Debug: move the game to a state, through the bridge to the arbiter or
+        into overlord's own engine with --game. False if the bridge is not there."""
+        if game:
+            game.goto(name)
+        elif not serial.write_line(f"GAME-STATE {name}"):
+            return False
+        print(f"state: forced to {name}", flush=True)
+        return True
+
     def control(method, parts):
         """The REST API (control.py). Returns (http status, body)."""
         if parts == ["status"] and method == "GET":
@@ -396,6 +412,14 @@ def main():
             if not pull_lever(channel):
                 return 503, {"error": "the bridge is not connected"}
             return 200, {"channel": channel}
+        if parts == ["states"] and method == "GET":
+            return 200, {"states": game_states(), "current": game.state if game else None}
+        if len(parts) == 2 and parts[0] == "state" and method in ("POST", "PUT"):
+            if parts[1] not in game_states():
+                return 404, {"error": f"the game has no state {parts[1]!r}"}
+            if not force_state(parts[1]):
+                return 503, {"error": "the bridge is not connected"}
+            return 200, {"state": parts[1]}
         if len(parts) == 3 and parts[0] == "param" and method in ("POST", "PUT"):
             # Tune by hand without a reflash: the arbiter clamps it to the game's range.
             try:

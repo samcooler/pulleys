@@ -214,3 +214,14 @@ goals and reordered component colours, chunked status readback, and Node tests
 for timer/freshness/visibility presentation. The arbiter firmware build fits its
 partition. The LCD layout and real radio goal/state updates still need hardware
 verification before deployment.
+
+## Force a game state (debug)
+
+`GET /states` on the control server lists the game file's states, start first:
+`{"states":[...],"current":null}` (`current` only with `--game`). `POST /state/<name>`
+jumps the game there: 200 `{"state":name}`, 404 for a name the game lacks, 503 if the
+bridge is not connected. Overlord writes `GAME-STATE <name>` to the bridge, which
+floods `MESH_MSG_GAME_STATE` (`0xA7`, body the name in ASCII, two copies). The
+arbiter enters the state as if a transition led there: its entry cues, settings and
+timers run; counters and charge are kept. The Force state buttons on the
+installation page use this. Needs bridge and arbiter firmware from this change.
