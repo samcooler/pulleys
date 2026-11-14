@@ -477,6 +477,40 @@ static void onGameInfo(const pulleys::MeshFlood& f, bool /*relayed*/) {
     iHead = next;
 }
 
+// The arbiter's MeshComponents (every component's charge), for the Overlord's
+// goal display. Only the latest matters, so one slot, overwritten, written out
+// at most every COMP_MIN_MS as
+//
+//   CO <decay> <charge0>,..,<charge7> <colour0>,..,<colour7> <goals>
+//
+// decay in thousandths of a percent per second, charge in percent, colour a
+// pulleys_channel COLOR_* (255 unknown), goals a bitmask of component indexes.
+static pulleys::MeshComponents compLatest;
+static volatile bool compFresh = false;
+static uint32_t compSentAt = 0;
+static const uint32_t COMP_MIN_MS = 200;
+static void onComponents(const pulleys::MeshComponents& c, bool /*relayed*/) {
+    if (c.originType != pulleys::MESH_ORIGIN_ARBITER) return;
+    compLatest = c;
+    compFresh = true;
+}
+
+static void drainComponents() {
+    if (!compFresh || millis() - compSentAt < COMP_MIN_MS) return;
+    if (PI_LINK.availableForWrite() < 120) return;
+    const pulleys::MeshComponents c = compLatest;
+    compFresh = false;
+    compSentAt = millis();
+    char line[128];
+    int n = snprintf(line, sizeof(line), "CO %u ", (unsigned)c.decay);
+    for (uint8_t i = 0; i < pulleys::MESH_COMPONENT_COUNT; i++)
+        n += snprintf(line + n, sizeof(line) - n, i ? ",%u" : "%u", (unsigned)c.charge[i]);
+    for (uint8_t i = 0; i < pulleys::MESH_COMPONENT_COUNT; i++)
+        n += snprintf(line + n, sizeof(line) - n, i ? ",%u" : " %u", (unsigned)c.color[i]);
+    snprintf(line + n, sizeof(line) - n, " %u\n", (unsigned)c.goals);
+    PI_LINK.print(line);
+}
+
 // Configuration replies have their own bounded queue. Keep callbacks free of
 // UART writes, and leave normal events/cues in their existing queues.
 static constexpr uint8_t INSTALL_QUEUE = 8;
@@ -503,6 +537,7 @@ static void onInstallation(const pulleys::MeshFlood& f, bool) {
 }
 
 static void drainQueue() {
+    drainComponents();
     while (iTail != iHead) {
         if (PI_LINK.availableForWrite() < 260) break;
         PI_LINK.printf("GI %s\n", infoQueue[iTail]);
@@ -780,6 +815,7 @@ void setup() {
     pulleys::mesh_on_event(onMeshEvent);
     pulleys::mesh_on_cue(onMeshCue);
     pulleys::mesh_on_flood(pulleys::MESH_MSG_GAME_INFO, onGameInfo);
+    pulleys::mesh_on_components(onComponents);
     pulleys::mesh_on_flood(pulleys::MESH_MSG_INSTALL_RES, onInstallation);
 
     pulleys::census_set_detail(BRIDGE_PI_USB ? "usb" : "uart1");

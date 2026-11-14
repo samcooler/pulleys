@@ -506,6 +506,8 @@ def main():
     firmware_updater = None
     installation = None
 
+    goal_display = None
+
     def on_serial_event(event_name):
         event_name = event_name.strip()
         if not event_name:
@@ -526,6 +528,10 @@ def main():
             fire_cue(*parsed)
             return
         if event_name.startswith(("EV ", "GI ")):   # a pull; the game's telemetry
+            return
+        if event_name.startswith("CO "):   # every component's charge, for the goal band
+            if goal_display:
+                goal_display.on_components(event_name)
             return
         # A bridge on USB shares its port with its console, so its banner and
         # status lines arrive here too. An event is one bare word; anything
@@ -569,7 +575,8 @@ def main():
     # Goals over the video, for a game that wants them seen (show_goals: true).
     if playlog and game_cfg and game_cfg.get("show_goals"):
         from goal_display import GoalDisplay
-        playlog.listen(GoalDisplay(game_cfg, video).on_record)
+        goal_display = GoalDisplay(game_cfg, video)
+        playlog.listen(goal_display.on_record)
 
     # The live director learns from each session which params people enjoy
     # most, and sets them for the next (playtest/live.py).
