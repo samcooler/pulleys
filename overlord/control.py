@@ -11,8 +11,27 @@ WEB = Path(__file__).with_name("web")
 MAX_IMAGE = 7 * 1024 * 1024
 
 
+def check_game_yaml(text):
+    """Problems with a game's YAML text, as a list of strings; empty means it is sound."""
+    import sys
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    sys.path.insert(0, root + "/tools")
+    try:
+        import yaml
+        from game_to_json import validate
+        from playtest.spec import fix_keys
+        try:
+            return validate(fix_keys(yaml.safe_load(text)))
+        except yaml.YAMLError as exc:
+            return [f"YAML: {exc}"]
+    finally:
+        sys.path.remove(root + "/tools")
+
+
 class ControlServer:
-    def __init__(self, handle, host="127.0.0.1", port=8080, firmware=None, installation=None, sessions=None, gains=None, waves=None):
+    def __init__(self, handle, host="127.0.0.1", port=8080, firmware=None, installation=None, sessions=None, gains=None, waves=None, game_file=None):
         class Handler(BaseHTTPRequestHandler):
             def _body(self, limit, binary=False):
                 if self.headers.get("Transfer-Encoding"):
@@ -117,6 +136,29 @@ class ControlServer:
                     return 200, {"reset": route[0] if route else "all"}
                 return 404, {"error": "no such gain route"}
 
+            def _game_yaml(self):
+                """The game file as text: GET /api/game/yaml -> {path, yaml}. POST {"yaml": text} checks it ->
+                {ok, errors}; with "save": true and no errors it is written to the game file too. The running
+                game and the arbiter only pick up a saved game when they next load it."""
+                if game_file is None:
+                    return 503, {"error": "no game file"}
+                if self.command == "GET":
+                    return 200, {"path": str(game_file), "yaml": Path(game_file).read_text()}
+                if self.command != "POST":
+                    return 404, {"error": "no such game route"}
+                body = self._body(1024 * 1024)
+                text = body.get("yaml")
+                if not isinstance(text, str):
+                    raise ValueError('need {"yaml": text}')
+                errors = check_game_yaml(text)
+                saved = False
+                if body.get("save") is True and not errors:
+                    tmp = Path(str(game_file) + ".tmp")
+                    tmp.write_text(text)
+                    tmp.replace(game_file)
+                    saved = True
+                return 200, {"ok": not errors, "errors": errors, "saved": saved}
+
             def _serve(self):
                 parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
                 content_type = "application/json; charset=utf-8"
@@ -159,6 +201,8 @@ class ControlServer:
                         else:
                             found, pending = waves()
                             status, body = 200, {"waves": found, "pending": pending}
+                    elif parts == ["api", "game", "yaml"]:
+                        status, body = self._game_yaml()
                     elif parts[:2] == ["api", "gain"]:
                         status, body = self._gain(parts[2:])
                     elif parts[:2] == ["api", "firmware"]:

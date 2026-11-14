@@ -5,3 +5,30 @@
 .overview-health{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:0 16px 10px;font-size:12px}.overview-health strong{color:var(--green)}.overview-health span{color:var(--muted);font:11px ui-monospace,monospace}.overview-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.overview-grid article{padding:10px 16px;min-width:0;border-right:1px solid var(--line)}.overview-grid article:nth-child(3n){border-right:0}.overview-grid article:nth-child(-n+3){border-bottom:1px solid var(--line)}.overview-grid article>span{font-size:11px;color:var(--muted)}.overview-grid strong{display:block;font-size:20px;font-weight:550;line-height:1.3;margin:3px 0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.overview-grid small{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.overview-goals{padding:12px 16px}.overview-goals h3{margin:0;font-size:14px}.overview-goals p{font-size:12px;color:var(--muted);margin:4px 0 8px}.goal-chips{display:flex;flex-wrap:wrap;gap:12px}.goal-chip{display:flex;align-items:center;gap:10px;padding:6px 12px;border:1px solid var(--line);border-radius:5px;background:#f5f6f0;font-size:14px;text-transform:capitalize}.report-stale .overview-health strong,.status-warning{color:#a05530}.report-stale .goal-chips{opacity:.55}@media(max-width:650px){.overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.overview-grid article{padding:16px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.overview-grid article:nth-child(3n){border-right:1px solid var(--line)}.overview-grid article:nth-child(2n){border-right:0}.overview-grid article:nth-last-child(-n+2){border-bottom:0}.overview-grid strong{font-size:19px}.overview-health{padding:0 16px 16px}.overview-goals{padding:20px 16px}.goal-chip{font-size:14px;padding:10px 12px}}
 .swatch-btn{padding:0;cursor:pointer;flex:none}.swatch-btn:hover:not(:disabled){box-shadow:0 0 0 2px #6b9a77}.swatch-btn:disabled{cursor:not-allowed;opacity:.6}
 .rgb-form h3{position:relative}.goal-chip input{width:18px;height:18px;margin:0}.goal-chip{cursor:pointer}
+
+.rgb-picker{border:1px solid var(--line);border-radius:6px;padding:16px;width:min(340px,92vw)}.rgb-picker::backdrop{background:#0006}.rgb-picker h3{margin:0 0 10px;text-transform:capitalize;font-size:14px}.rgb-preview{height:56px;border:1px solid #0002;border-radius:4px;margin-bottom:12px}.rgb-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font:12px ui-monospace,monospace}.rgb-row b{width:12px}.rgb-row input[type=range]{flex:1;min-width:0}.rgb-row input[type=number]{width:64px;padding:5px 6px;border:1px solid var(--line);border-radius:3px;font:14px ui-monospace,monospace}.ch-r{accent-color:#d33}.ch-g{accent-color:#2a2}.ch-b{accent-color:#36d}.rgb-readout{margin:4px 0 12px;font:13px ui-monospace,monospace;color:var(--muted)}.rgb-actions{display:flex;gap:8px;justify-content:flex-end}
+
+/* Compact layout: status in a few thin rows, so the game, the YAML and the controls fit on one screen. */
+.dim{color:var(--muted);font:11px ui-monospace,monospace}
+main{padding-top:8px}.installation-panel,.yaml-panel{margin-top:8px}
+.overview-line{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:5px 12px;font-size:12px}
+.overview-line .eyebrow{font-size:9px;margin:0}.overview-line h2{font-size:12px;font-weight:600;margin:0}
+.overview-line strong{font-size:11px;color:var(--green)}.report-stale .overview-line strong{color:#a05530}
+.device-pick{margin-left:auto;font:11px ui-monospace,monospace;color:var(--muted)}.device-pick select{font-size:11px;padding:1px 4px}
+.overview-grid{display:flex;flex-wrap:wrap;gap:0 18px;padding:3px 12px;border-top:1px solid var(--line);border-bottom:0}
+.overview-grid article,.overview-grid article:nth-child(n){display:flex;align-items:baseline;gap:5px;padding:0;border:0;min-width:0}
+.overview-grid article>span{font-size:10px;color:var(--muted)}.overview-grid strong{display:inline;font-size:12px;font-weight:600;margin:0;line-height:1.5}.overview-grid small{font-size:10px}
+.overview-goals{padding:3px 12px 4px;border-top:1px solid var(--line)}
+.chip-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:26px}.chip-row h3{margin:0;font-size:10px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;min-width:78px}
+.goal-chips,.state-buttons{gap:5px;margin:0}.goal-chip{padding:1px 7px;gap:5px;font-size:11px}.goal-chip input{width:13px;height:13px}
+.goal-chip .swatch{width:18px;height:18px}.state-button{padding:2px 7px;font-size:10px}
+.installation-status{padding:0 12px 3px;font-size:11px;line-height:1.4}
+.installation-panel .panel-heading{padding:6px 12px}.installation-panel .panel-heading p:not(#clock-status){display:none}.installation-panel .panel-heading h2{font-size:13px}
+fieldset,.map-controls,.clock-controls{padding-bottom:8px}
+footer{margin:6px 0 0}
+.yaml-panel summary{display:flex;align-items:center;gap:12px;padding:6px 12px;font-size:12px;cursor:pointer;list-style:none}.yaml-panel summary::-webkit-details-marker{display:none}
+.yaml-panel summary::before{content:"▸";color:var(--muted)}.yaml-panel[open] summary::before{content:"▾"}
+.yaml-body{border-top:1px solid var(--line);padding:8px 12px}
+#yaml-text{display:block;width:100%;height:min(60vh,520px);resize:vertical;font:12px/1.45 ui-monospace,monospace;tab-size:2;padding:8px;border:1px solid var(--line);border-radius:4px;background:#fff;color:#242b29;white-space:pre;overflow:auto}
+.yaml-actions{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}#yaml-status{white-space:pre-wrap;flex:1;min-width:200px}#yaml-status.bad{color:#a05530}#yaml-status.good{color:var(--green)}
+@media(max-width:650px){.overview-grid{grid-template-columns:none}.overview-grid article,.overview-grid article:nth-child(n){padding:0;border:0}.overview-line{padding:5px 12px}.goal-chip{padding:1px 7px;font-size:11px}.goal-chip .swatch{width:24px;height:24px}.overview-health{padding:0}.overview-goals{padding:3px 12px 4px}}

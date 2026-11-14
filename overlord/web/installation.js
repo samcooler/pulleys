@@ -53,7 +53,7 @@ function build() {
       event.preventDefault();
       await applyRgb(index,['r','g','b'].map(key => Number($(`rgb-${index}-${key}`).value)));
     });
-    form.querySelector('.swatch-btn').addEventListener('click',event => openPicker(index,event.currentTarget));
+    form.querySelector('.swatch-btn').addEventListener('click',event => openPicker(index));
     $('colors').append(form);
   });
 }
@@ -64,18 +64,29 @@ async function applyRgb(index,[r,g,b]) {
   if(ok) {dirty.delete(index);render();}
   return ok;
 }
-// Clicking a swatch opens the browser's full colour picker straight away. Its OK (the input's
-// change event) saves the colour; dragging inside it and cancelling change nothing.
-const hex=rgb=>'#'+rgb.map(v=>v.toString(16).padStart(2,'0')).join('');
-function openPicker(index,anchor) {
-  const rgb=current()?.colors[index].rgb || [0,0,0];
-  const input=document.createElement('input'); input.type='color'; input.value=hex(rgb);
-  input.setAttribute('aria-label',`${names[index]} colour`);
-  input.style.cssText='position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
-  input.addEventListener('change',()=>{const v=input.value;input.remove();applyRgb(index,[1,3,5].map(i=>parseInt(v.slice(i,i+2),16)));});
-  input.addEventListener('cancel',()=>input.remove());
-  anchor.parentElement.append(input);
-  if(input.showPicker) input.showPicker(); else input.click();
+// Clicking a swatch opens a picker showing the colour's R, G and B as integers (0-255), each a
+// slider and a number box kept in step, over a live preview. Apply saves; Cancel or Esc changes nothing.
+function openPicker(index) {
+  const rgb=[...(current()?.colors[index].rgb || [0,0,0])];
+  const dlg=document.createElement('dialog'); dlg.className='rgb-picker';
+  dlg.innerHTML=`<form method="dialog"><h3>${names[index]}</h3><div class="rgb-preview"></div><div class="rgb-rows"></div><p class="rgb-readout"></p><div class="rgb-actions"><button value="cancel" class="button secondary">Cancel</button><button value="ok" class="button">Apply ${names[index]}</button></div></form>`;
+  const preview=dlg.querySelector('.rgb-preview'), readout=dlg.querySelector('.rgb-readout');
+  const pairs=[];
+  const sync=()=>{paint(preview,rgb); readout.textContent=`rgb(${rgb.join(', ')})`; pairs.forEach(([range,num],k)=>{range.value=num.value=rgb[k];});};
+  ['R','G','B'].forEach((key,k) => {
+    const row=document.createElement('label'); row.className='rgb-row'; row.innerHTML=`<b>${key}</b>`;
+    const range=document.createElement('input'); range.type='range';
+    const num=document.createElement('input'); num.type='number';
+    for(const el of [range,num]) {el.min=0; el.max=255; el.step=1; el.setAttribute('aria-label',`${names[index]} ${key}`);}
+    range.classList.add(`ch-${key.toLowerCase()}`);
+    const set=v=>{const n=Math.round(Number(v)); rgb[k]=Number.isFinite(n)?Math.min(255,Math.max(0,n)):0; sync();};
+    range.addEventListener('input',()=>set(range.value));
+    num.addEventListener('input',()=>{if(num.value!=='') set(num.value);});
+    num.addEventListener('change',()=>set(num.value));
+    pairs.push([range,num]); row.append(range,num); dlg.querySelector('.rgb-rows').append(row);
+  });
+  dlg.addEventListener('close',()=>{const ok=dlg.returnValue==='ok'; dlg.remove(); if(ok) applyRgb(index,rgb);});
+  document.body.append(dlg); sync(); dlg.showModal();
 }
 function render() {
   if(!state) return;
@@ -161,8 +172,8 @@ function renderOverview(row) {
     if(row?.colors?.[index]) paint($(`goal-swatch-${index}`),row.colors[index].rgb);
   }
   if(Array.isArray(set) && row.game?.ready && !row.game.goals_visible)
-    $('overview-goals-status').textContent='Goals are set here but only show in states that use them.';
-  else if(Array.isArray(set)) $('overview-goals-status').textContent=view.live?'Tick the colours that are goals. Click a square to pull that colour, as if its component were being activated.':'Last reported goals.';
+    $('overview-goals-status').textContent='set; not shown in this state';
+  else if(Array.isArray(set)) $('overview-goals-status').textContent=view.live?'tick = goal · click a square to pull it':'last reported';
 }
 function renderMapping(row,live) {
   const map=row?.mapping;
@@ -221,4 +232,37 @@ setInterval(async()=>{
     lastRenew=Date.now();await mutate('map_renew',{session},null,true);
   }
 },1000);
+// Game YAML editor: loaded the first time it is opened. Check validates on the Overlord; Save checks, then writes the game file.
+(()=>{
+  const box=$('yaml-text'), status=$('yaml-status'); let loaded=false, original='';
+  const say=(text,cls='')=>{status.textContent=text; status.className='dim '+cls;};
+  const buttons=on=>['yaml-check','yaml-save','yaml-reload'].forEach(id=>$(id).disabled=!on);
+  async function post(save) {
+    buttons(false); say(save?'Saving…':'Checking…');
+    try {
+      const response=await fetch('/api/game/yaml',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({yaml:box.value,save})});
+      const data=await response.json(); if(!response.ok) throw new Error(data.error||'request failed');
+      if(!data.ok) say(data.errors.join('\n'),'bad');
+      else if(data.saved) {original=box.value; say('Saved. The arbiter and a running game pick it up when they next load it.','good');}
+      else say('OK: no problems found.','good');
+    } catch(error) {say(error.message,'bad');}
+    buttons(true);
+  }
+  async function load() {
+    buttons(false); say('Loading…');
+    try {
+      const response=await fetch('/api/game/yaml'); const data=await response.json(); if(!response.ok) throw new Error(data.error||'request failed');
+      box.value=original=data.yaml; box.disabled=false; loaded=true; $('yaml-path').textContent=data.path.split('/').slice(-2).join('/'); say('Loaded.'); buttons(true);
+    } catch(error) {say(error.message,'bad');}
+  }
+  $('yaml-panel').addEventListener('toggle',()=>{if($('yaml-panel').open && !loaded) load();});
+  $('yaml-check').addEventListener('click',()=>post(false));
+  $('yaml-save').addEventListener('click',()=>post(true));
+  $('yaml-reload').addEventListener('click',()=>{if(box.value===original||confirm('Discard your edits and reload the file?')) load();});
+  box.addEventListener('keydown',event=>{
+    if(event.key==='Tab'){event.preventDefault(); document.execCommand('insertText',false,'  ');}
+    else if((event.metaKey||event.ctrlKey)&&event.key==='s'){event.preventDefault(); post(true);}
+  });
+  window.addEventListener('beforeunload',event=>{if(loaded&&box.value!==original) event.preventDefault();});
+})();
 build();refresh();setInterval(refresh,2000);

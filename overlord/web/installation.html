@@ -4,21 +4,23 @@
 <header class="topbar"><a class="brand" href="/" aria-label="Synchronized Leverage Control Panel">Synchronized Leverage <span class="star">*</span> <span class="sub">Control Panel</span></a><nav aria-label="Main navigation"><a href="/">Firmware</a><a href="/installation" aria-current="page">Installation</a><a href="/sessions">Sessions</a><a href="/gain">Gain</a></nav><span id="connection" class="connection">Connecting</span></header>
 <main>
 <div id="notice" role="status" aria-live="polite" hidden></div>
-<section class="panel overview-panel" aria-label="Game and installation status"><div class="panel-heading"><div><p class="eyebrow">GAME AND MESH</p><h2 id="overview-game">Game status unavailable</h2><p id="arbiter-status">Waiting for a configuration snapshot…</p></div><label>Device <select id="arbiter" aria-label="Arbiter device"></select></label></div>
-<div class="overview-health"><strong id="overview-health" role="status">Connecting</strong><span id="overview-freshness">Waiting for an arbiter report.</span></div>
-<div class="overview-goals"><h3>Game goals</h3><p id="overview-goals-status">Waiting for game status.</p><div id="overview-goals" class="goal-chips" aria-label="Goal colours"></div>
-<h3>Force state</h3><p id="force-state-status">Click a state to jump the game straight to it, for debugging.</p><div id="force-states" class="state-buttons" aria-label="Game states"></div></div>
+<section class="panel overview-panel" aria-label="Game and installation status">
+<div class="overview-line"><span class="eyebrow">GAME AND MESH</span><h2 id="overview-game">Game status unavailable</h2><strong id="overview-health" role="status">Connecting</strong><span id="overview-freshness" class="dim">Waiting for an arbiter report.</span><span id="arbiter-status" class="dim">Waiting for a configuration snapshot…</span><label class="device-pick">Device <select id="arbiter" aria-label="Arbiter device"></select></label></div>
 <div class="overview-grid">
-<article><span>Current state</span><strong id="overview-state">—</strong><small id="overview-state-age">Waiting for a game</small></article>
-<article><span>Next transition</span><strong id="overview-timer">—</strong><small id="overview-timer-target">Waiting for a game</small></article>
-<article><span>Mesh nodes</span><strong id="overview-nodes">—</strong><small>Last heard by the arbiter</small></article>
-<article><span>Pull activity</span><strong id="overview-activity">—</strong><small id="overview-events">Waiting for mesh status</small></article>
-<article><span>Arbiter uptime</span><strong id="overview-uptime">—</strong><small>Since the last reboot</small></article>
-<article><span>Mesh clock spread</span><strong id="overview-skew">—</strong><small>Difference across node clocks</small></article>
+<article><span>State</span><strong id="overview-state">—</strong><small id="overview-state-age">Waiting for a game</small></article>
+<article><span>Next</span><strong id="overview-timer">—</strong><small id="overview-timer-target">Waiting for a game</small></article>
+<article><span>Nodes</span><strong id="overview-nodes">—</strong></article>
+<article><span>Pulls</span><strong id="overview-activity">—</strong><small id="overview-events">Waiting for mesh status</small></article>
+<article><span>Uptime</span><strong id="overview-uptime">—</strong></article>
+<article><span>Clock spread</span><strong id="overview-skew">—</strong></article>
 </div>
-
+<div class="overview-goals"><div class="chip-row"><h3>Game goals</h3><div id="overview-goals" class="goal-chips" aria-label="Goal colours"></div><span id="overview-goals-status" class="dim">Waiting for game status.</span></div>
+<div class="chip-row"><h3>Force state</h3><div id="force-states" class="state-buttons" aria-label="Game states"></div><span id="force-state-status" class="dim" title="Click a state to jump the game straight to it, for debugging.">click to jump</span></div></div>
 <p class="installation-status" id="overview-devices">Waiting for device status.</p>
 <p class="installation-status" id="storage">Edits become available when the arbiter responds.</p></section>
+<details class="panel yaml-panel" id="yaml-panel"><summary><strong>Game YAML</strong><span class="dim" id="yaml-path">edit, check and save the game file</span></summary>
+<div class="yaml-body"><textarea id="yaml-text" spellcheck="false" wrap="off" aria-label="Game YAML" disabled></textarea>
+<div class="yaml-actions"><button id="yaml-check" class="button secondary" disabled>Check</button><button id="yaml-save" class="button primary" disabled>Save</button><button id="yaml-reload" class="button secondary" disabled>Revert</button><span id="yaml-status" class="dim" role="status">Loading…</span></div></div></details>
 <section class="panel installation-panel"><div class="panel-heading"><div><h2>Map ropes</h2><p>Pull one or more ropes within 5 seconds, then assign the group to a channel.</p></div><button id="map-start" class="button primary" disabled>Start mapping</button></div>
 <p id="map-status" class="installation-status" role="status">Mapping is closed. Pulls reach the game.</p>
 <div class="map-controls"><label>Assign captured ropes to <select id="map-channel" disabled aria-label="Mapping destination channel"></select></label><button id="map-assign" class="button primary" disabled>Assign channel</button><button id="map-again" class="button secondary" disabled>Again</button><button id="map-done" class="button secondary" disabled>Done</button></div>
