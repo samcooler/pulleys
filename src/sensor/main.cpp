@@ -107,7 +107,12 @@ static_assert(LED_COUNT >= BAR_ORIGIN + pulleys::PANEL_14X2_LEDS,
 // the shape washes out into a single bright block. Raise it only if the piece
 // ends up somewhere with real ambient light to compete with.
 #define SENSOR_IDLE_CANDLE 1
-#define IDLE_BRIGHTNESS    10     // low — a presence check, not a display; 30% down from 14
+#define IDLE_BRIGHTNESS    77     // top of the swell (30%); 10 was too faint to notice across a room
+// The panel's middle pixel never goes dark: it rests at IDLE_FLOOR (20% of full
+// brightness) and the breath swells it from there. The rest of the candle still
+// fades fully out, so the pulse stays visible on top of a steady "I'm alive" dot.
+#define IDLE_FLOOR         51
+#define IDLE_FLOOR_PIXEL   4      // index into IDLE_PIXEL_IDX: the centre, 36
 
 // Breath: dark for a long stretch, swell, brief hold at full, fade back.
 #define IDLE_OFF_MS   10000
@@ -128,12 +133,6 @@ static_assert(LED_COUNT >= BAR_ORIGIN + pulleys::PANEL_14X2_LEDS,
 // FLICKER_FLOOR is the dimmest a pixel gets as a fraction of the breath, so a
 // candle never fully gutters out mid-swell.
 #define FLICKER_FLOOR  0.05f
-
-// The idle ember never goes fully dark: this is the least a pixel shows at rest,
-// out of 255 (1 is the least an LED can show). Set to 0 to let it go black again.
-#ifndef IDLE_MIN_LEVEL
-  #define IDLE_MIN_LEVEL 1
-#endif
 #define FLICKER_SPEED  9        // inoise8 steps per ms/16 — higher is twitchier
 #define ACTIVE_BRIGHTNESS  54     // the bar while awake; 30% down from 77, see note below
 
@@ -301,15 +300,6 @@ static float idleBreath(uint32_t now) {
 // Per-pixel flicker in FLICKER_FLOOR..1. Perlin noise rather than random8 so
 // each pixel wanders smoothly instead of buzzing; the large y offset keeps the
 // nine streams from correlating with one another.
-// A pixel's resting level: the breath x flicker, never below IDLE_MIN_LEVEL
-// while at rest. `rest` is 1 - ledEnv, so the floor hands over to the awake
-// pattern instead of adding to it.
-static uint8_t idleLevel(float breath, float flicker, float rest) {
-    float v = breath * flicker;
-    float floorV = IDLE_MIN_LEVEL * rest;
-    return (uint8_t)(v > floorV ? v : floorV + 0.5f);
-}
-
 static float idleFlicker(uint8_t i, uint32_t now) {
     uint8_t n = inoise8((uint16_t)(now * FLICKER_SPEED / 16), (uint16_t)(i * 977));
     return FLICKER_FLOOR + (1.0f - FLICKER_FLOOR) * (n / 255.0f);
@@ -369,7 +359,7 @@ static void renderBar(float dt, uint32_t now) {
     // rather than two things idling differently. Additive and cross-faded
     // against the pattern for the same reason the candle is.
     float breath = IDLE_BRIGHTNESS * (1.0f - ledEnv) * idleBreath(now);
-    if (!SENSOR_IDLE_CANDLE || ledEnv >= 1.0f) return;
+    if (!SENSOR_IDLE_CANDLE || breath <= 0.0f) return;
 
     CRGB c = pulleys::channel_color(myChannel);
     uint8_t k = 0;
@@ -378,11 +368,11 @@ static void renderBar(float dt, uint32_t now) {
             CRGB px = c;
             // Offset past the candle's streams so the two surfaces flicker
             // independently -- in step, they read as one wired-together blink.
-            px.nscale8(idleLevel(breath, idleFlicker(IDLE_PIXEL_COUNT + k, now), 1.0f - ledEnv));
+            px.nscale8((uint8_t)(breath * idleFlicker(IDLE_PIXEL_COUNT + k, now)));
             leds[pulleys::panel_index(barPanel, x, y)] += px;
         }
     }
-    barEmber = (uint8_t)(breath > IDLE_MIN_LEVEL ? breath : IDLE_MIN_LEVEL);
+    barEmber = (uint8_t)breath;
 }
 
 // ── Colour-order probe ────────────────────────────────────────────────────────
@@ -710,8 +700,13 @@ void loop() {
             float breath = IDLE_BRIGHTNESS * (1.0f - ledEnv) * idleBreath(now);
             if (SENSOR_IDLE_CANDLE) {
                 for (uint8_t i = 0; i < IDLE_PIXEL_COUNT; i++) {
+                    float lvl = breath * idleFlicker(i, now);
+                    if (i == IDLE_FLOOR_PIXEL) {
+                        float floorLvl = IDLE_FLOOR * (1.0f - ledEnv);
+                        if (lvl < floorLvl) lvl = floorLvl;
+                    }
                     CRGB p = c;
-                    p.nscale8(idleLevel(breath, idleFlicker(i, now), 1.0f - ledEnv));
+                    p.nscale8((uint8_t)lvl);
                     leds[GRID_ORIGIN + IDLE_PIXEL_IDX[i]] += p;
                 }
             }
