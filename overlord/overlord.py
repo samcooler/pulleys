@@ -71,6 +71,8 @@ def _has_media(root):
 if MEDIA != BUNDLED_MEDIA and not _has_media(MEDIA):
     print(f"no media in {MEDIA}; falling back to the bundled {BUNDLED_MEDIA}", flush=True)
     MEDIA = BUNDLED_MEDIA
+CAPTION_ID = 12      # osd-overlay id for clip captions (goal band 8, messages 9, banners 11)
+CAPTION_MAX_S = 20   # a caption never outstays this, even if the clip's end is missed
 DEFAULT_LOOP = "idle"  # played at startup from video_loops/ and audio_loops/ if present
 
 
@@ -165,6 +167,18 @@ def main():
         game_cfg = game_spec.load(args.game or _default_game)
     except (ImportError, OSError, ValueError) as e:
         print(f"playlog: no game file ({e}); no director or goal display", flush=True)
+    # What Janis says in each clip, shown along the bottom while it plays
+    # (captions.yaml beside the game file: clip name -> text).
+    captions = {}
+    try:
+        import yaml
+        from game import DEFAULT_GAME as _game_path
+        cap_path = Path(args.game or _game_path).with_name("captions.yaml")
+        if cap_path.exists():
+            captions = {str(k): str(v) for k, v in (yaml.safe_load(cap_path.read_text()) or {}).items()}
+            print(f"captions: {len(captions)} from {cap_path}", flush=True)
+    except Exception as e:
+        print(f"captions: not loaded ({e})", flush=True)
     playlog = None
     sessions = None
     if not args.no_playlog:
@@ -208,6 +222,7 @@ def main():
                 if state["playing_clip"]:
                     print("clip finished, returning to loop", flush=True)
                     state["playing_clip"] = False
+                    show_caption(None)
                     if state["video_loop"]:
                         video.play(state["video_loop"], loop=True)
 
@@ -259,6 +274,30 @@ def main():
 
     gains = gain_config.GainStore()  # cue -> loudness multiplier, with live overrides; pointed at the game file below
 
+    caption_timer = [None]
+
+    def show_caption(text):
+        """The clip's caption along the bottom of the video, or none. Cleared when
+        the clip ends; CAPTION_MAX_S is only a backstop if that is never heard."""
+        from simulate import RES_X, RES_Y, ass_rect
+        if caption_timer[0]:
+            caption_timer[0].cancel()
+            caption_timer[0] = None
+        try:
+            if not text:
+                video.command("osd-overlay", CAPTION_ID, "none", "")
+                return
+            esc = text.replace("\\", "\\\\").replace("{", "(").replace("}", ")")
+            lines = [ass_rect(0, RES_Y - 190, RES_X, 190, "000000", alpha="50"),
+                     f"{{\\an2\\pos({RES_X // 2},{RES_Y - 50})\\fs68\\bord3\\shad0\\b1\\q0"
+                     f"\\1c&HFFFFFF&\\3c&H000000&}}{esc}"]
+            video.command("osd-overlay", CAPTION_ID, "ass-events", "\n".join(lines), RES_X, RES_Y, 15)
+            caption_timer[0] = threading.Timer(CAPTION_MAX_S, lambda: show_caption(None))
+            caption_timer[0].daemon = True
+            caption_timer[0].start()
+        except Exception as e:
+            print(f"captions: overlay failed: {e}", flush=True)
+
     def play_clip(path, interrupt=False, gain=1.0):
         """Play a clip once. Unless interrupt, a clip already playing wins and
         this one is dropped. Returns whether it played."""
@@ -267,6 +306,7 @@ def main():
                 return False
             state["playing_clip"] = True
             video.play(path, loop=False, gain=gain)
+            show_caption(captions.get(Path(path).stem))
             return True
 
     def set_video_loop(path):
