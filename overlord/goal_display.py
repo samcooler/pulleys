@@ -23,7 +23,7 @@ And big words in the middle of the screen when the game moves:
                while a clip plays (Janis's congratulations first), so she is
                seen whenever she speaks.
 
-In the start state the band asks for a pull instead ("PULL ANY LEVER TO
+In the start state the band asks for a move instead ("MOVE ANY LEVER TO
 BEGIN").
 
 Goals and states come from the play log, so they work the same whether they
@@ -191,7 +191,7 @@ class GoalDisplay:
             return []
         lines = [ass_rect(0, 0, RES_X, BAND_H, "000000", alpha="50")]
         if state == self.start or not self.goals:
-            lines.append(ass_text(RES_X // 2, BAND_H // 2, "PULL ANY LEVER TO BEGIN", 78, align=5))
+            lines.append(ass_text(RES_X // 2, BAND_H // 2, "MOVE ANY LEVER TO BEGIN", 78, align=5))
             return lines
         x = 40
         if state in self.rounds:
