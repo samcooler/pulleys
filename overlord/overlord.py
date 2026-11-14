@@ -72,7 +72,9 @@ if MEDIA != BUNDLED_MEDIA and not _has_media(MEDIA):
     print(f"no media in {MEDIA}; falling back to the bundled {BUNDLED_MEDIA}", flush=True)
     MEDIA = BUNDLED_MEDIA
 CAPTION_ID = 12      # osd-overlay id for clip captions (goal band 8, messages 9, banners 11)
-CAPTION_MAX_S = 20   # a caption never outstays this, even if the clip's end is missed
+CAPTION_MAX_S = 20
+DUCK_PREFIX = "janis"   # clips whose file starts so duck the loop and bed under them
+DUCK_LEVEL = 0.7        # mpv volume is a cubic curve: 0.7 is about -9 dB   # a caption never outstays this, even if the clip's end is missed
 DEFAULT_LOOP = "idle"  # played at startup from video_loops/ and audio_loops/ if present
 
 
@@ -225,6 +227,7 @@ def main():
                     print("clip finished, returning to loop", flush=True)
                     state["playing_clip"] = False
                     show_caption(None)
+                    duck(False)
                     if goal_display:
                         goal_display.set_clip(False)
                     if state["video_loop"]:
@@ -243,7 +246,8 @@ def main():
         percent = max(0, min(100, percent))
         volume[0] = sounds.volume = percent
         for player in (audio, bed, video):
-            player.set("volume", percent)
+            ducked_now = player is not video and ducked[0]
+            player.set("volume", percent * (DUCK_LEVEL if ducked_now else 1.0))
         settings.save(volume=percent)
 
     def test_sound():
@@ -296,11 +300,26 @@ def main():
                      f"{{\\an2\\pos({RES_X // 2},{RES_Y - 50})\\fs68\\bord3\\shad0\\b1\\q0"
                      f"\\1c&HFFFFFF&\\3c&H000000&}}{esc}"]
             video.command("osd-overlay", CAPTION_ID, "ass-events", "\n".join(lines), RES_X, RES_Y, 15)
-            caption_timer[0] = threading.Timer(CAPTION_MAX_S, lambda: show_caption(None))
+            caption_timer[0] = threading.Timer(CAPTION_MAX_S, lambda: (show_caption(None), duck(False)))
             caption_timer[0].daemon = True
             caption_timer[0].start()
         except Exception as e:
             print(f"captions: overlay failed: {e}", flush=True)
+
+    ducked = [False]
+
+    def duck(on):
+        """While Janis speaks, the loop and the bed drop to DUCK_LEVEL of the
+        volume, so she is heard over them; back up when her clip ends."""
+        if on == ducked[0]:
+            return
+        ducked[0] = on
+        level = volume[0] * (DUCK_LEVEL if on else 1.0)
+        for player in (audio, bed):
+            try:
+                player.set("volume", level)
+            except Exception as e:
+                print(f"duck: {e}", flush=True)
 
     def play_clip(path, interrupt=False, gain=1.0):
         """Play a clip once. Unless interrupt, a clip already playing wins and
@@ -311,6 +330,7 @@ def main():
             state["playing_clip"] = True
             video.play(path, loop=False, gain=gain)
             show_caption(captions.get(Path(path).stem))
+            duck(Path(path).stem.startswith(DUCK_PREFIX))
             if goal_display:
                 goal_display.set_clip(True)
             return True

@@ -163,6 +163,7 @@ audio_gain:
   audio_once_component_powerup: 1  # placeholder
   audio_once_component_powerdown: 1.17  # placeholder
   audio_once_encouragement: 1.45
+  video_once_janis_*: 2           # every Janis clip, +6 dB (a limiter holds her peaks); a * key covers every cue it matches
 
 # A loop that starts quiet and grows: `start` of its volume, rising by `step`
 # every `every` until full, where it stays (mpv volume fractions, a cubic

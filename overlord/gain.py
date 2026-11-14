@@ -69,6 +69,19 @@ def load_ramps(path):
     return ramps
 
 
+def lookup(gains, cue, default=1.0):
+    """A cue's gain: its own entry, else the longest key with a * that matches
+    it (video_once_janis_* covers every Janis clip), else `default`."""
+    if cue in gains:
+        return gains[cue]
+    import fnmatch
+    best = None
+    for key in gains:
+        if "*" in key and fnmatch.fnmatchcase(cue, key) and (best is None or len(key) > len(best)):
+            best = key
+    return gains[best] if best else default
+
+
 # The `cues:` groups whose cues make sound. Only these take a gain.
 SOUND_GROUPS = ("audio_loop", "audio_bed", "audio_once", "video_once")
 
@@ -137,7 +150,7 @@ class GainStore:
         with self._lock:
             if cue in self._over:
                 return self._over[cue]
-            return self._base.get(cue, default)
+            return lookup(self._base, cue, default)
 
     def set(self, cue, value):
         gain = parse_gain(value)

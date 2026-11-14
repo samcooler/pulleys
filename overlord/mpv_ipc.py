@@ -136,7 +136,7 @@ class Mpv:
 
     def play(self, path, loop=True, gain=1.0):
         self.set("loop-file", "inf" if loop else "no")
-        self.set("af", f"lavfi=[volume={gain:g}]" if gain != 1 else "")
+        self.set("af", gain_filter(gain))
         self.command("loadfile", str(path), "replace")
 
     def stop(self):
@@ -161,6 +161,17 @@ class Mpv:
             pass
 
 
+def gain_filter(gain):
+    """The lavfi filter for a cue's gain, or "" at 1. Above 1 a limiter follows
+    the boost, so a clip turned up past its own headroom is held under full
+    scale instead of clipping (level=false: it limits only, no auto-gain)."""
+    if gain == 1:
+        return ""
+    if gain < 1:
+        return f"lavfi=[volume={gain:g}]"
+    return f"lavfi=[volume={gain:g},alimiter=limit=0.89:level=false]"
+
+
 class SoundPlayer:
     """Fire-and-forget one-shot sounds. Each sound gets its own mpv process so
     they overlap freely with each other and with the audio loop."""
@@ -177,7 +188,7 @@ class SoundPlayer:
         # own output, so it is read and logged by _watch. Warnings and errors only.
         proc = subprocess.Popen(
             ["mpv", "--no-video", "--idle=no", "--keep-open=no", "--msg-level=all=warn",
-             f"--volume={self.volume}", *(["--af=lavfi=[volume=%g]" % gain] if gain != 1 else []),
+             f"--volume={self.volume}", *([f"--af={gain_filter(gain)}"] if gain != 1 else []),
              *self._extra, str(path)],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )

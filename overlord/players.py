@@ -169,7 +169,8 @@ class Satellite:
 
     # -- routing ------------------------------------------------------------
     def gain(self, cue, bare):
-        return self.gains.get(cue, self.gains.get(bare, 1.0))
+        import gain as gain_config
+        return gain_config.lookup(self.gains, cue, gain_config.lookup(self.gains, bare, 1.0))
 
     def fire_cue(self, cue):
         """Play a cue if it is addressed to this player. True if it played."""
