@@ -586,6 +586,7 @@ static void renderWave(float dt) {
   #define COMPONENT_DISPLAY_REVERSE_Y 0
 #endif
 #define COMPONENT_BRIGHTNESS 60   // of 255; what the bars' own board used to run at
+#define GAUGE_SAT            250  // the lever bar's saturation (WaveParams::sat)
 #define TRACK_LEVEL          10   // unlit part of a bar, 0..255 of its colour
 
 static pulleys::ComponentDisplayModel compModel;
@@ -621,6 +622,16 @@ static inline uint16_t barLed(uint8_t x, uint8_t y) {
                                             COMPONENT_DISPLAY_REVERSE_Y);
 }
 
+// The arbiter's colour with its brightest channel at `level` and the others in
+// proportion, rounded rather than truncated, so a very dim line keeps its hue.
+static CRGB tint(CRGB raw, uint8_t level) {
+    uint8_t top = max(raw.r, max(raw.g, raw.b));
+    if (!top) return CRGB::Black;
+    return CRGB((uint8_t)(((uint16_t)raw.r * level + top / 2) / top),
+                (uint8_t)(((uint16_t)raw.g * level + top / 2) / top),
+                (uint8_t)(((uint16_t)raw.b * level + top / 2) / top));
+}
+
 static void renderComponents(uint32_t now, float dt) {
     pulleys::component_display_step(compModel, now, dt);
     fill_solid(leds, LED_COUNT, CRGB::Black);   // the gaps between bars stay dark
@@ -629,12 +640,14 @@ static void renderComponents(uint32_t now, float dt) {
         uint8_t full, edge;
         pulleys::component_display_pixels(compModel.shown[bar], full, edge);
         uint8_t x0 = pulleys::component_display_bar_x(bar);
+        // The hue of the arbiter's colour, as the lever bar takes it, at a fixed
+        // saturation. Brightness is set by tint(), not by CHSV's value, which is
+        // non-linear and would leave the bars a quarter as bright.
+        const CRGB base = CHSV(pulleys::color_hue(barColor[bar]), GAUGE_SAT, 255);
         for (uint8_t h = 0; h < pulleys::COMPONENT_DISPLAY_HEIGHT; h++) {
-            CRGB c = pulleys::color_rgb(barColor[bar]);
-            c.nscale8(COMPONENT_BRIGHTNESS);
-            if (h < full)       { /* lit */ }
-            else if (h == full) c.nscale8(edge > TRACK_LEVEL ? edge : TRACK_LEVEL);
-            else                c.nscale8(TRACK_LEVEL);
+            uint8_t level = h < full ? 255 : h == full ? (edge > TRACK_LEVEL ? edge : TRACK_LEVEL)
+                                                       : TRACK_LEVEL;
+            CRGB c = tint(base, scale8(COMPONENT_BRIGHTNESS, level));
             for (uint8_t dx = 0; dx < pulleys::COMPONENT_DISPLAY_BAR_W; dx++)
                 leds[barLed(x0 + dx, h)] = c;
         }
@@ -669,7 +682,7 @@ static void renderComponents(uint32_t now, float dt) {
 // first LED is its top (nearest the ring). Flip either if it fills the wrong way.
 #if SCREEN_EXTRACTOR_BUILD
 #ifndef EXTRACTOR_REVERSE_Y
-  #define EXTRACTOR_REVERSE_Y 0
+  #define EXTRACTOR_REVERSE_Y 1   // mounted with the ring's 8-high axis flipped
 #endif
 #ifndef EXTRACTOR_STRIP_REVERSE
   #define EXTRACTOR_STRIP_REVERSE 0
@@ -680,11 +693,13 @@ static void renderComponents(uint32_t now, float dt) {
   #define EXTRACTOR_BRIGHTNESS 60
 #endif
 
-// Of the colour's own (already dimmed) brightness, out of 255: the faint
-// vertical lines round the ring while the colour is not a goal. It is meant to
-// be fainter than a gauge's unlit track (TRACK_LEVEL 10, which comes out as 2 of
-// 255 on a lit channel). At 5 this comes out as 1 of 255, the least an LED can
-// show; the 8-bit scaling means 0..4 would turn it off entirely.
+// The faint vertical lines round the ring while the colour is not a goal, and
+// the other two dim levels below, are given as the value of the colour's
+// brightest channel, out of 255, with the others in proportion (see tint()).
+// Scaling the dimmed colour a second time truncated each channel on its own and
+// shifted the hue (a magenta went red). Below about 4 the other channels have
+// too few steps to hold the hue, so do not go lower than that. These lines are
+// meant to stay fainter than a gauge's unlit track.
 #ifndef EXTRACTOR_IDLE_GLOW
   #define EXTRACTOR_IDLE_GLOW 5
 #endif
@@ -692,15 +707,14 @@ static void renderComponents(uint32_t now, float dt) {
 #ifndef EXTRACTOR_MARKS
   #define EXTRACTOR_MARKS 6
 #endif
-// Of the colour's brightness: the light wash over every LED while it is a goal.
+// The light wash over every LED while the colour is a goal.
 #ifndef EXTRACTOR_WANTED_WASH
-  #define EXTRACTOR_WANTED_WASH 10
+  #define EXTRACTOR_WANTED_WASH 3
 #endif
-// Of the colour's brightness: the vertical lines while it is a goal and not yet
-// filled. Brighter than idle, but well short of the liquid, which must stay the
-// brightest thing on the surface.
+// The vertical lines while it is a goal and not yet filled. Brighter than idle,
+// but well short of the liquid, which must stay the brightest thing on the surface.
 #ifndef EXTRACTOR_WANTED_LINE
-  #define EXTRACTOR_WANTED_LINE 110
+  #define EXTRACTOR_WANTED_LINE 26
 #endif
 
 static pulleys::ExtractorLiquid liquid;
@@ -727,12 +741,14 @@ static inline CRGB liquidPixel(CRGB c, float cover) {
     return c;
 }
 
+
 static void renderExtractor(uint32_t now, float dt) {
     const uint16_t S = EXTRACTOR_STRIP_LEDS;
     uint8_t color = mode - pulleys::SCREEN_EXTRACTOR_RED;
     pulleys::extractor_step(liquid, extractorScore(color, now), dt);
 
-    CRGB full = pulleys::color_rgb(color);
+    const CRGB raw = pulleys::color_rgb(color);
+    CRGB full = raw;
     full.nscale8(EXTRACTOR_BRIGHTNESS);
 
     float s = pulleys::extractor_strip_surface(liquid, S);
@@ -743,12 +759,8 @@ static void renderExtractor(uint32_t now, float dt) {
     // Under the liquid, which wins wherever it is brighter. Not a goal: faint
     // lines round the ring. A goal: every LED lightly washed, the lines bright.
     bool wanted = extractorWanted(color);
-    CRGB wash = full, lineIdle = full;
-    wash.nscale8(EXTRACTOR_WANTED_WASH);
-    lineIdle.nscale8(EXTRACTOR_IDLE_GLOW);
-    CRGB lineWanted = full;
-    lineWanted.nscale8(EXTRACTOR_WANTED_LINE);
-    CRGB line = wanted ? lineWanted : lineIdle;
+    const CRGB wash = tint(raw, EXTRACTOR_WANTED_WASH);
+    const CRGB line = tint(raw, wanted ? EXTRACTOR_WANTED_LINE : EXTRACTOR_IDLE_GLOW);
     if (wanted)
         for (uint16_t i = 0; i < S; i++)
             leds[pulleys::extractor_strip_index(i, S, EXTRACTOR_STRIP_REVERSE)] |= wash;
@@ -760,7 +772,7 @@ static void renderExtractor(uint32_t now, float dt) {
         for (uint8_t y = 0; y < pulleys::EXTRACTOR_RING_H; y++) {
             CRGB c = liquidPixel(full, pulleys::extractor_cover(r, (float)(S + y)));
             if (wanted) c |= wash;
-            if (mark) c |= line;
+            if (mark || y == 0) c |= line;   // the vertical lines, and one along the bottom row
             leds[pulleys::extractor_ring_index(x, y, EXTRACTOR_REVERSE_Y)] = c;
         }
     }

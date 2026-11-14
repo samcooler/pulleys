@@ -169,7 +169,8 @@ inline CRGB channel_color(uint8_t ch) { return color_rgb(channel_color_index(ch)
 
 // The hue of a channel's colour, for whatever is built around a hue (the
 // sensor's bar bubbles in an arc centred on it).
-inline uint8_t channel_hue(uint8_t ch) { return rgb2hsv_approximate(channel_color(ch)).hue; }
+inline uint8_t color_hue(uint8_t color) { return rgb2hsv_approximate(color_rgb(color)).hue; }
+inline uint8_t channel_hue(uint8_t ch) { return color_hue(channel_color_index(ch)); }
 
 // Shapes that read as one colour: a lit body with a moving edge, legible even
 // if the accent colour never appeared. CHECKER, POLKA and QUADRANTS are left
