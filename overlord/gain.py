@@ -42,6 +42,19 @@ def load(path):
 SOUND_GROUPS = ("audio_loop", "audio_bed", "audio_once", "video_once")
 
 
+def all_cues(path):
+    """[(cue, group)] for every cue in the YAML's `cues:`, sound or not, in file
+    order: what an operator may send by hand."""
+    if yaml is None or not path:
+        return []
+    try:
+        with open(path) as f:
+            config = yaml.safe_load(f) or {}
+    except OSError:
+        return []
+    return [(str(c), str(g)) for g, cs in (config.get("cues") or {}).items() for c in (cs or [])]
+
+
 def cue_list(path):
     """[(cue, group)] for every cue in the YAML's `cues:` that makes sound, in
     file order. The `*_off` words are left out: they play nothing."""
@@ -141,6 +154,7 @@ class GainStore:
                 for cue, group in rows]
         cues.sort(key=lambda c: c["missing"])   # cues with no media sink to the bottom, order kept
         return {"cues": cues,
+                "all_cues": [{"cue": c, "group": g} for c, g in all_cues(self.path)],
                 "overrides": len([c for c in over if over[c] != base.get(c, 1.0)])}
 
     def yaml_block(self):

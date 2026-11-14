@@ -152,7 +152,7 @@ $('filter').oninput = () => data && render();
 async function refresh() {
   if (busy) return;
   busy = true;
-  try { data = await api('GET', ''); $('cue-list').replaceChildren(...data.cues.map(c => el('option', {value: c.cue}))); render(); $('connection').textContent = 'Connected'; }
+  try { data = await api('GET', ''); $('cue-list').replaceChildren(...data.cues.map(c => el('option', {value: c.cue}))); renderBrowser(); render(); $('connection').textContent = 'Connected'; }
   catch (e) { fail(e); }
   finally { busy = false; }
   syncMaster();
@@ -217,3 +217,18 @@ $('cue-form').onsubmit = e => {   // send any cue by name, including ones for an
     .then(r => { out.textContent = r.ok ? `sent ${name}` : `${name} did not play (see the log)`; })
     .catch(err => { out.textContent = String(err); });
 };
+
+function sendCue(name) {
+  const out = $('cue-result');
+  return fetch('/cue/' + encodeURIComponent(name), {method: 'POST'})
+    .then(r => { out.textContent = r.ok ? `sent ${name}` : `${name} did not play (see the log)`; })
+    .catch(err => { out.textContent = String(err); });
+}
+function renderBrowser() {   // every cue in the game file, grouped; click one to send it; the box above filters
+  const q = $('cue-name').value.trim().toLowerCase(), groups = {};
+  for (const c of (data && data.all_cues) || []) if (!q || c.cue.toLowerCase().includes(q)) (groups[c.group] ||= []).push(c.cue);
+  $('cue-browser').replaceChildren(...Object.entries(groups).map(([g, names]) =>
+    el('div', {}, el('h3', {}, `${g} (${names.length})`),
+      el('div', {className: 'cue-chips'}, ...names.map(n => button(n, () => sendCue(n), 'button small'))))));
+}
+$('cue-name').addEventListener('input', renderBrowser);
