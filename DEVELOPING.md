@@ -22,6 +22,7 @@
 | `station_wroom` | D1 Mini ESP32-WROOM-32 | hardware FPU, SSAA=3 |
 | `bridge` | ESP32-C3 (`seeed_xiao_esp32c3`) | mesh → Pi over native USB, default env |
 | `bridge_esp32` | classic ESP32 (`esp32dev`), 4 MB | mesh → Pi over USB-UART; separate image to prevent cross-flashing a C3 binary |
+| `bridge_s3` | ESP32-S3 (4 MB, native USB) | like `bridge`, on an S3 board. Not in `release_firmware.ENVS`: flash by USB (the Pi's `esptool` from apt lacks the S3 stub; use `pip install esptool` in a venv) |
 | `component_state_display` | D1 Mini ESP32-WROOM-32 | the screen image pinned to its COMPONENTS display, default env |
 | `screen_extractor` | D1 Mini ESP32-WROOM-32 | the screen image on the extractor surface (ring + strip), default env |
 | `screen_party` | ESP32 DevKit, 30-pin (`esp32dev`) | the screen image pinned to PARTY: four AC light switches, no LEDs, default env |

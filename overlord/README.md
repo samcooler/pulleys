@@ -40,6 +40,36 @@ the Pi path still works, see Deploying below).
 
 ssh in as `overlord`. There is no login prompt on the screen: the video owns it.
 
+### Second Overlord (Raspberry Pi, sounds only)
+
+A small Pi in the diorama that plays the sounds of distress. It is not the main
+Overlord.
+
+| | |
+| --- | --- |
+| hardware | Raspberry Pi (aarch64), Debian 13 trixie, desktop image |
+| hostname | `overlord2` |
+| user | `rpi` / `rpi` (not sensitive) |
+| audio | `card 0` HDMI, `card 1` 3.5 mm headphones |
+| address | joins the phone hotspot (seen at `172.20.10.9`, MAC `b8:27:eb:f3:f8:6f`); the address can change, so find it with an arp scan of `172.20.10.0/28` |
+
+It runs this checkout (`~/pulleys`, cloned over HTTPS, pulled on every boot) as a
+**sound satellite** named `diorama` (see Satellite players): `/etc/overlord.env`
+has `OVERLORD_PLAYER=diorama` and
+`OVERLORD_ARGS=--mpv-arg=--audio-device=alsa/plughw:CARD=Headphones,DEV=0` (the
+3.5 mm jack). It cannot be the Overlord: the desktop image was left alone, and
+there is no media sync from Drive. Only `audio_loops/` and `audio_once/` were
+copied over from the main Overlord (tar over ssh, skipping `OLD*`); to refresh
+them, repeat that into `/var/lib/overlord/media`. Test it without the game:
+`curl -X POST http://<ip>:8080/cue/audio_once_spirit_distress`.
+
+It shows `images/idle.png` ("COMPLIANCE IS MANDATORY", 1920x1080) constantly and plays
+`audio_loop_spirit_distress` while the game is in `diorama_unlocked`. The idle audio loop
+was moved out of `audio_loops/` on purpose, since it would start at boot. It plays cues addressed `diorama__audio_once_<name>`; list `diorama` under
+`players:` in the game YAML. Its bridge is an ESP32-S3 on USB running
+`bridge_s3` (flashed from the Pi with `esptool` from a venv, `~/espenv`); without
+one it logs `no serial port found; using test mode`.
+
 ## How events flow
 
 ```
