@@ -152,7 +152,7 @@ $('filter').oninput = () => data && render();
 async function refresh() {
   if (busy) return;
   busy = true;
-  try { data = await api('GET', ''); render(); $('connection').textContent = 'Connected'; }
+  try { data = await api('GET', ''); $('cue-list').replaceChildren(...data.cues.map(c => el('option', {value: c.cue}))); render(); $('connection').textContent = 'Connected'; }
   catch (e) { fail(e); }
   finally { busy = false; }
   syncMaster();
