@@ -26,6 +26,7 @@
 #include "installation.h"
 #include "installmap.h"
 #include "installui.h"
+#include "gameui.h"
 #include "ui.h"
 #include "signui.h"
 
@@ -473,6 +474,7 @@ void setup() {
     ui_init();
     clockui_init(&s_rtc);
     installui_init();
+    gameui_init();
     signui_init(&display, &s_touch);   // the monitor first; the sign after 5 min untouched
     // Last, so the game's opening cues go out onto a mesh that is up.
     devices_init();
@@ -516,7 +518,8 @@ void loop() {
 
     clockui_tick();
     installui_tick();
-    bool modal = clockui_is_open() || installui_is_open();
+    gameui_tick();
+    bool modal = clockui_is_open() || installui_is_open() || gameui_is_open();
     if (!modal) ui_tick();
     // The queue sign draws itself; LVGL must not paint over it meanwhile.
     if (!signui_tick(now, modal)) lv_timer_handler();

@@ -182,7 +182,7 @@ void ui_init() {
     lv_obj_align(s_gameTimer, LV_ALIGN_TOP_LEFT, 0, 62);
 
     s_flashBar = lv_obj_create(s_gamePanel);
-    lv_obj_set_size(s_flashBar, 2 * QW - 2 - 12 - 270, 26);
+    lv_obj_set_size(s_flashBar, 2 * QW - 2 - 12 - 270 - 120, 26);   // 120: room for STATES (gameui.cpp)
     lv_obj_set_pos(s_flashBar, 270, 0);
     lv_obj_set_style_bg_color(s_flashBar, lv_color_hex(COL_PANEL), 0);
     lv_obj_set_style_border_width(s_flashBar, 0, 0);

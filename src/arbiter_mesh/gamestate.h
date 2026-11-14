@@ -34,6 +34,10 @@ void gamestate_reset();
 // there: its entry cues, settings and timers run. Counters and charge are kept.
 // False if the game is not loaded or has no such state.
 bool gamestate_goto(const char* name);
+// The loaded game's states, in the order the config lists them (for the panel's
+// STATES buttons). 0 / nullptr before a game is loaded or past the end.
+uint8_t     gamestate_state_count();
+const char* gamestate_state_name(uint8_t i);
 
 void gamestate_event(GameEvent e);
 // An event by name: a device's input ("diorama.door_opened"), or any of the above.

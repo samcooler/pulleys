@@ -747,6 +747,19 @@ bool gamestate_goto(const char* name) {
     return true;
 }
 
+uint8_t gamestate_state_count() {
+    if (!s_ready) return 0;
+    size_t n = s_doc["states"].as<JsonObjectConst>().size();
+    return n > 255 ? 255 : (uint8_t)n;
+}
+
+const char* gamestate_state_name(uint8_t i) {
+    if (!s_ready) return nullptr;
+    for (JsonPairConst kv : s_doc["states"].as<JsonObjectConst>())
+        if (i-- == 0) return kv.key().c_str();
+    return nullptr;
+}
+
 void gamestate_event(GameEvent e) { gamestate_input(gameevent_name(e)); }
 
 void gamestate_input(const char* name) {
