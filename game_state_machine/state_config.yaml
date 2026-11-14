@@ -456,6 +456,7 @@ states:
         set:
           party.lights: lit
         cue:
+          - audio_once_victory_fanfare
           - choose_one:
               - video_once_janis_progress_confirmation_congrats_1
               - video_once_janis_progress_confirmation_congrats_2
