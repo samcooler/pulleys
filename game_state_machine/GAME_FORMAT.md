@@ -459,3 +459,10 @@ deals, counter changes, param values, the palette -- as `MESH_MSG_GAME_INFO`
 floods, batched one per loop pass, plus a heartbeat every 15 s. The Overlord's
 bridge hands them to its Pi, which keeps them with every pull in the play log
 (`overlord/playlog.py`). Nothing in a game file sets this up.
+
+## Messages
+
+`messages:` (Overlord only, left out of the arbiter's JSON) names text for the
+Overlord to show over its video: `afterword: {text: "...", seconds: 30}`. The cue
+`text_show_afterword` (listed under `cues`) shows it for that many seconds. Every
+`text_show_<name>` cue needs a `messages.<name>`.

@@ -27,6 +27,11 @@ start: passive
 # Goal band on the video while a round is on; extractors outline goals too.
 show_goals: true
 
+# Satellite Pis that play cues of their own (overlord/README.md, "Satellite players").
+# diorama = overlord2: shows "Compliance is Mandatory" and plays the spirits' distress.
+players:
+  - diorama
+
 # Major component colours; list position = component number (also bar order on displays).
 # Finals aren't listed: every purple channel is one.
 components:
@@ -158,10 +163,13 @@ cues:
   audio_loop:
     - audio_loop_idle
     - audio_loop_off
+    - diorama__audio_loop_spirit_distress   # overlord2, in the diorama
+    - diorama__audio_loop_off
   audio_bed:                        # a second loop under audio_loop_*
     - audio_bed_clock_ambient
     - audio_bed_off
   video_once:
+    - video_once_puppet_escape_party   # 31 s: the jailbreak, in victory2
     # Janis: wildcard per mood, then one line per file (comment = what she says).
     - video_once_janis_encouragement_*
     - video_once_janis_progress_confirmation_*
@@ -280,8 +288,16 @@ cues:
   video_loop:
     - video_loop_idle
     - video_loop_game1
+  text_show:                        # a message from `messages:`, shown over the Overlord's video
+    - text_show_afterword
 
-# Flow: passive -> easy_round -> medium_round -> hard_round -> party -> final -> victory2 -> kickout -> passive
+# MESSAGES: text for text_show_<name> cues. Overlord only. seconds = how long it stays.
+messages:
+  afterword:
+    text: "Thanks for playing, please relatch the diorama on your way out!"
+    seconds: 30
+
+# Flow: passive -> easy_round -> medium_round -> hard_round -> party -> diorama_unlocked -> final -> victory2 -> kickout -> passive
 #
 # Story: ropes are levers extracting spirit souls for Janis. Party opens the diorama at
 # 10 s; its "free the spirits" button is fake (purple flash, bad noise, Janis disables it).
@@ -485,7 +501,30 @@ states:
             - video_once_janis_progress_confirmation_pizza_2
     after:
       delay: $party_time
-      goto: final
+      goto: diorama_unlocked
+
+  # The diorama is open and the spirits cry out (overlord2) until someone pulls a purple rope.
+  diorama_unlocked:
+    on:
+      enter:
+        cue:
+          - diorama__audio_loop_spirit_distress
+      diorama.door_opened:
+        cue:
+          - choose_one:
+              - video_once_janis_warn_dont_go_in
+              - video_once_janis_warn_dont_look
+      diorama.button_pressed:
+        cue:
+          - audio_once_spirits_denied
+          - video_once_janis_beg_button
+      final_component_activated:
+        goto: final
+    idle:
+      delay: 12s                    # placeholder
+      cue:
+        - video_once_janis_threatening_*
+
 
   # Only purple matters; majors unlisted = ignored.
   final:
@@ -494,6 +533,7 @@ states:
         set:
           party.lights: dark          # the victory is over
         cue:
+          - diorama__audio_loop_off   # the distress stops
           - game_reset_components
           - video_once_janis_threatening_*
       final_component_activated:
@@ -531,8 +571,18 @@ states:
           party.lights: lit
         cue:
           - audio_bed_off
+          - video_once_puppet_escape_party
     after:
-      delay: 2m                    # placeholder
+      delay: 32s                   # the jailbreak video is 31 s
+      goto: afterword
+
+  afterword:
+    on:
+      enter:
+        cue:
+          - text_show_afterword
+    after:
+      delay: 30s
       goto: kickout
 
   kickout:
@@ -545,6 +595,7 @@ states:
         cue:
           - audio_loop_off
           - audio_bed_off
+          - diorama__audio_loop_off
     after:
       delay: 2m                    # placeholder
       goto: passive

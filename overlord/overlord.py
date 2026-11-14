@@ -297,6 +297,27 @@ def main():
                 return players.media_files(MEDIA, folder, cue[len(prefix):], prefix)
         return []
 
+    message_timer = [None]
+
+    def show_message(name):
+        """text_show_<name>: the game file's messages.<name> over the video for
+        its `seconds`. Returns the name, or False if the game has no such message."""
+        msg = ((game_cfg or {}).get("messages") or {}).get(name)
+        if not msg:
+            print(f"no message {name!r} under messages in the game file", flush=True)
+            return False
+        from simulate import RES_X, RES_Y, ass_rect, ass_text
+        lines = [ass_rect(0, RES_Y // 2 - 150, RES_X, 300, "000000", alpha="40"),
+                 ass_text(RES_X // 2, RES_Y // 2, msg["text"], 72, align=5)]
+        video.command("osd-overlay", 9, "ass-events", "\n".join(lines), RES_X, RES_Y, 20)
+        if message_timer[0]:
+            message_timer[0].cancel()
+        message_timer[0] = threading.Timer(
+            msg["seconds"], lambda: video.command("osd-overlay", 9, "none", ""))
+        message_timer[0].daemon = True
+        message_timer[0].start()
+        return name
+
     def dispatch(event_name, enter=False):
         """Play the cue. Returns what it played (the media file's name), None if
         the name is no cue, False if there is no media for it, or "skipped" for
@@ -307,6 +328,8 @@ def main():
         if event_name == "audio_bed_off":
             stop_audio_bed()
             return "stopped"
+        if event_name.startswith("text_show_"):
+            return show_message(event_name[len("text_show_"):])
         for prefix, folder, action in prefixed:
             if event_name.startswith(prefix):
                 path = find_media(folder, event_name[len(prefix):], prefix)

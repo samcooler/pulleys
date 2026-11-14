@@ -68,7 +68,7 @@ GAME1_COLORS = ("red", "blue", "green", "yellow", "orange")
 MAX_DECAY_RATE = 65.0
 
 # Sections only the Pis read; the arbiter's JSON leaves them out.
-OVERLORD_ONLY = ("ambient_sounds", "players", "show_goals", "milestones", "shared")
+OVERLORD_ONLY = ("ambient_sounds", "players", "show_goals", "milestones", "shared", "messages")
 
 # Addressing a cue to a player: "shrine__audio_once_bell" is for the Pi named
 # shrine; no prefix is the Overlord's. Keep in step with overlord/players.py.
@@ -182,6 +182,23 @@ def validate(cfg):
             if not isinstance(cue, str) or not CUE_NAME.fullmatch(cue):
                 errors.append(f"cues.{group}: '{cue}' must be 1-{CUE_NAME_MAX} characters of "
                               "lowercase letters, digits, _ and -")
+
+    # messages: text for text_show_<name> cues, shown by the Overlord (GAME_FORMAT.md)
+    messages = cfg.get("messages") or {}
+    if not isinstance(messages, dict):
+        errors.append("messages: must be a map of name: {text, seconds}")
+        messages = {}
+    for name, msg in messages.items():
+        if (not isinstance(msg, dict) or set(msg) - {"text", "seconds"}
+                or not isinstance(msg.get("text"), str) or not msg["text"]
+                or isinstance(msg.get("seconds"), bool)
+                or not isinstance(msg.get("seconds"), (int, float)) or msg["seconds"] <= 0):
+            errors.append(f"messages.{name}: must be {{text: \"...\", seconds: N}}")
+    for group, cues in (cfg["cues"] or {}).items():
+        for cue in cues or []:
+            if (isinstance(cue, str) and cue.startswith("text_show_")
+                    and cue[len("text_show_"):] not in messages):
+                errors.append(f"cues.{group}: '{cue}' has no entry under messages")
 
     # players: the satellite Pis a cue may be addressed to (GAME_FORMAT.md)
     players = cfg.get("players") or []
