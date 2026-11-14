@@ -162,7 +162,7 @@ function renderOverview(row) {
   }
   if(Array.isArray(set) && row.game?.ready && !row.game.goals_visible)
     $('overview-goals-status').textContent='Goals are set here but only show in states that use them.';
-  else if(Array.isArray(set)) $('overview-goals-status').textContent=view.live?'Tick the colours that are goals.':'Last reported goals.';
+  else if(Array.isArray(set)) $('overview-goals-status').textContent=view.live?'Tick the colours that are goals. Click a square to pull that colour, as if its component were being activated.':'Last reported goals.';
 }
 function renderMapping(row,live) {
   const map=row?.mapping;

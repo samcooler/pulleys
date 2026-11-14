@@ -91,10 +91,12 @@ ordinary captures must not prevent lease renewal or closing the session.
 
 ## Lever debug
 
-The Installation page ends with one button per rope channel (1-24). A click is
-one pull on that channel, as if its sensor had fired: it charges the component,
-lights goals, fires cues and reaches the play log. Clicks are independent, so
-fast clicking pulls fast.
+On the Installation page, the coloured square beside each goal colour is a lever
+button: a click is one pull on a rope of that colour (the first channel wearing
+it that has ropes mapped, else any channel wearing it), as if its sensor had
+fired. It charges the component, lights goals, fires cues and reaches the play
+log. Clicks are independent, so fast clicking pulls fast. How many pulls light a
+component is the game's `charge_per_pull`.
 
 `POST /lever/<channel>` (1-31) on the control server does it: 200 `{"channel":n}`,
 400 for a bad channel, 503 if the bridge is not connected. Overlord writes
