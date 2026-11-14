@@ -171,6 +171,7 @@ def main():
     # What Janis says in each clip, shown along the bottom while it plays
     # (captions.yaml beside the game file: clip name -> text).
     captions = {}
+    goal_display = None   # set below, for a game with show_goals; told when clips start and end
     try:
         import yaml
         from game import DEFAULT_GAME as _game_path
@@ -224,6 +225,8 @@ def main():
                     print("clip finished, returning to loop", flush=True)
                     state["playing_clip"] = False
                     show_caption(None)
+                    if goal_display:
+                        goal_display.set_clip(False)
                     if state["video_loop"]:
                         video.play(state["video_loop"], loop=True)
 
@@ -308,6 +311,8 @@ def main():
             state["playing_clip"] = True
             video.play(path, loop=False, gain=gain)
             show_caption(captions.get(Path(path).stem))
+            if goal_display:
+                goal_display.set_clip(True)
             return True
 
     def set_video_loop(path):
@@ -546,8 +551,6 @@ def main():
 
     firmware_updater = None
     installation = None
-
-    goal_display = None
 
     def on_serial_event(event_name):
         event_name = event_name.strip()

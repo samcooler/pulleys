@@ -16,7 +16,12 @@ And big words in the middle of the screen when the game moves:
 
   SUCCESS!     2 s, when a round is won (it leaves for anything but the start)
   TIME'S UP    2 s, when a round runs out and the game goes back to the start
-  VICTORY!     on entering a victory state (VICTORY_STATES)
+  PARTY! / VICTORY!
+               all through a victory state (VICTORY_STATES: party, the three
+               rounds won): a full-screen card with falling confetti that
+               pulses in and out, the word alternating each pulse. It waits
+               while a clip plays (Janis's congratulations first), so she is
+               seen whenever she speaks.
 
 In the start state the band asks for a pull instead ("PULL ANY LEVER TO
 BEGIN").
@@ -28,6 +33,8 @@ src/bridge/main.cpp); with an older bridge CURRENT stays empty.
 """
 
 import sys
+import math
+import random
 import threading
 import time
 from pathlib import Path
@@ -48,9 +55,16 @@ BLOCK_Y = (BAND_H - BLOCK_H) // 2
 WRONG = "FF3B30"
 WRONG_FLASH_S = 1.5        # a stray pull's glow, brightest right after it
 BANNER_S = 2.0
-VICTORY_S = 6.0
-VICTORY_STATES = ("victory2",)
+CARD_CYCLE_S = 4.0         # one pulse: fade in, hold, fade out, a moment of video
+CARD_FADE_S = 0.6
+CARD_GAP_S = 0.5           # the video between pulses
+CARD_WORDS = ("PARTY!", "VICTORY!")
+CLIP_MAX_S = 40.0
+VICTORY_STATES = ("party",)
 FPS = 8
+CARD_FPS = 20              # while the victory card's confetti falls
+CONFETTI_N = 110
+CONFETTI_COLORS = ("FF3B30", "0A84FF", "34C759", "FFD60A", "FF9500", "BF5AF2", "FFFFFF", "FF2D95")
 
 
 def ass_box(x, y, w, h, color, bord, alpha="00", blur=0):
@@ -92,6 +106,13 @@ class GoalDisplay:
         self.stray_at = {}        # colour -> when it was last pulled as a non-goal
         self.lit = set()          # colours lit: from reaching 100 until drained to 0
         self.banner = None        # (text, colour, until)
+        self.clip = False         # a video_once clip is playing (set_clip): the card waits
+        self.card_t0 = None       # when the card last came up, for its pulse
+        rnd = random.Random(7)    # the same confetti every time, a different piece each
+        self.confetti = [(rnd.uniform(0, RES_X), rnd.uniform(-RES_Y, 0), rnd.uniform(160, 380),
+                          rnd.uniform(20, 90), rnd.uniform(0.6, 2.2), rnd.uniform(0, 6.3),
+                          rnd.choice(CONFETTI_COLORS), rnd.uniform(-400, 400), rnd.choice((0, 1)))
+                         for _ in range(CONFETTI_N)]
         self.shown = (None, None)
         threading.Thread(target=self._run, daemon=True, name="goal-display").start()
 
@@ -114,12 +135,24 @@ class GoalDisplay:
 
     def _on_state(self, prev, new, now):
         if new in VICTORY_STATES:
-            self.banner = ("VICTORY!", "FFD60A", now + VICTORY_S)
+            self.banner = None
         elif prev in self.rounds and new != prev:
             if new == self.start:
                 self.banner = ("TIME'S UP", "FF9500", now + BANNER_S)
             else:
                 self.banner = ("SUCCESS!", "34C759", now + BANNER_S)
+
+    def set_clip(self, playing):
+        """overlord.py: a clip started (True) or ended (False)."""
+        with self.lock:
+            self.clip = self.clock() if playing else False
+
+    def _card_up(self, now):
+        # A moment's grace on entry, so the congratulations clip, which starts
+        # with the state, takes the screen before the card can.
+        # A clip whose end was never heard stops holding it after CLIP_MAX_S.
+        clip = self.clip is not False and now - self.clip < CLIP_MAX_S
+        return self.state in VICTORY_STATES and not clip and now - self.entered >= 1.0
 
     def on_components(self, line):
         """`CO <decay> <charges> <colours> <goals>` from the bridge."""
@@ -216,6 +249,41 @@ class GoalDisplay:
         return [ass_rect(0, RES_Y // 2 - 150, RES_X, 300, "000000", alpha="60"),
                 ass_banner(text, color, alpha)]
 
+    def _card(self, now):
+        """The party card: a deep purple screen, the word in gold, confetti
+        falling over it, pulsing in and out every CARD_CYCLE_S."""
+        if not self._card_up(now):
+            self.card_t0 = None
+            return []
+        if self.card_t0 is None:
+            self.card_t0 = now
+        t = now - self.card_t0
+        cycle, ct = divmod(t, CARD_CYCLE_S)
+        word = CARD_WORDS[int(cycle) % len(CARD_WORDS)]
+        show = CARD_CYCLE_S - CARD_GAP_S
+        fade = 0.0 if ct >= show else min(1.0, ct / CARD_FADE_S, (show - ct) / CARD_FADE_S)
+        if fade <= 0:
+            return []
+        a = f"{int((1 - fade) * 255):02X}"
+        lines = [ass_rect(0, 0, RES_X, RES_Y, "1E0B3A", alpha=f"{max(0x18, int((1 - fade) * 255)):02X}")]
+        # A slow throb on the word, so it feels alive rather than printed.
+        scale = 100 + 6 * math.sin(t * 4)
+        lines.append(f"{{\\an5\\pos({RES_X // 2},{RES_Y // 2 - 40})\\fs300\\b1\\bord12\\shad10"
+                     f"\\fscx{scale:.0f}\\fscy{scale:.0f}\\1c{ass_color('FFD60A')}\\3c{ass_color('7A3E00')}"
+                     f"\\4c&H000000&\\1a&H{a}&\\3a&H{a}&\\4a&H80&}}{word}")
+        lines.append(f"{{\\an5\\pos({RES_X // 2},{RES_Y // 2 + 190})\\fs80\\b1\\bord4\\shad0"
+                     f"\\1c&HFFFFFF&\\3c&H000000&\\1a&H{a}&\\3a&H{a}&}}PRODUCTIVITY ACHIEVED")
+        for x0, y0, speed, sway, freq, phase, color, spin, shape in self.confetti:
+            y = (y0 + speed * t) % (RES_Y + 120) - 60
+            x = x0 + sway * math.sin(freq * t + phase)
+            w, h = (14, 30) if shape else (22, 22)
+            # A flip: the piece's width swings through zero as it tumbles.
+            fx = abs(math.cos(freq * 1.7 * t + phase)) * 100
+            lines.append(f"{{\\an5\\pos({x:.0f},{y:.0f})\\bord0\\shad0\\frz{(spin * t) % 360:.0f}"
+                         f"\\fscx{fx:.0f}\\1c{ass_color(color)}\\1a&H{a}&\\p1}}"
+                         f"m 0 0 l {w} 0 {w} {h} 0 {h}{{\\p0}}")
+        return lines
+
     def _show(self, oid, lines, index):
         text = "\n".join(lines)
         if text == self.shown[index]:
@@ -231,7 +299,7 @@ class GoalDisplay:
     def draw(self):
         now = self.clock()
         with self.lock:
-            banner = self._banner(now)
+            banner = self._card(now) if self.state in VICTORY_STATES else self._banner(now)
             # A banner has the screen to itself: the band (the next round's goals) waits for it.
             band = [] if banner else self._band(now)
         try:
@@ -243,4 +311,4 @@ class GoalDisplay:
     def _run(self):
         while True:
             self.draw()
-            time.sleep(1 / FPS)
+            time.sleep(1 / (CARD_FPS if self.state in VICTORY_STATES else FPS))
