@@ -378,7 +378,7 @@ states:
       <<: *round_on
       enter:
         clear: [stray]
-        set: { queue.sign: wait }     # a group is in; it stays wait until passive
+        set: { queue.sign: wait, diorama.latch: locked }   # a group is in; the sign stays wait until passive
         goals: $easy_goals            # deal this many goal colours
         cue:
           - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
@@ -410,6 +410,7 @@ states:
       <<: *round_on
       enter:
         clear: [stray]
+        set: { diorama.latch: locked }
         goals: $medium_goals
         cue:
           - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
@@ -447,6 +448,7 @@ states:
       <<: *round_on
       enter:
         clear: [stray]
+        set: { diorama.latch: locked }
         goals: $hard_goals
         cue:
           - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
@@ -485,6 +487,7 @@ states:
       enter:
         set:
           party.lights: lit
+          diorama.latch: locked       # until the 10 s step opens it
         cue:
           - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
           - audio_once_victory_fanfare
@@ -522,6 +525,7 @@ states:
   diorama_unlocked:
     on:
       enter:
+        set: { diorama.latch: open }   # open here however we got here
         cue:
           - diorama__audio_loop_spirit_distress
       diorama.door_opened:
@@ -547,6 +551,7 @@ states:
       enter:
         set:
           party.lights: dark          # the victory is over
+          diorama.latch: locked
         cue:
           - video_loop_network_idle
           - diorama__audio_loop_off   # the distress stops
@@ -603,6 +608,7 @@ states:
   afterword:
     on:
       enter:
+        set: { diorama.latch: locked }
         cue:
           - text_show_afterword
     after:
