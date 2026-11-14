@@ -231,7 +231,9 @@ class GoalDisplay:
     def draw(self):
         now = self.clock()
         with self.lock:
-            band, banner = self._band(now), self._banner(now)
+            banner = self._banner(now)
+            # A banner has the screen to itself: the band (the next round's goals) waits for it.
+            band = [] if banner else self._band(now)
         try:
             self._show(BAND_ID, band, 0)
             self._show(BANNER_ID, banner, 1)
