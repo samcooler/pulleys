@@ -54,7 +54,23 @@ from firmware_manager import FirmwareManager
 from installation import InstallationManager
 
 # On the Pi, media is synced into a directory outside the git checkout (see deploy/).
-MEDIA = Path(os.environ.get("OVERLORD_MEDIA") or Path(__file__).resolve().parent / "media")
+BUNDLED_MEDIA = Path(__file__).resolve().parent / "media"
+MEDIA = Path(os.environ.get("OVERLORD_MEDIA") or BUNDLED_MEDIA)
+
+
+def _has_media(root):
+    try:
+        return any(p.is_file() and not p.name.startswith(".")
+                   for d in root.iterdir() if d.is_dir() for p in d.iterdir())
+    except OSError:
+        return False
+
+
+# If the synced media is missing (a first boot with no internet, a lost disk),
+# play the placeholder media in the checkout rather than a black screen.
+if MEDIA != BUNDLED_MEDIA and not _has_media(MEDIA):
+    print(f"no media in {MEDIA}; falling back to the bundled {BUNDLED_MEDIA}", flush=True)
+    MEDIA = BUNDLED_MEDIA
 DEFAULT_LOOP = "idle"  # played at startup from video_loops/ and audio_loops/ if present
 
 
