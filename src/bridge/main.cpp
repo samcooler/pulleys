@@ -21,9 +21,10 @@
 // Every Pi in the piece -- the Overlord and any satellite players -- has a
 // bridge, and they all run this image. Only one may host the firmware AP: a
 // node told to update joins whichever `pulleys-fw` it finds, and a satellite's
-// Pi has nothing to feed it. So the AP stays down until this bridge's own Pi
-// starts firmware work (any FW- command, which only the Overlord's updater
-// sends), and a satellite's bridge never raises it at all.
+// Pi has nothing to feed it. So the AP stays down until this bridge's Pi offers
+// a node firmware (FW-OFFER, which only the Overlord's updater sends), and a
+// satellite's bridge never raises it at all. (FW-PING, which every Pi sends to
+// find its bridge, must not raise it.)
 //
 // What it adds is a second output. Every deduped sensor EVENT is written to the
 // Pi as one text line:
@@ -613,7 +614,11 @@ static void handlePiLine(char* buf) {
         return;
     }
     if (strncmp(buf, "FW-BENCH ", 9) == 0) { benchmarkFirmware(buf + 9); return; }
-    if (strncmp(buf, "FW-", 3) == 0) startFirmwareHost();
+    // Only an offer needs the AP: a node then joins `pulleys-fw` to download.
+    // Every Pi sends FW-PING to find its bridge, so raising it on any FW- line
+    // put a second, empty `pulleys-fw` on every satellite (the diorama's), and
+    // nodes that joined it failed at once with -3.
+    if (strncmp(buf, "FW-OFFER ", 9) == 0) startFirmwareHost();
     if (strncmp(buf, "FW-PING", 7) == 0) {
         PI_LINK.printf("FW-BRIDGE id=%04X env=" PULLEYS_ENV " sha256=%s baud=%lu chunk=%u pipe=%d\n",
                        pulleys::identity_id(), pulleys::whoami_firmware_hash(), (unsigned long)BRIDGE_BAUD, (unsigned)pulleys::FW_CHUNK_BYTES, (int)BRIDGE_PIPELINE);
