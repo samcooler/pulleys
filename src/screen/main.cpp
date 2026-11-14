@@ -568,7 +568,8 @@ static void renderWave(float dt) {
 
 // ── Display: components ───────────────────────────────────────────────────────
 // Eight vertical bars along the long axis, 3 pixels wide with a 1-pixel gap:
-// the five majors, then the finals. It draws what the arbiter publishes
+// the five majors, then the finals. Only charge lights: an empty bar is dark,
+// so the panel shows just the components being worked, not every colour. It draws what the arbiter publishes
 // (MeshComponents) and nothing more -- when a component counts as lit, and for
 // how long, is the arbiter's rule alone. Between packets the bars keep draining
 // by themselves (pulleys_component_display), so a missed packet costs nothing.
@@ -587,7 +588,6 @@ static void renderWave(float dt) {
 #endif
 #define COMPONENT_BRIGHTNESS 60   // of 255; what the bars' own board used to run at
 #define GAUGE_SAT            250  // the lever bar's saturation (WaveParams::sat)
-#define TRACK_LEVEL          10   // unlit part of a bar, 0..255 of its colour
 
 static pulleys::ComponentDisplayModel compModel;
 static uint8_t barGoals = 0;   // bit i = component i is a goal now (0 outside a round)
@@ -644,9 +644,11 @@ static void renderComponents(uint32_t now, float dt) {
         // saturation. Brightness is set by tint(), not by CHSV's value, which is
         // non-linear and would leave the bars a quarter as bright.
         const CRGB base = CHSV(pulleys::color_hue(barColor[bar]), GAUGE_SAT, 255);
+        // Only charge is drawn: no unlit track, so a component nobody is
+        // pulling is dark and the panel shows just what is active.
         for (uint8_t h = 0; h < pulleys::COMPONENT_DISPLAY_HEIGHT; h++) {
-            uint8_t level = h < full ? 255 : h == full ? (edge > TRACK_LEVEL ? edge : TRACK_LEVEL)
-                                                       : TRACK_LEVEL;
+            uint8_t level = h < full ? 255 : h == full ? edge : 0;
+            if (!level) continue;
             CRGB c = tint(base, scale8(COMPONENT_BRIGHTNESS, level));
             for (uint8_t dx = 0; dx < pulleys::COMPONENT_DISPLAY_BAR_W; dx++)
                 leds[barLed(x0 + dx, h)] = c;
