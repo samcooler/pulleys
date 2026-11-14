@@ -5,3 +5,4 @@
 .goal-chip .swatch:focus-visible{outline:2px solid #6b9a77;outline-offset:2px}
 .goal-chip .swatch.failed{box-shadow:0 0 0 2px #c0392b}
 @media(max-width:650px){.goal-chip .swatch{width:40px;height:40px}}
+.purple-chip{cursor:default}
