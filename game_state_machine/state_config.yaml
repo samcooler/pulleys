@@ -514,6 +514,9 @@ states:
           - audio_once_spirits_denied
           - video_once_janis_beg_button   # That button has been disabled. Now get back to work.
     at:
+      5s:                           # the spirits start screaming 5 s into the celebration
+        cue:
+          - diorama__audio_loop_spirit_distress
       10s:                          # the diorama comes on 10 s into the celebration
         set:
           diorama.lights: creepy
@@ -530,12 +533,10 @@ states:
       delay: $party_time
       goto: diorama_unlocked
 
-  # The diorama is open and the spirits cry out (overlord2) until someone pulls a purple rope.
+  # The diorama is open and the spirits cry out (overlord2, started 5 s into party)
+  # until someone pulls a purple rope.
   diorama_unlocked:
     on:
-      enter:
-        cue:
-          - diorama__audio_loop_spirit_distress
       diorama.door_opened:
         cue:
           - choose_one:
