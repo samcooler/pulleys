@@ -20,9 +20,8 @@
 //
 // The words here are first drafts.
 static const pulleys::TextCard SIGN_MESSAGES[] = {
-    { "enter",  "Go right in",                         0x0B6B2E, 0xFFFFFF, 10 },
-    { "wait",   "Please wait to enter",                0xB3261E, 0xFFFFFF,  8 },
-    { "wait",   "The next group\nwill be in shortly",  0xB3261E, 0xFFF2C0,  6 },
+    { "enter",  "Avoid purple\ncontamination",        0x3A0A4A, 0xFFFFFF, 10 },
+    { "wait",   "Avoid purple\ncontamination",        0x3A0A4A, 0xFFFFFF, 10 },
     { "closed", "Closed",                              0x101010, 0xC0C0C0, 10 },
 };
 
