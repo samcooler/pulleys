@@ -71,10 +71,10 @@ params:
     max: 60
     note: percent of full charge one pull adds
   final_charge_per_pull:
-    value: 50
+    value: 25
     min: 10
     max: 60
-    note: percent of full charge one purple pull adds; 50 = two pulls lights a purple channel, and every purple channel lit at once wins
+    note: percent of the shared purple pool one purple pull adds, on any purple lever; 25 = four purple pulls (within the decay) wins
   decay_rate:
     value: 6.6667
     min: 3
@@ -555,7 +555,7 @@ states:
         cue:
           - audio_once_spirits_denied
           - video_once_janis_beg_button
-      final_component_activated:
+      final_pull:                     # the first purple pull: Janis fights back (final)
         goto: final
       all_final_components_activated:
         goto: victory2

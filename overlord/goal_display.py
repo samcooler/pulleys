@@ -25,9 +25,9 @@ And big words in the middle of the screen when the game moves:
 
 From the third round's win to victory, purple is the one goal (DISRUPT_STATES:
 party, diorama_unlocked, final). The first purple pull there replaces all of
-the above with the machine's alarm: a red band, EXTRACTION FAILING, over a
-purple bar that drains toward zero as the purple channels light (zero is
-the win), and PURPLE ACTIVITY DISRUPTS EXTRACTION flashing on every purple
+the above with the machine's alarm: a red band, EXTRACTION INTEGRITY ...
+FAILING, over a purple bar that drains toward zero as the shared purple pool
+fills (zero is the win), and PURPLE ACTIVITY DISRUPTS EXTRACTION flashing on every purple
 pull. Wrong, as far as the machine is concerned; right, as the bar shows.
 
 In the start state the band asks for a move instead ("MOVE ANY LEVER TO
@@ -331,8 +331,10 @@ class GoalDisplay:
         lines = [ass_rect(0, 0, RES_X, BAND_H, "1A0000", alpha="20")]
         lines.append(ass_box(0, 0, RES_X, BAND_H, ALARM, 10 if hot else 6,
                              "00" if (hot and int(now * 6) % 2 == 0) else "50"))
-        lines.append(ass_text(40, 18, "EXTRACTION FAILING", 58, ALARM if blink else "FFFFFF"))
-        lines.append(ass_text(RES_X - 40, 18, f"{int(round(left * 100))}%", 58, align=9))
+        # No number: a draining bar reads as "less of the machine" at a glance,
+        # where a percentage reads as a score that should climb.
+        lines.append(ass_text(40, 18, "EXTRACTION INTEGRITY", 58))
+        lines.append(ass_text(RES_X - 40, 18, "FAILING", 58, ALARM if blink else "FFFFFF", align=9))
         x, y, w, h = 40, 92, RES_X - 80, 52
         lines.append(ass_rect(x, y, w, h, "000000", alpha="20"))
         if left > 0:

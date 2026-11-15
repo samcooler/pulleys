@@ -23,7 +23,10 @@ static const uint8_t MAJOR_COUNT = GAME_MAJOR_COMPONENTS;
 //           is won when all of them are lit at once -- all the purple channels
 //           that have a rope on them, since a channel nobody can pull would
 //           make it unwinnable. Painting a channel purple on the COLOURS
-//           screen is what makes it a final.
+//           screen is what makes it a final. The finals share one pool: a pull
+//           on any purple lever charges every roped final alike, so they light
+//           and drain together, and any purple activity counts toward the win
+//           (100 / final_charge_per_pull pulls, on whichever purple levers).
 
 struct Component {
     float    charge;     // percent, as of stampMs
@@ -277,7 +280,12 @@ void components_on_mesh_event(const pulleys::MeshEvent& ev) {
     uint32_t now = millis();
 
     if (isFinalChannel(ev.channel)) {
-        if (!pull(s_final[ev.channel], now, gamestate_final_charge_per_pull())) return;
+        // One shared pool (above): the pulled channel and every roped final.
+        bool lights = false;
+        for (uint8_t ch = 0; ch < pulleys::CHANNEL_COUNT; ch++)
+            if (ch == ev.channel || isRopedFinal(ch))
+                lights |= pull(s_final[ch], now, gamestate_final_charge_per_pull());
+        if (!lights) return;
         gamestate_event(GE_FINAL_COMPONENT_ACTIVATED);
         if (allFinalsLit(now)) gamestate_event(GE_ALL_FINAL_COMPONENTS_ACTIVATED);
         return;
