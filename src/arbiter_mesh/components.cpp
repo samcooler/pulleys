@@ -1,6 +1,7 @@
 #include "components.h"
 #include "gamestate.h"
 #include "installcfg.h"
+#include "monitor.h"
 #include <stdlib.h>
 #include <Arduino.h>
 #include <pulleys_channel.h>
@@ -223,6 +224,7 @@ void components_reset() {
 bool components_on_cue(const char* cue) {
     if (cue && strcmp(cue, "game_reset_components") == 0) {
         resetAll();
+        monitor_reset_activity();   // each round's activity starts from zero
         publish(true);
         return false;
     }

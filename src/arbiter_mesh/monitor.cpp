@@ -111,6 +111,11 @@ void monitor_clear_history() {
     s_totalEvents = 0;
 }
 
+// A new round starts everyone's bars from nothing; counts and the log stay.
+void monitor_reset_activity() {
+    for (uint8_t i = 0; i < MON_CHANNELS; i++) s_chans[i].activity = 0.0f;
+}
+
 void monitor_on_event(MonEventHook hook) { s_hook = hook; }
 
 void monitor_tick() {
