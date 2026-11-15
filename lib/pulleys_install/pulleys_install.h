@@ -141,6 +141,25 @@ inline int8_t mode_for_device(uint16_t id) {
     return r ? (int8_t)r->mode : (int8_t)-1;
 }
 
+// ── Sensors: practice (training-area) levers ──────────────────────────────────
+// A practice lever lights up when pulled exactly like a real one, but never
+// reports to the network: its pulls count for nothing, so visitors can learn
+// the motion before the game. Its colour wanders randomly round the whole hue
+// wheel instead of wearing a channel's. It still joins the mesh, so it can be
+// flashed over the air and found in a census.
+//
+// A board is a practice lever if it is listed here, or if 'T1' was sent to it
+// over serial (stored in its NVS; 'T0' clears that, but not a listing here).
+static const uint16_t PRACTICE_SENSORS[] = {
+    0xD853,   // N-D853, the training-area lever
+};
+
+inline bool sensor_is_practice(uint16_t id) {
+    for (uint16_t p : PRACTICE_SENSORS)
+        if (p == id) return true;
+    return false;
+}
+
 // ── Screens: which display ────────────────────────────────────────────────────
 // The names here are the ones install_map.py accepts and flash_all prints, so
 // changing one changes the tool's vocabulary too.

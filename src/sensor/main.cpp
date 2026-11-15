@@ -88,7 +88,7 @@ static_assert(LED_COUNT >= BAR_ORIGIN + pulleys::PANEL_14X2_LEDS,
 // The installed piece is dark until someone plays with it, so a sensor shows
 // nothing at rest and lights up only while it is detecting and sending.
 //
-// The idle state is a 3x3 candle in the middle of the panel: an unlit rope can
+// The idle state is a 3x3 candle against one edge of the panel: an unlit rope can
 // still be told apart from a dead board, but it reads as something quietly
 // alive rather than as a status LED. Set SENSOR_IDLE_CANDLE to 0 for a panel
 // that is properly dark at rest.
@@ -112,7 +112,7 @@ static_assert(LED_COUNT >= BAR_ORIGIN + pulleys::PANEL_14X2_LEDS,
 // brightness) and the breath swells it from there. The rest of the candle still
 // fades fully out, so the pulse stays visible on top of a steady "I'm alive" dot.
 #define IDLE_FLOOR         51
-#define IDLE_FLOOR_PIXEL   4      // index into IDLE_PIXEL_IDX: the centre, 36
+#define IDLE_FLOOR_PIXEL   4      // index into IDLE_PIXEL_IDX: the block's centre, 33
 
 // Breath: dark for a long stretch, swell, brief hold at full, fade back.
 #define IDLE_OFF_MS   10000
@@ -182,6 +182,42 @@ static uint32_t idlePhase = 0;    // per-board offset into the breath cycle
 static float    ledEnv    = 0.0f; // 0 = dark/idle pixels, 1 = full pattern
 static uint32_t localCount = 0;
 static uint32_t heardCount = 0;
+
+// ── Practice lever ────────────────────────────────────────────────────────────
+// A training-area lever (pulleys_install.h PRACTICE_SENSORS, or 'T1' on serial):
+// detects and lights up like any rope, but sends nothing to the mesh and ignores
+// the arbiter's channel map. Its colour is not a channel's: the hue drifts to a
+// random target anywhere on the wheel, then picks another, forever.
+static bool     practiceListed = false;   // named in the repo table
+static bool     practiceNvs    = false;   // set with 'T1' on serial
+static bool     practice       = false;   // either of the above
+static float    wanderHue      = 0.0f;    // 0..256, current hue
+static float    wanderTarget   = 0.0f;
+static float    wanderDir      = 1.0f;    // +1 / -1: which way round the wheel
+#define WANDER_HUE_PER_S  14.0f           // a full lap in ~18 s at most
+
+static void wanderPick() {
+    wanderTarget = (float)(esp_random() % 256);
+    wanderDir    = (esp_random() & 1) ? 1.0f : -1.0f;
+}
+
+static void wanderStep(float dt) {
+    float before = wanderHue;
+    wanderHue += wanderDir * WANDER_HUE_PER_S * dt;
+    // Crossed the target this step (allowing for wrap)? Pick the next one.
+    float a = before - wanderTarget, b = wanderHue - wanderTarget;
+    bool crossed = (a <= 0 && b >= 0) || (a >= 0 && b <= 0);
+    while (wanderHue >= 256.0f) wanderHue -= 256.0f;
+    while (wanderHue <    0.0f) wanderHue += 256.0f;
+    if (crossed) wanderPick();
+}
+
+// The colour this board wears right now: the channel's, or the wandering hue.
+static CRGB myColor() {
+    if (!practice) return pulleys::channel_color(myChannel);
+    CRGB c; hsv2rgb_rainbow(CHSV((uint8_t)wanderHue, 255, 255), c);
+    return c;
+}
 // Where myChannel came from, in descending order of authority. Kept apart
 // because they mean different things to whoever is holding the board: NVS is
 // what the arbiter (or someone on serial) set, LISTED is the repo's seed for a
@@ -209,6 +245,7 @@ static void loadConfig() {
     uint8_t stored     = p.getUChar("ch",   0xFF);
     uint8_t storedMode = p.getUChar("mode", 0xFF);
     myRotDeg  = p.getFloat("rot",  180.0f);
+    practiceNvs = p.getBool("practice", false);
     p.end();
     if (stored < pulleys::CHANNEL_COUNT) { myChannel = stored; chanSource = CHAN_NVS; }
     // Same sentinel reasoning as the channel above: with LINEAR as the read
@@ -224,6 +261,7 @@ static void saveConfig() {
     p.putUChar("ch",   myChannel);
     p.putUChar("mode", myMode);
     p.putFloat("rot",  myRotDeg);
+    p.putBool("practice", practiceNvs);
     p.end();
 }
 
@@ -260,8 +298,11 @@ static void applyChannelAssignment() {
 // survey. Called on every change, not just at boot.
 static void applyCensusDetail() {
     char detail[16];
-    snprintf(detail, sizeof(detail), "ch%d %s", myChannel,
-             pulleys::sensor_mode_name(myMode));
+    if (practice)
+        snprintf(detail, sizeof(detail), "practice %s", pulleys::sensor_mode_name(myMode));
+    else
+        snprintf(detail, sizeof(detail), "ch%d %s", myChannel,
+                 pulleys::sensor_mode_name(myMode));
     pulleys::census_set_detail(detail);
 }
 
@@ -273,12 +314,13 @@ static void applyConfig() {
     applyCensusDetail();
 }
 
-// Centre 3x3 of the 8x8 panel — the idle candle. Rows 3-5, cols 3-5 of a
-// non-serpentine 8x8, which keeps the old centre pixels inside the block.
+// The idle candle: a 3x3 against the panel's left edge (logical x = 0, the
+// edge found with a quadrant test on the installed panel), vertically centred.
+// Rows 3-5, cols 0-2 of a non-serpentine 8x8.
 static const uint8_t IDLE_PIXEL_IDX[9] = {
-    27, 28, 29,
-    35, 36, 37,
-    43, 44, 45,
+    24, 25, 26,
+    32, 33, 34,
+    40, 41, 42,
 };
 static constexpr uint8_t IDLE_PIXEL_COUNT =
     sizeof(IDLE_PIXEL_IDX) / sizeof(IDLE_PIXEL_IDX[0]);
@@ -346,6 +388,7 @@ static uint8_t barBri   = 0;  // last level the bar's pattern was lit at
 static uint8_t barEmber = 0;  // ...and its sleeping ember, for the status log
 
 static void renderBar(float dt, uint32_t now) {
+    if (practice) barCfg.centerHue = (uint8_t)wanderHue;
     pulleys::wave_render(barPanel, barCfg, barState, dt);
 
     // The pot is lit by the detection envelope alone, so at rest the bar goes
@@ -361,7 +404,7 @@ static void renderBar(float dt, uint32_t now) {
     float breath = IDLE_BRIGHTNESS * (1.0f - ledEnv) * idleBreath(now);
     if (!SENSOR_IDLE_CANDLE || breath <= 0.0f) return;
 
-    CRGB c = pulleys::channel_color(myChannel);
+    CRGB c = myColor();
     uint8_t k = 0;
     for (uint8_t y = 0; y < barPanel.rows; y++) {
         for (uint8_t x = IDLE_BAR_X0; x <= IDLE_BAR_X1; x++, k++) {
@@ -422,6 +465,7 @@ static void onMeshConfig(const pulleys::MeshConfig& c, bool /*relayed*/) {
     // A row that agrees with a channel this board only got from the repo table
     // is still stored: from now on the arbiter owns it, and a later edit to
     // the table must not move a mapped rope.
+    if (practice) return;   // not on the map: the arbiter does not own this lever
     int ch = pulleys::mesh_config_channel_of(c, pulleys::identity_id());
     bool moved = false;
     if (ch >= 0 && ch < pulleys::CHANNEL_COUNT &&
@@ -472,6 +516,9 @@ static void printConfig() {
                            : modeSource == CHAN_NVS ? "set over serial"
                                                     : "nobody set one — default",
                   myRotDeg);
+    if (practice)
+        Serial.printf("  PRACTICE lever (%s): lights up, reports nothing to the mesh\n",
+                      practiceListed ? "listed in pulleys_install.h" : "set with T1");
 }
 
 static void handleSerial() {
@@ -523,8 +570,14 @@ static void handleSerial() {
                 Serial.printf("  rough guard %s: %.0f dps / %.2f g, calm %lu ms (until reboot)\n",
                               rough.cfg.enabled ? "on" : "OFF", rough.cfg.rotLimitDps,
                               rough.cfg.linLimitG, (unsigned long)rough.cfg.calmMs);
+            } else if (buf[0] == 'T') {          // "T1" practice lever, "T0" normal
+                practiceNvs = atoi(buf + 1) != 0;
+                practice    = practiceListed || practiceNvs;
+                saveConfig(); applyCensusDetail(); applyChannelVisual();
+                if (practiceListed && !practiceNvs)
+                    Serial.printf("  ! listed in PRACTICE_SENSORS; still a practice lever\n");
             } else if (buf[0] == 't') {          // "t" → fire a test event
-                pulleys::mesh_send_event(myChannel, myMode, 90, 0);
+                if (!practice) pulleys::mesh_send_event(myChannel, myMode, 90, 0);
                 localCount++;
                 holdUntil = millis() + LED_HOLD_MS;
                 Serial.println("  [TX] test event");
@@ -554,8 +607,12 @@ void setup() {
     Serial.printf("  PULLEYS Sensor  %s\n", pulleys::identity_name());
     Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     applyChannelAssignment();
+    practiceListed = pulleys::sensor_is_practice(pulleys::identity_id());
+    practice       = practiceListed || practiceNvs;
+    wanderHue      = (float)(esp_random() % 256);
+    wanderPick();
     printConfig();
-    Serial.printf("  serial: c<0-%d> channel | m0/m1 mode | r<deg> | t test\n",
+    Serial.printf("  serial: c<0-%d> channel | m0/m1 mode | r<deg> | t test | T1/T0 practice\n",
                   pulleys::CHANNEL_COUNT - 1);
 
     if (!imu.init6(11, 12)) {
@@ -577,8 +634,7 @@ void setup() {
     // An unassigned board flashes white instead — see the UNASSIGNED note above.
     FastLED.setBrightness(255);   // brightness is applied per-pixel from here on
     for (int i = 0; i < 3; i++) {
-        CRGB boot = (chanSource != CHAN_HASH) ? pulleys::channel_color(myChannel)
-                                              : CRGB::White;
+        CRGB boot = (practice || chanSource != CHAN_HASH) ? myColor() : CRGB::White;
         boot.nscale8(28);         // 30% down from 40, with the rest of the panel
         fill_solid(leds, LED_COUNT, boot);
         showPixels();
@@ -630,9 +686,9 @@ void loop() {
                 } else {
                     localCount++;
                     holdUntil = now + LED_HOLD_MS;
-                    pulleys::mesh_send_event(myChannel, myMode, mag, 0);
-                    Serial.printf("★ DETECT ch%-2d %s mag=%d  (#%lu)\n",
-                                  myChannel,
+                    if (!practice) pulleys::mesh_send_event(myChannel, myMode, mag, 0);
+                    Serial.printf("★ DETECT %s%-2d %s mag=%d  (#%lu)\n",
+                                  practice ? "PRACTICE (not sent) ch" : "ch", myChannel,
                                   myMode == pulleys::SENSOR_MODE_ROTATION ? "rot" : "lin",
                                   mag, localCount);
                 }
@@ -652,6 +708,7 @@ void loop() {
                      : -(dt * 1000.0f / LED_RELEASE_MS);
         if (ledEnv > 1.0f) ledEnv = 1.0f;
         if (ledEnv < 0.0f) ledEnv = 0.0f;
+        if (practice) wanderStep(dt);
 
         // The probe owns the whole strip while it runs: it is answering a
         // question about the wiring, and a pattern underneath it would only
@@ -679,8 +736,16 @@ void loop() {
             // block shows on a Screen.
             pulleys::pattern_slot_update(patSlot, dt, pulleys::mesh_now_secs());
             uint8_t bri = (uint8_t)(ledEnv * GRID_BRIGHTNESS);
-            for (uint16_t i = 0; i < pulleys::PANEL_8X8_LEDS; i++)
-                leds[GRID_ORIGIN + i].nscale8(bri);
+            for (uint16_t i = 0; i < pulleys::PANEL_8X8_LEDS; i++) {
+                CRGB& px = leds[GRID_ORIGIN + i];
+                if (practice) {
+                    // Keep the pattern's shape (its brightness), wear the
+                    // wandering hue, with a little spread across the panel.
+                    uint8_t v = max(px.r, max(px.g, px.b));
+                    hsv2rgb_rainbow(CHSV((uint8_t)wanderHue + (i & 7) * 3, 240, v), px);
+                }
+                px.nscale8(bri);
+            }
         } else {
             fill_solid(leds + GRID_ORIGIN, pulleys::PANEL_8X8_LEDS, CRGB::Black);
         }
@@ -696,7 +761,7 @@ void loop() {
             // Presence pixels cross-fade against the pattern, so the hand-off in
             // both directions is smooth rather than a pop. Not while the rope
             // is overstimulated: then it shows nothing at all.
-            CRGB c = pulleys::channel_color(myChannel);
+            CRGB c = myColor();
             float breath = IDLE_BRIGHTNESS * (1.0f - ledEnv) * idleBreath(now);
             if (SENSOR_IDLE_CANDLE) {
                 for (uint8_t i = 0; i < IDLE_PIXEL_COUNT; i++) {
@@ -718,7 +783,7 @@ void loop() {
             if (step >= CONFIRM_BLINKS * 2) {
                 confirmAt = 0;
             } else if (step % 2 == 0) {
-                CRGB c = pulleys::channel_color(myChannel);
+                CRGB c = myColor();
                 c.nscale8(28);                    // the boot flash's level
                 fill_solid(leds, LED_COUNT, c);
             } else {
