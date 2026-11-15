@@ -5,6 +5,11 @@
 #   tools/overlord_restart.sh --update   also rerun the boot update (git pull + media sync)
 #                                        the way a reboot does: slower, picks up new media
 #   tools/overlord_restart.sh --status   change nothing, just report
+#   tools/overlord_restart.sh --push     copy this working tree over (rsync, no git pull), restart:
+#                                        for when the Overlord has no internet, e.g. on its own AP.
+#                                        Its checkout is then dirty; when it is back online, run
+#                                        "git checkout . && git clean -fd" there (this script's
+#                                        restart says so) before pulling again.
 #   tools/overlord_restart.sh --logs     change nothing, print the app's recent log
 #                                        (OVERLORD_LOG_LINES, default 80)
 #
@@ -20,7 +25,9 @@ set -euo pipefail
 OVERLORD_USER="overlord"
 OVERLORD_PASSWORD="strings"
 HOST="${OVERLORD_HOST:-overlord.local}"
-FALLBACK_IP="${OVERLORD_IP:-172.20.10.2}"   # mDNS drops out now and then; this is the hotspot's lease
+# mDNS drops out now and then; then try the phone hotspot's lease, then the
+# Overlord's own fallback AP (overlord-ap, see overlord/README.md).
+FALLBACK_IPS="${OVERLORD_IP:-172.20.10.2} 10.42.0.1"
 PORT="${OVERLORD_PORT:-8080}"
 
 mode="restart"
@@ -28,8 +35,9 @@ case "${1:-}" in
     "") ;;
     --update) mode="update" ;;
     --status) mode="status" ;;
+    --push) mode="push" ;;
     --logs) mode="logs" ;;
-    *) echo "usage: $0 [--update|--status|--logs]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--update|--status|--push|--logs]" >&2; exit 2 ;;
 esac
 
 command -v sshpass >/dev/null || { echo "needs sshpass: brew install sshpass" >&2; exit 1; }
@@ -44,9 +52,12 @@ ssh_overlord() {
 
 TARGET="$HOST"
 if ! ssh_overlord true 2>/dev/null; then
-    TARGET="$FALLBACK_IP"
-    ssh_overlord true >/dev/null || { echo "cannot reach the Overlord at $HOST or $FALLBACK_IP" >&2; exit 1; }
-    echo "($HOST did not answer; using $FALLBACK_IP)"
+    TARGET=""
+    for ip in $FALLBACK_IPS; do
+        if TARGET="$ip" ssh_overlord true 2>/dev/null; then TARGET="$ip"; break; fi
+    done
+    [ -n "$TARGET" ] || { echo "cannot reach the Overlord at $HOST or $FALLBACK_IPS" >&2; exit 1; }
+    echo "($HOST did not answer; using $TARGET)"
 fi
 
 if [ "$mode" = "logs" ]; then
@@ -57,9 +68,19 @@ fi
 if [ "$mode" != "status" ]; then
     # sudo reads the password from stdin; the line goes to the remote's sudo, not to a log.
     case "$mode" in
-        restart) remote='cd ~/pulleys && git pull --ff-only 2>&1 | tail -1; sudo -S systemctl restart overlord' ;;
+        restart) remote='cd ~/pulleys && { git pull --ff-only 2>&1 | tail -1; [ -z "$(git status --porcelain --untracked-files=no)" ] || echo "WARNING: checkout has local changes (from --push?); git checkout . && git clean -fd to pull again"; }; sudo -S systemctl restart overlord' ;;
+        push)    remote='sudo -S systemctl restart overlord' ;;
         update)  remote='sudo -S systemctl restart overlord-update overlord' ;;
     esac
+    if [ "$mode" = push ]; then
+        # Tracked and new (not ignored) files, as they are on disk here; .git is left alone.
+        repo="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+        echo "Copying $(git -C "$repo" log -1 --format=%h) + local changes to $TARGET..."
+        (cd "$repo" && git ls-files -co --exclude-standard -z) |
+            SSHPASS="$OVERLORD_PASSWORD" rsync -a --from0 --files-from=- \
+                -e "sshpass -e ssh -4 -o HostKeyAlias=overlord.local -o PreferredAuthentications=password -o PubkeyAuthentication=no" \
+                "$repo/" "$OVERLORD_USER@$TARGET:pulleys/"
+    fi
     echo "Restarting the Overlord ($mode)..."
     ssh_overlord "$remote" <<<"$OVERLORD_PASSWORD" 2>&1 | grep -v '^\[sudo\]' || true
 fi

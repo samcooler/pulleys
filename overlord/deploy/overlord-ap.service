@@ -1,0 +1,12 @@
+[Unit]
+Description=Overlord Wi-Fi fallback AP (overlord-ap) when no network is joined
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/overlord.env
+ExecStart=/bin/bash @DIR@/deploy/ap_fallback.sh
+
+[Install]
+WantedBy=multi-user.target

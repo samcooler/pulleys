@@ -21,6 +21,33 @@ Startup updates remain enabled; manual and API updates share the same queue.
 Local firmware uploads use the release manifest format. See
 [FIRMWARE_API.md](FIRMWARE_API.md) for selective upload/update scripts and API examples.
 
+## Fallback Wi-Fi AP (no phone hotspot)
+
+If the Wi-Fi has joined no network 20 s after boot (`OVERLORD_AP_WAIT` in
+`/etc/overlord.env` changes that), `overlord-ap.service` (`deploy/ap_fallback.sh`)
+starts the Overlord's own access point:
+
+| | |
+| --- | --- |
+| SSID / password | `overlord-ap` / `overlord` (not sensitive; set in `deploy/install.sh`) |
+| Overlord address | `10.42.0.1` (NetworkManager `shared`, which hands out DHCP) |
+| web GUI | `http://10.42.0.1:8080/` (or `overlord.local:8080` where mDNS resolves) |
+| channel | 11, away from the ESP-NOW mesh on channel 1 |
+
+It stays an AP until the next reboot, even if the phone comes back: one radio cannot
+host the AP and look for the hotspot at the same time. Reboot to rejoin the phone.
+A wired link does not stop the AP; only the Wi-Fi is checked.
+
+From a laptop on the AP: `./fw flash` and `tools/overlord_restart.sh` find the
+Overlord by themselves (`overlord.local`, then the hotspot IP, then `10.42.0.1`).
+The game YAML goes on the arbiter by `./fw flash` as usual. There is no internet,
+so the usual deploy (push to `main`, Overlord `git pull`s) does not work: use
+`tools/overlord_restart.sh --push`, which copies your working tree over with rsync.
+That leaves the Overlord's checkout dirty; once it is back online, the plain
+restart warns about it, and `git checkout . && git clean -fd` there clears it. The
+diorama Pi (`overlord2`) only knows the phone hotspot; add `overlord-ap` as a
+known network there to keep ssh to it (cues use the mesh and work regardless).
+
 ## The machine
 
 Overlord runs on a mini PC (it started on a Raspberry Pi, which was too slow;

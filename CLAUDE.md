@@ -8,6 +8,7 @@ Use `tools/overlord_restart.sh`. Do not type `ssh` by hand.
 tools/overlord_restart.sh            # git pull, restart the app, wait for it, report
 tools/overlord_restart.sh --update   # also rerun the boot update (git pull + media sync), as a reboot does
 tools/overlord_restart.sh --status   # change nothing, just report
+tools/overlord_restart.sh --push     # no internet (Overlord on its own AP): rsync the working tree, restart
 ```
 
 It prints the commit the Overlord is on, whether the app is up, whether the bridge
@@ -20,7 +21,8 @@ is connected, and any running firmware job.
   push to `main`, then run the script; and a bridge plugged in after the app
   started is not seen until a restart.
 - The script tries `overlord.local`, then falls back to the hotspot IP
-  (`OVERLORD_IP`, default `172.20.10.2`), checking the host key against the
+  (`OVERLORD_IP`, default `172.20.10.2`), then the fallback AP's `10.42.0.1`
+  (see "Fallback Wi-Fi AP" in `overlord/README.md`), checking the host key against the
   `overlord.local` entry either way. It needs `sshpass` (`brew install sshpass`).
 - `--update` can take minutes when media is syncing; `OVERLORD_WAIT` (seconds)
   sets how long the script waits for the app to answer.

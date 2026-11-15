@@ -16,7 +16,7 @@ BOOT=/boot/firmware
 # Raspberry Pi OS keeps the firmware boot config here; a PC boots through GRUB.
 if [ -f "$BOOT/config.txt" ]; then PLATFORM=pi; else PLATFORM=pc; fi
 
-PKGS="mpv python3-serial python3-yaml rclone git plymouth plymouth-themes network-manager"
+PKGS="mpv python3-serial python3-yaml rclone git plymouth plymouth-themes network-manager avahi-daemon iw"
 # Hardware video decode on Intel/AMD (mpv --hwdec=auto-safe picks VAAPI up).
 [ "$PLATFORM" = pc ] && PKGS="$PKGS va-driver-all"
 apt-get update
@@ -119,11 +119,28 @@ if [ -f "$SA_KEY" ] && ! grep -q '^OVERLORD_MEDIA_REMOTE=.' /etc/overlord.env; t
 fi
 mkdir -p /var/lib/overlord/media
 chown -R "$USER_NAME" /var/lib/overlord
-for unit in overlord overlord-update; do
+# Fallback AP: overlord-ap.service raises this when the Wi-Fi joins nothing in
+# 20 s after boot (deploy/ap_fallback.sh). Never autoconnects on its own, so the
+# phone hotspot is always tried first. Channel 11 keeps it off the ESP-NOW mesh
+# (MESH_WIFI_CHANNEL 1). "shared" = NetworkManager's DHCP, Overlord at 10.42.0.1.
+# Not a secret, like the ssh login: change it here and re-run install.sh.
+AP_SSID=overlord-ap
+AP_PASS=overlord
+# Modify in place if it exists, so a re-run over the AP keeps the ssh session.
+nmcli -t -f NAME con show | grep -qx overlord-ap || nmcli con add type wifi con-name overlord-ap ifname '*' ssid "$AP_SSID" >/dev/null
+nmcli con modify overlord-ap 802-11-wireless.ssid "$AP_SSID" \
+    802-11-wireless.mode ap 802-11-wireless.band bg 802-11-wireless.channel 11 \
+    ipv4.method shared ipv6.method ignore \
+    wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$AP_PASS" \
+    connection.autoconnect no
+echo "Fallback AP '$AP_SSID' configured."
+iw list 2>/dev/null | grep -q '^\s*\* AP$' || echo "WARNING: this Wi-Fi card may not support AP mode (iw list shows no AP)."
+
+for unit in overlord overlord-update overlord-ap; do
     sed -e "s|@USER@|$USER_NAME|g" -e "s|@DIR@|$DIR|g" "$HERE/$unit.service" > /etc/systemd/system/$unit.service
 done
 systemctl daemon-reload
-systemctl enable overlord-update.service overlord.service
+systemctl enable overlord-update.service overlord.service overlord-ap.service
 
 echo
 if ! grep -q '^OVERLORD_MEDIA_REMOTE=.' /etc/overlord.env; then

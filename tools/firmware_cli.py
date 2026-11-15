@@ -492,7 +492,7 @@ Interactive terminals show updating upload/device bars with percentages on the
 right. Redirected output uses plain progress lines. Transfer reaching 100% is
 followed by reboot/hash verification before a device is confirmed.""")
     def transport_options(target, *, inherited=False):
-        target.add_argument("--url", default=argparse.SUPPRESS if inherited else os.environ.get("OVERLORD_URL", "http://overlord.local:8080"), help="Overlord URL (or OVERLORD_URL)")
+        target.add_argument("--url", default=argparse.SUPPRESS if inherited else os.environ.get("OVERLORD_URL", DEFAULT_URL), help="Overlord URL (or OVERLORD_URL)")
         target.add_argument("--usb", action="store_true", default=argparse.SUPPRESS if inherited else False, help="use attached USB boards instead of Overlord OTA")
     transport_options(result)
     commands = result.add_subparsers(dest="command")
@@ -538,9 +538,35 @@ followed by reboot/hash verification before a device is confirmed.""")
     return result
 
 
+# Where the Overlord can be: mDNS, the phone hotspot's lease, and its own
+# fallback AP (overlord-ap, NetworkManager's shared address). Same list as
+# tools/overlord_restart.sh.
+DEFAULT_URL = "http://overlord.local:8080"
+FALLBACK_URLS = ("http://172.20.10.2:8080", "http://10.42.0.1:8080")
+
+
+def resolve_url(url):
+    """With the default URL, use the first Overlord address that answers.
+    An explicit --url or OVERLORD_URL is used as given."""
+    if url != DEFAULT_URL:
+        return url
+    import urllib.request
+    for candidate in (DEFAULT_URL, *FALLBACK_URLS):
+        try:
+            with urllib.request.urlopen(candidate + "/api/firmware", timeout=3):
+                if candidate != DEFAULT_URL:
+                    print(f"(overlord.local did not answer; using {candidate})", file=sys.stderr)
+                return candidate
+        except OSError:
+            continue
+    return url
+
+
 def main(argv=None):
     cli = parser()
     args = cli.parse_args(argv)
+    if getattr(args, "url", None):
+        args.url = resolve_url(args.url)
     if not args.command or args.command == "help":
         cli.print_help()
         return 0
