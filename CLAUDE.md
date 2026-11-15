@@ -8,6 +8,7 @@ Use `tools/overlord_restart.sh`. Do not type `ssh` by hand.
 tools/overlord_restart.sh            # git pull, restart the app, wait for it, report
 tools/overlord_restart.sh --update   # also rerun the boot update (git pull + media sync), as a reboot does
 tools/overlord_restart.sh --status   # change nothing, just report
+tools/overlord_restart.sh --install  # git pull, then rerun overlord/deploy/install.sh
 tools/overlord_restart.sh --push     # no internet (Overlord on its own AP): rsync the working tree, restart
 ```
 

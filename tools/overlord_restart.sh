@@ -10,6 +10,8 @@
 #                                        Its checkout is then dirty; when it is back online, run
 #                                        "git checkout . && git clean -fd" there (this script's
 #                                        restart says so) before pulling again.
+#   tools/overlord_restart.sh --install  git pull, then rerun overlord/deploy/install.sh (apt, units,
+#                                        fallback AP); restarts the app, or says a reboot is needed
 #   tools/overlord_restart.sh --logs     change nothing, print the app's recent log
 #                                        (OVERLORD_LOG_LINES, default 80)
 #
@@ -36,8 +38,9 @@ case "${1:-}" in
     --update) mode="update" ;;
     --status) mode="status" ;;
     --push) mode="push" ;;
+    --install) mode="install" ;;
     --logs) mode="logs" ;;
-    *) echo "usage: $0 [--update|--status|--push|--logs]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--update|--status|--push|--install|--logs]" >&2; exit 2 ;;
 esac
 
 command -v sshpass >/dev/null || { echo "needs sshpass: brew install sshpass" >&2; exit 1; }
@@ -69,6 +72,7 @@ if [ "$mode" != "status" ]; then
     # sudo reads the password from stdin; the line goes to the remote's sudo, not to a log.
     case "$mode" in
         restart) remote='cd ~/pulleys && { git pull --ff-only 2>&1 | tail -1; [ -z "$(git status --porcelain --untracked-files=no)" ] || echo "WARNING: checkout has local changes (from --push?); git checkout . && git clean -fd to pull again"; }; sudo -S systemctl restart overlord' ;;
+        install) remote='cd ~/pulleys && git pull --ff-only 2>&1 | tail -1 && sudo -S overlord/deploy/install.sh 2>&1 | tail -15' ;;
         push)    remote='sudo -S systemctl restart overlord' ;;
         update)  remote='sudo -S systemctl restart overlord-update overlord' ;;
     esac
