@@ -801,7 +801,7 @@ static void renderExtractor(uint32_t now, float dt) {
 // and sends three inputs back: diorama.door_opened, diorama.door_closed and
 // diorama.button_pressed. When the game changes them is the game file's
 // business (state_config.yaml), not this board's. Unset -- no game, or the arbiter silent past the lease -- is
-// dark and locked.
+// lit (creepy) and locked: the tubes are on unless the game says otherwise.
 //
 // Opening the door while the tubes are lit (creepy) also makes them stutter a
 // dim red for DIORAMA_SCARE_MS, here on the board, so it is instant; the room
@@ -926,7 +926,8 @@ static void dioramaInit() {
 // settings are read fresh each time, so a change, a reboot and a lapsed lease
 // all land here the same way.
 static void dioramaPoll(uint32_t now) {
-    bool lit  = dioramaBench || pulleys::setting_is("diorama.lights", "creepy");
+    bool lit  = dioramaBench || !(pulleys::setting_is("diorama.lights", "dark") ||
+                                    pulleys::setting_is("diorama.lights", "paradise"));
     bool paradise = !lit && pulleys::setting_is("diorama.lights", "paradise");
     if (paradise != paradiseOn) {
         paradiseOn = paradise;

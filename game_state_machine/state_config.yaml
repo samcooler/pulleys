@@ -364,7 +364,7 @@ states:
     on:
       enter:
         set:                          # the game is back at its start
-          diorama.lights: dark
+          diorama.lights: creepy
           diorama.latch: locked
           party.lights: dark
           queue.sign: enter           # nobody inside: let the next group in
@@ -641,7 +641,7 @@ states:
     on:
       enter:
         set:
-          diorama.lights: dark
+          diorama.lights: creepy
           diorama.latch: locked
           party.lights: dark
         cue:
@@ -649,5 +649,5 @@ states:
           - audio_bed_off
           - diorama__audio_loop_off
     after:
-      delay: 2m                    # placeholder
+      delay: 30s
       goto: passive

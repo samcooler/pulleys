@@ -554,8 +554,9 @@ The game drives it through device settings (see Device settings below):
 (`locked` | `open`). Today's game turns both on 10 s into `party` (game 1 won),
 with an `at:` step. On entering `victory2` (game 2 won) the latch locks and the
 lights go to `paradise`: the same tube spacing, but slow rainbow fades that
-overlap, each tube breathing on its own phase. `kickout` and `passive` turn
-them dark and locked. It hears `diorama.door_opened` and `diorama.door_closed` back.
+overlap, each tube breathing on its own phase. `kickout` and `passive` put
+the lights back to `creepy` and lock the latch. The tubes are on by default: unset
+(no game, or the arbiter silent) is `creepy`, and only an explicit `dark` puts them out. It hears `diorama.door_opened` and `diorama.door_closed` back.
 
 Opening the door while the lights are creepy also makes the tubes stutter a
 dim red for 2 s, on the board so it is instant, then they shudder back to
