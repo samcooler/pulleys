@@ -206,11 +206,11 @@ struct DisplayAssignment { uint16_t id; uint8_t display; };
 
 static const DisplayAssignment DISPLAY_ASSIGNMENT[] = {
     // DISPLAYS BEGIN
-    { 0x59A4, SCREEN_EXTRACTOR_ORANGE },   // X-59A4
-    { 0xCC6B, SCREEN_EXTRACTOR_YELLOW },   // X-CC6B
+    { 0x59A4, SCREEN_EXTRACTOR_YELLOW },   // X-59A4
+    { 0xCC6B, SCREEN_EXTRACTOR_RED },   // X-CC6B
     { 0x460B, SCREEN_EXTRACTOR_BLUE },   // X-460B
     { 0x4466, SCREEN_EXTRACTOR_GREEN },   // X-4466
-    { 0x28A2, SCREEN_EXTRACTOR_RED },   // X-28A2
+    { 0x28A2, SCREEN_EXTRACTOR_ORANGE },   // X-28A2
     { 0xD08E, SCREEN_RANKING },   // X-D08E
     // DISPLAYS END
 };
