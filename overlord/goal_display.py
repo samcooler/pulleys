@@ -23,6 +23,13 @@ And big words in the middle of the screen when the game moves:
                while a clip plays (Janis's congratulations first), so she is
                seen whenever she speaks.
 
+From the third round's win to victory, purple is the one goal (DISRUPT_STATES:
+party, diorama_unlocked, final). The first purple pull there replaces all of
+the above with the machine's alarm: a red band, EXTRACTION FAILING, over a
+purple bar that drains toward zero as the purple channels light (zero is
+the win), and PURPLE ACTIVITY DISRUPTS EXTRACTION flashing on every purple
+pull. Wrong, as far as the machine is concerned; right, as the bar shows.
+
 In the start state the band asks for a move instead ("MOVE ANY LEVER TO
 BEGIN").
 
@@ -60,6 +67,10 @@ CARD_FADE_S = 0.6
 CARD_GAP_S = 0.5           # the video between pulses
 CARD_WORDS = ("PARTY!", "VICTORY!")
 CLIP_MAX_S = 40.0
+DISRUPT_STATES = ("party", "diorama_unlocked", "final")
+DISRUPT_FLASH_S = 1.8
+PURPLE = "BF5AF2"
+ALARM = "FF3B30"
 VICTORY_STATES = ("party",)
 FPS = 8
 CARD_FPS = 20              # while the victory card's confetti falls
@@ -106,6 +117,10 @@ class GoalDisplay:
         self.stray_at = {}        # colour -> when it was last pulled as a non-goal
         self.lit = set()          # colours lit: from reaching 100 until drained to 0
         self.banner = None        # (text, colour, until)
+        self.disrupted = False    # a purple pull in DISRUPT_STATES: the machine's alarm is up
+        self.purple_at = -1e9     # the last purple pull, for the flash
+        self.finals = {}          # component index -> (charge, at), the roped purple ones
+        self.finals_lit = set()
         self.clip = False         # a video_once clip is playing (set_clip): the card waits
         self.card_t0 = None       # when the card last came up, for its pulse
         rnd = random.Random(7)    # the same confetti every time, a different piece each
@@ -130,10 +145,15 @@ class GoalDisplay:
                 self._on_state(prev, self.state, now)
             elif kind == "pull" and rec.get("cls") == "nongoal":
                 self.stray_at[rec["color"]] = now
+            elif kind == "pull" and rec.get("cls") == "final" and self.state in DISRUPT_STATES:
+                self.disrupted = True
+                self.purple_at = now
             elif kind == "param" and rec.get("name") == "round_time":
                 self.round_time = float(rec["value"])
 
     def _on_state(self, prev, new, now):
+        if new not in DISRUPT_STATES:
+            self.disrupted = False
         if new in VICTORY_STATES:
             self.banner = None
         elif prev in self.rounds and new != prev:
@@ -178,6 +198,14 @@ class GoalDisplay:
                 elif q == 0:
                     self.lit.discard(name)
                 self.charge[name] = (q, now)
+            for i, (q, c) in enumerate(zip(charges, colors)):
+                if i < 5 or c != COLORS.index("purple"):
+                    continue
+                if q >= 100:
+                    self.finals_lit.add(i)
+                elif q == 0:
+                    self.finals_lit.discard(i)
+                self.finals[i] = (q, now)
 
     # ── drawing ──────────────────────────────────────────────────────────────
     def _level(self, name, now):
@@ -284,6 +312,50 @@ class GoalDisplay:
                          f"m 0 0 l {w} 0 {w} {h} 0 {h}{{\\p0}}")
         return lines
 
+    def _integrity(self, now):
+        """What is left of the extraction, 1..0: each roped purple channel counts
+        fully once lit (it stays lit until it has drained to nothing, as the
+        arbiter rules), else by its charge. 0 is every one lit: the win."""
+        if not self.finals:
+            return 1.0
+        done = 0.0
+        for i, (q, at) in self.finals.items():
+            level = max(0.0, q - self.decay * (now - at))
+            done += 1.0 if (i in self.finals_lit and level > 0) else level / 100
+        return max(0.0, 1.0 - done / len(self.finals))
+
+    def _alarm_band(self, now):
+        left = self._integrity(now)
+        hot = now - self.purple_at < DISRUPT_FLASH_S
+        blink = int(now * 3) % 2 == 0
+        lines = [ass_rect(0, 0, RES_X, BAND_H, "1A0000", alpha="20")]
+        lines.append(ass_box(0, 0, RES_X, BAND_H, ALARM, 10 if hot else 6,
+                             "00" if (hot and int(now * 6) % 2 == 0) else "50"))
+        lines.append(ass_text(40, 18, "EXTRACTION FAILING", 58, ALARM if blink else "FFFFFF"))
+        lines.append(ass_text(RES_X - 40, 18, f"{int(round(left * 100))}%", 58, align=9))
+        x, y, w, h = 40, 92, RES_X - 80, 52
+        lines.append(ass_rect(x, y, w, h, "000000", alpha="20"))
+        if left > 0:
+            lines.append(ass_rect(x, y, max(2, int(w * left)), h, PURPLE))
+        lines.append(ass_box(x, y, w, h, "FFFFFF", 3))
+        return lines
+
+    def _alarm_flash(self, now):
+        t = now - self.purple_at
+        if t >= DISRUPT_FLASH_S:
+            return []
+        a = "00" if t < DISRUPT_FLASH_S - 0.4 else f"{int((t - (DISRUPT_FLASH_S - 0.4)) / 0.4 * 255):02X}"
+        jx, jy = random.randint(-8, 8), random.randint(-5, 5)
+        cx, cy = RES_X // 2 + jx, RES_Y // 2 + jy
+        lines = [ass_rect(0, RES_Y // 2 - 170, RES_X, 340, "000000", alpha="50")]
+        text = "PURPLE ACTIVITY\\NDISRUPTS EXTRACTION"
+        # A red ghost a few pixels off: the picture glitching.
+        lines.append(f"{{\\an5\\pos({cx + 9},{cy + 5})\\fs120\\b1\\bord0\\shad0"
+                     f"\\1c{ass_color(ALARM)}\\1a&H{'60' if a == '00' else a}&}}{text}")
+        lines.append(f"{{\\an5\\pos({cx},{cy})\\fs120\\b1\\bord6\\shad0"
+                     f"\\1c{ass_color(PURPLE)}\\3c&H000000&\\1a&H{a}&\\3a&H{a}&}}{text}")
+        return lines
+
     def _show(self, oid, lines, index):
         text = "\n".join(lines)
         if text == self.shown[index]:
@@ -299,9 +371,12 @@ class GoalDisplay:
     def draw(self):
         now = self.clock()
         with self.lock:
-            banner = self._card(now) if self.state in VICTORY_STATES else self._banner(now)
-            # A banner has the screen to itself: the band (the next round's goals) waits for it.
-            band = [] if banner else self._band(now)
+            if self.disrupted and self.state in DISRUPT_STATES:
+                band, banner = self._alarm_band(now), self._alarm_flash(now)
+            else:
+                banner = self._card(now) if self.state in VICTORY_STATES else self._banner(now)
+                # A banner has the screen to itself: the band (the next round's goals) waits for it.
+                band = [] if banner else self._band(now)
         try:
             self._show(BAND_ID, band, 0)
             self._show(BANNER_ID, banner, 1)
@@ -311,4 +386,4 @@ class GoalDisplay:
     def _run(self):
         while True:
             self.draw()
-            time.sleep(1 / (CARD_FPS if self.state in VICTORY_STATES else FPS))
+            time.sleep(1 / (CARD_FPS if self.state in VICTORY_STATES or self.disrupted else FPS))

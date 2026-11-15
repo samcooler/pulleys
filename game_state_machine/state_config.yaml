@@ -71,10 +71,10 @@ params:
     max: 60
     note: percent of full charge one pull adds
   final_charge_per_pull:
-    value: 24
+    value: 50
     min: 10
     max: 60
-    note: percent of full charge one purple pull adds; lower than charge_per_pull, so the purple levers take about twice the pulls (4 -> 8 pulls at a rope's pace)
+    note: percent of full charge one purple pull adds; 50 = two pulls lights a purple channel, and every purple channel lit at once wins
   decay_rate:
     value: 6.6667
     min: 3
@@ -513,6 +513,15 @@ states:
         cue:
           - audio_once_spirits_denied
           - video_once_janis_beg_button   # That button has been disabled. Now get back to work.
+      # Purple is the one goal from here to victory (party, diorama_unlocked,
+      # final): its charge carries across all three, and lighting every purple
+      # channel wins from any of them. The Overlord shows it as the machine's
+      # alarm: PURPLE ACTIVITY DISRUPTS EXTRACTION, and an EXTRACTION FAILING bar.
+      final_component_activated:
+        cue:
+          - video_once_janis_suspicion_what_doing_*   # What are you doing?
+      all_final_components_activated:
+        goto: victory2
     at:
       5s:                           # the spirits start screaming 5 s into the celebration
         cue:
@@ -548,6 +557,8 @@ states:
           - video_once_janis_beg_button
       final_component_activated:
         goto: final
+      all_final_components_activated:
+        goto: victory2
     idle:
       delay: 12s                    # placeholder
       cue:
@@ -566,7 +577,8 @@ states:
         cue:
           - video_loop_network_idle
           - diorama__audio_loop_off   # the distress stops
-          - game_reset_components
+          # no game_reset_components: the purple charge built in party and
+          # diorama_unlocked carries on toward the win
           - video_once_janis_threatening_*
       final_component_activated:
         cue:
