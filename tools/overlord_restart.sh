@@ -10,6 +10,8 @@
 #                                        Its checkout is then dirty; when it is back online, run
 #                                        "git checkout . && git clean -fd" there (this script's
 #                                        restart says so) before pulling again.
+#   tools/overlord_restart.sh --push-install  --push, then rerun deploy/install.sh: a full deploy
+#                                        with no internet (the Overlord on its own AP)
 #   tools/overlord_restart.sh --install  git pull, then rerun overlord/deploy/install.sh (apt, units,
 #                                        fallback AP); restarts the app, or says a reboot is needed
 #   tools/overlord_restart.sh --logs     change nothing, print the app's recent log
@@ -39,8 +41,9 @@ case "${1:-}" in
     --status) mode="status" ;;
     --push) mode="push" ;;
     --install) mode="install" ;;
+    --push-install) mode="push-install" ;;
     --logs) mode="logs" ;;
-    *) echo "usage: $0 [--update|--status|--push|--install|--logs]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--update|--status|--push|--push-install|--install|--logs]" >&2; exit 2 ;;
 esac
 
 command -v sshpass >/dev/null || { echo "needs sshpass: brew install sshpass" >&2; exit 1; }
@@ -74,9 +77,10 @@ if [ "$mode" != "status" ]; then
         restart) remote='cd ~/pulleys && { git pull --ff-only 2>&1 | tail -1; [ -z "$(git status --porcelain --untracked-files=no)" ] || echo "WARNING: checkout has local changes (from --push?); git checkout . && git clean -fd to pull again"; }; sudo -S systemctl restart overlord' ;;
         install) remote='cd ~/pulleys && git pull --ff-only 2>&1 | tail -1 && sudo -S overlord/deploy/install.sh 2>&1 | tail -15' ;;
         push)    remote='sudo -S systemctl restart overlord' ;;
+        push-install) remote='cd ~/pulleys && sudo -S overlord/deploy/install.sh 2>&1 | tail -15; sudo -n systemctl restart overlord 2>/dev/null || true' ;;
         update)  remote='sudo -S systemctl restart overlord-update overlord' ;;
     esac
-    if [ "$mode" = push ]; then
+    if [ "$mode" = push ] || [ "$mode" = push-install ]; then
         # Tracked and new (not ignored) files, as they are on disk here; .git is left alone.
         repo="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
         echo "Copying $(git -C "$repo" log -1 --format=%h) + local changes to $TARGET..."

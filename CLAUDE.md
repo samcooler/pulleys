@@ -10,6 +10,7 @@ tools/overlord_restart.sh --update   # also rerun the boot update (git pull + me
 tools/overlord_restart.sh --status   # change nothing, just report
 tools/overlord_restart.sh --install  # git pull, then rerun overlord/deploy/install.sh
 tools/overlord_restart.sh --push     # no internet (Overlord on its own AP): rsync the working tree, restart
+tools/overlord_restart.sh --push-install  # the same, then rerun overlord/deploy/install.sh
 ```
 
 It prints the commit the Overlord is on, whether the app is up, whether the bridge
