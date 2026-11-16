@@ -43,9 +43,19 @@ static void publish(bool urgent);
 
 // Bring the charge up to `now`. Drains at whatever the rate is today, so a game
 // posted with a new rate takes over from the charge as it stands.
+// A major outside the goals drains faster while the goals are showing
+// (MESH_NONGOAL_DECAY_FACTOR); finals and everything else at the game's rate.
+static float rateOf(const Component& c) {
+    float rate = gamestate_decay_rate();
+    if (&c >= s_major && &c < s_major + MAJOR_COUNT && s_goalMask && gamestate_goals_visible() &&
+        !(s_goalMask & (1u << (uint8_t)(&c - s_major))))
+        rate *= pulleys::MESH_NONGOAL_DECAY_FACTOR;
+    return rate;
+}
+
 static void settle(Component& c, uint32_t now) {
     if (c.charge > 0.0f) {
-        c.charge -= gamestate_decay_rate() * (float)(now - c.stampMs) / 1000.0f;
+        c.charge -= rateOf(c) * (float)(now - c.stampMs) / 1000.0f;
         if (c.charge < 0.0f) c.charge = 0.0f;
     }
     c.stampMs = now;

@@ -93,6 +93,12 @@ enum : uint8_t {
 };
 
 static constexpr uint8_t  MESH_TTL_START = 3;
+// While a round shows its goals, a major that is not a goal drains this many
+// times faster than the game's decay: wrong colours fade quickly, right ones
+// linger. The arbiter drains them so (components.cpp) and every display
+// predicts the same between reports (pulleys_component_display, goal_display.py,
+// playtest/engine.py: keep them in step).
+static constexpr float    MESH_NONGOAL_DECAY_FACTOR = 3.0f;
 static constexpr uint8_t  MESH_BURST     = 6;    // copies per local detection
 static constexpr uint16_t MESH_BURST_GAP = 160;  // ms between burst copies
 

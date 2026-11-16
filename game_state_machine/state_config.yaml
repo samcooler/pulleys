@@ -539,7 +539,7 @@ states:
       goto: final_wait
 
   # The party is over: Janis threatens and the network loop takes over.
-  # "Don't look in there" every 5 s; the Overlord counts down the 80 s the
+  # "Don't look in there" every 25 s; the Overlord counts down the 80 s the
   # players have to pull a purple lever. The first purple pull starts final;
   # none, and it is back to passive.
   final_wait:
@@ -564,7 +564,7 @@ states:
       all_final_components_activated:
         goto: victory2
     every:
-      delay: 5s                     # dropped while another clip is playing
+      delay: 25s                    # dropped while another clip is playing
       cue:
         - video_once_janis_warn_dont_look   # Don't look in there.
     after:

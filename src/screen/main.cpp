@@ -604,8 +604,11 @@ static uint8_t barColor[pulleys::COMPONENT_DISPLAY_BARS] = {
 static_assert(pulleys::COMPONENT_DISPLAY_BARS == pulleys::MESH_COMPONENT_COUNT,
               "one bar per component in the arbiter's packet");
 
+static_assert(pulleys::COMPONENT_DISPLAY_NONGOAL_FACTOR == pulleys::MESH_NONGOAL_DECAY_FACTOR,
+              "displays must drain a non-goal as fast as the arbiter does");
+
 static void onComponents(const pulleys::MeshComponents& c, bool relayed) {
-    pulleys::component_display_update(compModel, c.charge, c.decay, millis());
+    pulleys::component_display_update(compModel, c.charge, c.decay, millis(), c.goals);
     // An arbiter that predates colours sends none at all, majors included;
     // keep the defaults for it rather than blanking every bar.
     if (c.color[0] != pulleys::MESH_COLOR_UNKNOWN)

@@ -84,6 +84,7 @@ ALARM = "FF3B30"
 VICTORY_STATES = ("party",)
 COUNTDOWN_STATES = ("final_wait", "final")
 FPS = 8
+NONGOAL_DECAY_FACTOR = 3.0   # pulleys_mesh.h MESH_NONGOAL_DECAY_FACTOR: wrong colours drain faster
 CARD_FPS = 20              # while the victory card's confetti falls
 CONFETTI_N = 110
 CONFETTI_COLORS = ("FF3B30", "0A84FF", "34C759", "FFD60A", "FF9500", "BF5AF2", "FFFFFF", "FF2D95")
@@ -258,9 +259,13 @@ class GoalDisplay:
 
     # ── drawing ──────────────────────────────────────────────────────────────
     def _level(self, name, now):
-        """A colour's charge now: the last report, drained since as the arbiter drains it."""
+        """A colour's charge now: the last report, drained since as the arbiter drains it
+        (a colour outside the round's goals NONGOAL_DECAY_FACTOR times faster)."""
         q, at = self.charge.get(name, (0, now))
-        return max(0.0, q - self.decay * (now - at))
+        rate = self.decay
+        if self.goals and self.state in self.rounds and name in COLORS[:5] and name not in self.goals:
+            rate *= NONGOAL_DECAY_FACTOR
+        return max(0.0, q - rate * (now - at))
 
     def _clock(self, left, color="FFFFFF"):
         return ass_text(RES_X - 40, BAND_H // 2, f"{int(left) // 60}:{int(left) % 60:02d}", 70, color, align=6)

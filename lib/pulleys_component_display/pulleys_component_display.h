@@ -41,17 +41,25 @@ static constexpr uint32_t COMPONENT_DISPLAY_STALE_MS = 4000;   // no packet for 
 // filling rather than appearing, but quickly: 4 is a full bar in a quarter second.
 static constexpr float COMPONENT_DISPLAY_FILL_PER_S = 4.0f;
 
+// A major that is not a goal drains this much faster while the goals show:
+// pulleys_mesh.h MESH_NONGOAL_DECAY_FACTOR, which the arbiter drains it by.
+// (Kept here too, so this file stays free of the radio.)
+static constexpr float COMPONENT_DISPLAY_NONGOAL_FACTOR = 3.0f;
+static constexpr uint8_t COMPONENT_DISPLAY_MAJORS = 5;
+
 struct ComponentDisplayModel {
     uint8_t  charge[COMPONENT_DISPLAY_BARS] = {};   // from the last packet, percent: 100 = just lit
     uint32_t stampMs  = 0;              // when that packet arrived
     uint16_t decay    = 6667;           // drain rate, thousandths of a percent per second
     bool     heard    = false;          // a packet has ever arrived
+    uint8_t  goals    = 0;              // bit i = major i is a goal (0 outside a round)
     float    shown[COMPONENT_DISPLAY_BARS] = {};    // what is drawn, 0..1
 };
 
 inline void component_display_update(ComponentDisplayModel& m, const uint8_t charge[COMPONENT_DISPLAY_BARS],
-                         uint16_t decay, uint32_t now) {
+                         uint16_t decay, uint32_t now, uint8_t goals = 0) {
     for (uint8_t i = 0; i < COMPONENT_DISPLAY_BARS; i++) m.charge[i] = charge[i];
+    m.goals   = goals;
     m.decay   = decay;
     m.stampMs = now;
     m.heard   = true;
@@ -60,7 +68,10 @@ inline void component_display_update(ComponentDisplayModel& m, const uint8_t cha
 // How full a bar should be right now: the last published charge, drained by the
 // time since at the published rate. Keeps counting down between packets, and is corrected by the next.
 inline float component_display_target(const ComponentDisplayModel& m, uint8_t bar, uint32_t now) {
-    float percent = m.charge[bar] - (float)(now - m.stampMs) * m.decay / 1.0e6f;
+    float rate = m.decay / 1.0e6f;
+    if (m.goals && bar < COMPONENT_DISPLAY_MAJORS && !(m.goals & (1u << bar)))
+        rate *= COMPONENT_DISPLAY_NONGOAL_FACTOR;
+    float percent = m.charge[bar] - (float)(now - m.stampMs) * rate;
     float level = percent / 100.0f;
     return level < 0.0f ? 0.0f : (level > 1.0f ? 1.0f : level);
 }

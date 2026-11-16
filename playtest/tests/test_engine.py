@@ -149,6 +149,18 @@ class PullEvents(unittest.TestCase):
         e.pull(RED)
         self.assertAlmostEqual(e.charge_of_channel(RED), 20.0)
 
+    def test_a_non_goal_drains_faster_in_a_round(self):
+        cfg = game({"s": {"on": {"enter": {"goals": 1}, "goal_pull": {}}}})
+        e, _ = run(cfg, seed=2)
+        goal = 1 + spec.COLORS.index(e.goal_colors()[0])
+        other = next(ch for ch in range(1, 6) if ch != goal)
+        e.pull(goal)
+        e.pull(other)
+        e.advance(1.0)
+        drained_goal = 20.0 - e.charge_of_channel(goal)
+        drained_other = 20.0 - e.charge_of_channel(other)
+        self.assertAlmostEqual(drained_other, drained_goal * 3.0, places=3)
+
     def test_pull_events_come_before_the_charge(self):
         # Without a reset, a pull that moves the game lands its charge in the
         # new state, where things stand after the move.

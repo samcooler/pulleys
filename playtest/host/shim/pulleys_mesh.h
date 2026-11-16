@@ -3,6 +3,8 @@
 #include <Arduino.h>
 
 namespace pulleys {
+static constexpr float MESH_NONGOAL_DECAY_FACTOR = 3.0f;   // as lib/pulleys_mesh
+
 static constexpr uint8_t CHANNEL_COUNT        = 32;
 static constexpr uint8_t MESH_CUE_NAME_MAX    = 63;
 static constexpr uint8_t MESH_CUE_FLAG_ENTER  = 0x01;

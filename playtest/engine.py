@@ -38,6 +38,7 @@ from .spec import (COLORS, PURPLE, CHANNEL_COUNT, MAJOR_COUNT, REACHED,
                    reactions, resolve_duration, resolve_number)
 
 EPS = 1e-9
+NONGOAL_DECAY_FACTOR = 3.0   # pulleys_mesh.h MESH_NONGOAL_DECAY_FACTOR
 
 # Tie order when two things fall due at the same instant: the arbiter's loop
 # runs gamestate_tick() before components_tick().
@@ -406,15 +407,25 @@ class Engine:
         self._emit("palette", colors=[COLORS[c] for c in self.palette])
 
     # -- components (components.cpp) -------------------------------------------
+    def _rate(self, c):
+        """Drain per second: a major outside the goals, while they show, goes
+        NONGOAL_DECAY_FACTOR times faster (components.cpp rateOf)."""
+        rate = self.decay_rate
+        if self.goal_mask and self.goals_visible():
+            for i, m in enumerate(self.majors):
+                if m is c and not (self.goal_mask >> i) & 1:
+                    return rate * NONGOAL_DECAY_FACTOR
+        return rate
+
     def _settle(self, c):
         if c.charge > 0.0:
-            c.charge -= self.decay_rate * (self.t - c.stamp)
+            c.charge -= self._rate(c) * (self.t - c.stamp)
             if c.charge < EPS:
                 c.charge = 0.0
         c.stamp = self.t
 
     def _charge_now(self, c):
-        return max(0.0, c.charge - self.decay_rate * (self.t - c.stamp))
+        return max(0.0, c.charge - self._rate(c) * (self.t - c.stamp))
 
     def _pour(self, c, amount):
         """One pull's charge. True if that filled a dark component."""
@@ -465,13 +476,12 @@ class Engine:
             offer(self._at[0][0], "at")
         for i, entry in enumerate(self._every):
             offer(entry[0], "every", i)
-        rate = self.decay_rate
         for i, c in enumerate(self.majors):
             if c.on:
-                offer(c.stamp + c.charge / rate, "wear", ("major", i))
+                offer(c.stamp + c.charge / self._rate(c), "wear", ("major", i))
         for ch, c in enumerate(self.finals):
             if c.on:
-                offer(c.stamp + c.charge / rate, "wear", ("final", ch))
+                offer(c.stamp + c.charge / self._rate(c), "wear", ("final", ch))
         return best
 
     def _run_due(self, due):

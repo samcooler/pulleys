@@ -11,7 +11,7 @@
 # Each step goes on to the next even if one fails; it says which did.
 set -uo pipefail
 cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
-ONSITE_IDS="${ONSITE_IDS:-A9C8,1966,28A2,4466,460B,59A4,C6D1}"
+ONSITE_IDS="${ONSITE_IDS:-A9C8,1966,28A2,4466,460B,59A4,C6D1,D08E}"
 flash=1
 while [ $# -gt 0 ]; do
     case "$1" in
