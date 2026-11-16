@@ -66,8 +66,9 @@ why() {
 }
 TARGET="$HOST"
 errs=""
-if ! err=$(ssh_overlord true 2>&1); then
-    errs="  $HOST: $(why $? "$err")"
+rc=0; err=$(ssh_overlord true 2>&1) || rc=$?
+if [ "$rc" != 0 ]; then
+    errs="  $HOST: $(why $rc "$err")"
     TARGET=""
     for ip in $FALLBACK_IPS; do
         if err=$(TARGET="$ip" ssh_overlord true 2>&1); then TARGET="$ip"; break; else rc=$?; fi
