@@ -442,6 +442,11 @@ struct State {
     OutSlot out[16]     = {};
     CueSlot cueOut[8]   = {};
     ComponentsSlot compOut[4] = {};
+    // The newest component charges handed to componentsCb, so an older one
+    // arriving late (a burst copy, a relay) is not taken for news.
+    uint16_t compOrigin = 0, compSeq = 0;
+    uint32_t compAtMs   = 0;
+    bool     compHave   = false;
     ConfigSlot     cfgOut[2]  = {};
     FloodSlot      floodOut[8] = {};
 
@@ -768,13 +773,33 @@ inline void handleCue(const MeshCue& c) {
     }
 }
 
+// Charges are state, not events: only the newest counts. A round won sends three
+// in a millisecond (the winning pull, the new goals with the old charges, the
+// reset), each a burst of copies; one that missed its first copy hears a later
+// one after the reset, and would put the old charges back. Seq orders them (it
+// rises per origin). A rebooted arbiter starts its seq anywhere, so "older" only
+// counts within COMP_REORDER_MS of the last one taken; it republishes every second.
+static const uint32_t COMP_REORDER_MS = 2000;
+inline bool componentsNewer(const MeshComponents& c) {
+    State& s = S();
+    uint32_t now = millis();
+    bool newer = !s.compHave || c.originId != s.compOrigin ||
+                 (int16_t)(c.seq - s.compSeq) > 0 || now - s.compAtMs > COMP_REORDER_MS;
+    if (!newer) return false;
+    s.compHave = true;
+    s.compOrigin = c.originId;
+    s.compSeq = c.seq;
+    s.compAtMs = now;
+    return true;
+}
+
 inline void handleComponents(const MeshComponents& c) {
     uint32_t key = keyOf(c.originId, c.seq);
     if (wasSeen(key)) return;
     markSeen(key);
 
     bool relayed = c.ttl < MESH_TTL_START;
-    if (S().componentsCb) S().componentsCb(c, relayed);
+    if (S().componentsCb && componentsNewer(c)) S().componentsCb(c, relayed);
 
     if (S().relayOn && c.ttl > 0) {
         MeshComponents r = c;

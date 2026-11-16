@@ -75,6 +75,7 @@ static const ChannelAssignment CHANNEL_ASSIGNMENT[] = {
     // ASSIGNMENTS BEGIN
     { 0xEC52,  1, LIN },   // N-EC52
     { 0xE857,  1, LIN },   // N-E857
+    { 0x0DA7,  1, LIN },   // N-0DA7
     { 0x0664,  2, LIN },   // N-0664
     { 0x7FF0,  2, LIN },   // N-7FF0
     { 0x611D,  3, LIN },   // N-611D

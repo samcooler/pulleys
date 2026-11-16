@@ -191,6 +191,14 @@ class GoalDisplay:
         self.purple_at = -1e9
         self.stray_at.clear()
         self.card_t0 = None
+        if new != prev and (new in self.rounds or new == self.start):
+            # The arbiter resets every component on entering these: start the
+            # bars from nothing now rather than on its next report.
+            self.charge.clear()
+            self.last_rise.clear()
+            self.lit.clear()
+            self.finals.clear()
+            self.finals_lit.clear()
         if prev not in self.rounds or new == prev or new in VICTORY_STATES:
             return
         # Only a round's own ending gets a banner. A jump forced by hand is neither.
