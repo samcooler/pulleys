@@ -392,6 +392,13 @@ struct OutSlot {
 // would register the callbacks while another polled its own empty rings.
 // A function-local static inside an inline function is one shared instance
 // across the whole program, guaranteed even under C++11.
+// Cues waiting to go out (own and relayed). Each holds a slot for its whole
+// burst (MESH_BURST copies, MESH_BURST_GAP apart, about 0.8 s), and a win fires
+// a crowd of them at once with a lever sound per pull: 8 slots once dropped the
+// jailbreak video's cue without a word. Full anyway, the new cue takes the slot
+// of the one with the fewest copies left to send, which has had its chances.
+static constexpr uint8_t MESH_CUE_SLOTS = 32;
+
 struct CueSlot {
     MeshCue  cue;
     uint32_t dueMs;
@@ -445,7 +452,7 @@ struct State {
     uint16_t seenHead   = 0;
 
     OutSlot out[16]     = {};
-    CueSlot cueOut[8]   = {};
+    CueSlot cueOut[MESH_CUE_SLOTS] = {};
     ComponentsSlot compOut[4] = {};
     // The newest component charges handed to componentsCb, so an older one
     // arriving late (a burst copy, a relay) is not taken for news.
@@ -514,6 +521,7 @@ struct State {
     volatile uint32_t statRingFull = 0;
     uint32_t          statSent     = 0;
     uint32_t          statSendErr  = 0;
+    uint32_t          statCueEvicted = 0;   // cues that took a busy slot (MESH_CUE_SLOTS)
 };
 
 inline State& S() { static State s; return s; }
@@ -548,15 +556,17 @@ inline void enqueue(const MeshEvent& ev, uint8_t count, uint16_t gap, uint16_t f
 
 inline void enqueueCue(const MeshCue& c, uint8_t count, uint16_t gap, uint16_t firstDelay) {
     State& s = S();
-    for (uint8_t i = 0; i < 8; i++) {
-        if (s.cueOut[i].used) continue;
-        s.cueOut[i].cue   = c;
-        s.cueOut[i].left  = count;
-        s.cueOut[i].gapMs = gap;
-        s.cueOut[i].dueMs = millis() + firstDelay;
-        s.cueOut[i].used  = true;
-        return;
+    uint8_t pick = 0;
+    for (uint8_t i = 0; i < MESH_CUE_SLOTS; i++) {
+        if (!s.cueOut[i].used) { pick = i; break; }
+        if (s.cueOut[i].left < s.cueOut[pick].left) pick = i;
     }
+    if (s.cueOut[pick].used) s.statCueEvicted++;
+    s.cueOut[pick].cue   = c;
+    s.cueOut[pick].left  = count;
+    s.cueOut[pick].gapMs = gap;
+    s.cueOut[pick].dueMs = millis() + firstDelay;
+    s.cueOut[pick].used  = true;
 }
 
 inline void enqueueComponents(const MeshComponents& c, uint8_t count, uint16_t gap, uint16_t firstDelay) {
@@ -1280,7 +1290,7 @@ inline void mesh_poll() {
         if (--s.left == 0) s.used = false;
         else s.dueMs = now + s.gapMs;
     }
-    for (uint8_t i = 0; i < 8; i++) {
+    for (uint8_t i = 0; i < _mesh::MESH_CUE_SLOTS; i++) {
         _mesh::CueSlot& s = st.cueOut[i];
         if (!s.used || now < s.dueMs) continue;
         esp_err_t e = esp_now_send(_mesh::BCAST, (const uint8_t*)&s.cue, mesh_cue_wire_size(s.cue));
