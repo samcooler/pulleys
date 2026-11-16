@@ -306,10 +306,20 @@ static void applyCensusDetail() {
     pulleys::census_set_detail(detail);
 }
 
+// How much motion a detection needs, as a fraction of pulleys_detect's defaults
+// (and of the stored rotation angle): 0.8 = 20% less push, swing or turn. Only
+// the motion thresholds; the timings (minimum duration, cooldown) stay.
+#ifndef DETECT_SENSITIVITY_SCALE
+#define DETECT_SENSITIVITY_SCALE 0.8f
+#endif
+
 static void applyConfig() {
     pulleys::DetectConfig c;
     c.mode            = myMode;
-    c.rotThresholdDeg = myRotDeg;
+    c.rotThresholdDeg = myRotDeg * DETECT_SENSITIVITY_SCALE;
+    c.rotStartDps    *= DETECT_SENSITIVITY_SCALE;
+    c.linStartG      *= DETECT_SENSITIVITY_SCALE;
+    c.linImpulseGs   *= DETECT_SENSITIVITY_SCALE;
     detector.init(c);
     applyCensusDetail();
 }
