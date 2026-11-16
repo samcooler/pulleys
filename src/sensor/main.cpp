@@ -308,7 +308,7 @@ static void applyCensusDetail() {
 
 // How much motion a detection needs, as a fraction of pulleys_detect's defaults
 // (and of the stored rotation angle): 0.8 = 20% less push, swing or turn. Only
-// the motion thresholds; the timings (minimum duration, cooldown) stay.
+// the motion thresholds; the minimum duration stays. The cooldown is set below.
 #ifndef DETECT_SENSITIVITY_SCALE
 #define DETECT_SENSITIVITY_SCALE 0.8f
 #endif
@@ -320,6 +320,7 @@ static void applyConfig() {
     c.rotStartDps    *= DETECT_SENSITIVITY_SCALE;
     c.linStartG      *= DETECT_SENSITIVITY_SCALE;
     c.linImpulseGs   *= DETECT_SENSITIVITY_SCALE;
+    c.refractoryMs    = 1000;   // a lever can fire again 1 s after it last did
     detector.init(c);
     applyCensusDetail();
 }
