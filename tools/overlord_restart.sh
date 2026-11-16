@@ -57,12 +57,16 @@ ssh_overlord() {
 }
 
 TARGET="$HOST"
-if ! ssh_overlord true 2>/dev/null; then
+errs=""
+if ! err=$(ssh_overlord true 2>&1); then
+    errs="  $HOST: $(echo "$err" | tail -1)"
     TARGET=""
     for ip in $FALLBACK_IPS; do
-        if TARGET="$ip" ssh_overlord true 2>/dev/null; then TARGET="$ip"; break; fi
+        if err=$(TARGET="$ip" ssh_overlord true 2>&1); then TARGET="$ip"; break; fi
+        errs="$errs
+  $ip: $(echo "$err" | tail -1)"
     done
-    [ -n "$TARGET" ] || { echo "cannot reach the Overlord at $HOST or $FALLBACK_IPS" >&2; exit 1; }
+    [ -n "$TARGET" ] || { echo "cannot reach the Overlord over ssh at $HOST or $FALLBACK_IPS:" >&2; echo "$errs" >&2; exit 1; }
     echo "($HOST did not answer; using $TARGET)"
 fi
 
