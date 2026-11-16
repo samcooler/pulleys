@@ -8,12 +8,12 @@
 // An extractor is a Screen built for its own LED surface: two 32×8 panels bent
 // into a 64×8 ring, wide and horizontal, with a strip hanging straight down
 // below it. Five of them, one per game1 colour (everything but purple). Each
-// shows how far along its colour is as a column of liquid: the strip fills
-// from its far (bottom) end up to the ring, then the ring fills bottom to top.
+// shows how far along its colour is as liquid: the strip fills from its far
+// (bottom) end up and the ring from its bottom row up, both at once, so half
+// a score is half the strip and half the ring.
 //
-// The liquid is never still. While the surface is in the strip it bobs up and
-// down a little; once it reaches the ring it has width, so the surface becomes
-// waves -- sines that wrap exactly once round the 64 columns, travelling at
+// The liquid is never still. The strip's surface bobs up and down a little;
+// the ring's has width, so it becomes waves -- sines that wrap exactly once round the 64 columns, travelling at
 // different speeds and both ways, so it reads as a container sloshing rather
 // than a pattern scrolling. A rising level kicks the slosh up, the way pouring
 // does, and it settles again over a few seconds.
@@ -82,39 +82,45 @@ inline float _extractor_taper(float v, float lo, float hi, float ramp) {
     return m < 0.0f ? 0.0f : (m > 1.0f ? 1.0f : m);
 }
 
-// The level in pixels, from the bottom of the strip.
-inline float extractor_height(const ExtractorLiquid& l, uint16_t stripLen) {
-    return l.level * (float)(stripLen + EXTRACTOR_RING_H);
+// The strip and the ring fill together: the same level, 0..1, is that far up
+// the strip and that far up the ring at once, each from empty to full.
+// Heights stay measured from the bottom of the strip, so the ring's run from
+// stripLen to stripLen + RING_H.
+inline float extractor_strip_height(const ExtractorLiquid& l, uint16_t stripLen) {
+    return l.level * (float)stripLen;
+}
+inline float extractor_ring_height(const ExtractorLiquid& l, uint16_t stripLen) {
+    return (float)stripLen + l.level * (float)EXTRACTOR_RING_H;
 }
 
-// The whole surface heaving up and down: two slow sines, out of step.
-inline float extractor_bob(const ExtractorLiquid& l, uint16_t stripLen) {
-    float h = extractor_height(l, stripLen);
-    float amp = (EXTRACTOR_BOB_PX + 0.5f * l.slosh) *
-                _extractor_taper(h, 0.0f, (float)(stripLen + EXTRACTOR_RING_H), 1.5f);
+// A surface heaving up and down: two slow sines, out of step. `taper` fades it
+// out toward empty and full, so an empty part is dark and a full one is flat.
+inline float extractor_bob(const ExtractorLiquid& l, float taper) {
+    float amp = (EXTRACTOR_BOB_PX + 0.5f * l.slosh) * taper;
     return amp * (0.6f * sinf(l.t * 1.3f) + 0.4f * sinf(l.t * 2.1f + 1.0f));
 }
 
 // Where the surface is in the strip. It has no width, so it only bobs.
 inline float extractor_strip_surface(const ExtractorLiquid& l, uint16_t stripLen) {
-    return extractor_height(l, stripLen) + extractor_bob(l, stripLen);
+    float h = extractor_strip_height(l, stripLen);
+    return h + extractor_bob(l, _extractor_taper(h, 0.0f, (float)stripLen, 1.5f));
 }
 
-// Where the surface is at ring column x. Waves only once it has climbed into
-// the ring, growing over its first two rows and flattening over its last two.
+// Where the surface is at ring column x: it bobs, and waves across the width,
+// growing over the ring's first two rows and flattening over its last two.
 // Each wavenumber is a whole number of cycles round 64, so the seam where the
 // ring closes is invisible.
 inline float extractor_ring_surface(const ExtractorLiquid& l, uint16_t stripLen, uint8_t x) {
-    float h   = extractor_height(l, stripLen);
+    float h   = extractor_ring_height(l, stripLen);
     float top = (float)(stripLen + EXTRACTOR_RING_H);
-    float amp = (EXTRACTOR_WAVE_PX + l.slosh) *
-                _extractor_taper(h, (float)stripLen, top, 2.0f);
+    float taper = _extractor_taper(h, (float)stripLen, top, 2.0f);
+    float amp = (EXTRACTOR_WAVE_PX + l.slosh) * taper;
     float a = 6.2831853f * (float)x / EXTRACTOR_RING_W;
     float w = 0.50f * sinf(1.0f * a + l.t * 0.9f)
             + 0.30f * sinf(2.0f * a - l.t * 1.6f + 2.0f)
             + 0.15f * sinf(3.0f * a + l.t * 2.3f + 4.0f)
             + 0.08f * sinf(5.0f * a - l.t * 3.1f + 1.0f);
-    return h + extractor_bob(l, stripLen) + amp * w;
+    return h + extractor_bob(l, taper) + amp * w;
 }
 
 // How much of the pixel at height `pixel` is under a surface at `surface`, 0..1.

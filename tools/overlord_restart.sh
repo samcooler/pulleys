@@ -14,6 +14,7 @@
 #                                        with no internet (the Overlord on its own AP)
 #   tools/overlord_restart.sh --install  git pull, then rerun overlord/deploy/install.sh (apt, units,
 #                                        fallback AP); restarts the app, or says a reboot is needed
+#   tools/overlord_restart.sh --media    change nothing, list the media files the Overlord has
 #   tools/overlord_restart.sh --logs     change nothing, print the app's recent log
 #                                        (OVERLORD_LOG_LINES, default 80)
 #
@@ -43,7 +44,8 @@ case "${1:-}" in
     --install) mode="install" ;;
     --push-install) mode="push-install" ;;
     --logs) mode="logs" ;;
-    *) echo "usage: $0 [--update|--status|--push|--push-install|--install|--logs]" >&2; exit 2 ;;
+    --media) mode="media" ;;
+    *) echo "usage: $0 [--update|--status|--push|--push-install|--install|--logs|--media]" >&2; exit 2 ;;
 esac
 
 command -v sshpass >/dev/null || { echo "needs sshpass: brew install sshpass" >&2; exit 1; }
@@ -79,6 +81,10 @@ if [ "$rc" != 0 ]; then
     echo "($HOST did not answer; using $TARGET)"
 fi
 
+if [ "$mode" = "media" ]; then
+    ssh_overlord 'set -a; . /etc/overlord.env 2>/dev/null; set +a; d="${OVERLORD_MEDIA:-$HOME/pulleys/overlord/media}"; echo "media: $d"; cd "$d" && find . -type f | sort'
+    exit 0
+fi
 if [ "$mode" = "logs" ]; then
     ssh_overlord "journalctl -u overlord -n ${OVERLORD_LOG_LINES:-80} --no-pager 2>&1 || sudo -S journalctl -u overlord -n ${OVERLORD_LOG_LINES:-80} --no-pager" <<<"$OVERLORD_PASSWORD" 2>&1 | grep -v '^\[sudo\]'
     exit 0

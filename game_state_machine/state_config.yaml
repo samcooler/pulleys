@@ -316,7 +316,7 @@ cues:
 # MESSAGES: text for text_show_<name> cues. Overlord only. seconds = how long it stays.
 messages:
   afterword:                        # over the end of the jailbreak video and into the idle loop
-    text: "Thanks for playing, please relatch the diorama on your way out!"
+    text: "Thanks for playing!"
     seconds: 29
 
 # Flow: passive -> easy_round -> medium_round -> hard_round -> party (10 s) -> final_wait (60 s) -> passive;

@@ -660,7 +660,7 @@ static void renderComponents(uint32_t now, float dt) {
 
 // ── Display: extractor ────────────────────────────────────────────────────────
 // One colour's score, poured: the strip hanging below fills from its far end
-// up, then the 64×8 ring fills from the bottom, every pixel between off and
+// up and the 64×8 ring from the bottom, both at once, every pixel between off and
 // the full colour. The surface bobs while it is in the strip and becomes waves
 // round the ring; pulleys_extractor has the liquid and the wiring.
 //
