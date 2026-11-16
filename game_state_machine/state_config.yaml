@@ -497,6 +497,7 @@ states:
         set:
           party.lights: lit
         cue:
+          - game_reset_components     # purple starts empty: pulls in the rounds do not count toward the win
           - diorama__audio_loop_off   # the spirits' distress stops, however we got here
           - audio_once_victory_fanfare
           - choose_one:
@@ -513,7 +514,7 @@ states:
           - audio_once_spirits_denied
           - video_once_janis_beg_button   # That button has been disabled. Now get back to work.
       # Purple is the one goal from here to victory (party, final_wait,
-      # final): its charge carries across all three, and lighting every purple
+      # final): it starts empty here, its charge carries across all three, and lighting every purple
       # channel wins from any of them. The Overlord shows it as the machine's
       # alarm: PURPLE ACTIVITY DISRUPTS EXTRACTION, and an EXTRACTION FAILING bar.
       final_component_activated:
