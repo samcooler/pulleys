@@ -97,10 +97,12 @@ if [ "$mode" != "status" ]; then
         # Tracked and new (not ignored) files, as they are on disk here; .git is left alone.
         repo="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
         echo "Copying $(git -C "$repo" log -1 --format=%h) + local changes to $TARGET..."
-        (cd "$repo" && git ls-files -co --exclude-standard -z) |
-            SSHPASS="$OVERLORD_PASSWORD" rsync -a --from0 --files-from=- \
-                -e "sshpass -e ssh -4 -o HostKeyAlias=overlord.local -o PreferredAuthentications=password -o PubkeyAuthentication=no" \
-                "$repo/" "$OVERLORD_USER@$TARGET:pulleys/"
+        # tar, not rsync: the Pi may not have rsync, and on its own AP it cannot install it.
+        # Files deleted here stay there; that is harmless for a deploy.
+        (cd "$repo" && git ls-files -co --exclude-standard -z | while IFS= read -r -d '' f; do
+            [ -e "$f" ] && printf '%s\0' "$f"; done | COPYFILE_DISABLE=1 tar --null -T - -czf -) |
+            ssh_overlord 'mkdir -p ~/pulleys && tar -xzf - -C ~/pulleys 2>&1 | grep -v "Ignoring unknown extended header" || true'
+        echo "copied."
     fi
     echo "Restarting the Overlord ($mode)..."
     ssh_overlord "$remote" <<<"$OVERLORD_PASSWORD" 2>&1 | grep -v '^\[sudo\]' || true
