@@ -57,6 +57,9 @@ devices:
   television:                       # the TV set in the diorama: text on colour (src/television)
     set:
       channel: [idle, dark, janis, paradise]   # a channel of messages.h; dark = screen off
+  extractors:                       # the five extractors: an effect over their liquid (src/screen, extractorEffect)
+    set:
+      effect: [none, party, breaking]   # party: rainbow and sparkles; breaking: purple flashes, the machine failing
   queue:                            # the arbiter's own screen, as a sign for the line outside
     set:
       sign: [enter, wait, closed]   # a channel of src/arbiter_mesh/sign_messages.h
@@ -369,6 +372,7 @@ states:
         set:                          # the game is back at its start
           diorama.lights: creepy      # back from victory2's paradise; on all the time
           party.lights: dark
+          extractors.effect: none
           queue.sign: enter           # nobody inside: let the next group in
         cue:
           - diorama__audio_loop_off   # the spirits' distress stops, however we got here
@@ -496,6 +500,7 @@ states:
       enter:
         set:
           party.lights: lit
+          extractors.effect: party    # rainbow and sparkles for the first 10 s
         cue:
           - game_reset_components     # purple starts empty: pulls in the rounds do not count toward the win
           - diorama__audio_loop_off   # the spirits' distress stops, however we got here
@@ -526,6 +531,9 @@ states:
       5s:                           # the spirits start screaming 5 s into the celebration
         cue:
           - diorama__audio_loop_spirit_distress
+      10s:
+        set:
+          extractors.effect: none
     after:
       delay: $party_time
       goto: final_wait
@@ -537,6 +545,8 @@ states:
   final_wait:
     on:
       enter:
+        set:
+          extractors.effect: breaking # purple flashes: the machine failing, until passive or the win
         cue:
           - video_once_janis_threatening_disciplinary_1   # an entry clip: it cuts off the congratulations
           - video_loop_network_idle                       # takes over when her clip ends
@@ -607,6 +617,7 @@ states:
       enter:
         set:
           diorama.lights: paradise    # the spirits have made it to paradise
+          extractors.effect: none
           party.lights: lit
         cue:
           - diorama__audio_loop_off   # the spirits' distress stops, however we got here
@@ -630,6 +641,7 @@ states:
       enter:
         set:
           party.lights: dark
+          extractors.effect: none
         cue:
           - audio_loop_off
           - audio_bed_off

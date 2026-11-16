@@ -744,6 +744,59 @@ static inline CRGB liquidPixel(CRGB c, float cover) {
 }
 
 
+// The game's extractors.effect setting (state_config.yaml), drawn over the
+// liquid on every LED, strip and ring:
+//   party     rainbow sweeping round the ring and down the strip, with white
+//             sparkles: the celebration (the game sets it for the party's start)
+//   breaking  the machine failing: hard purple flashes at random, a few a
+//             second, flickering in strength (final_wait and final)
+//   none      nothing; also when the arbiter has gone quiet
+#ifndef EXTRACTOR_EFFECT_BRIGHTNESS
+  #define EXTRACTOR_EFFECT_BRIGHTNESS 70
+#endif
+static void forEachExtractorLed(void (*fn)(uint16_t i, uint16_t pos, uint16_t total, uint32_t now), uint32_t now) {
+    const uint16_t S = EXTRACTOR_STRIP_LEDS;
+    const uint16_t total = S + pulleys::EXTRACTOR_RING_W;
+    for (uint16_t i = 0; i < S; i++)   // the strip, bottom (pos 0) to top
+        fn(pulleys::extractor_strip_index(S - 1 - i, S, EXTRACTOR_STRIP_REVERSE), i, total, now);
+    for (uint8_t x = 0; x < pulleys::EXTRACTOR_RING_W; x++)
+        for (uint8_t y = 0; y < pulleys::EXTRACTOR_RING_H; y++)
+            fn(pulleys::extractor_ring_index(x, y, EXTRACTOR_REVERSE_Y), S + x, total, now);
+}
+
+static void partyPixel(uint16_t i, uint16_t pos, uint16_t total, uint32_t now) {
+    uint8_t hue = (uint8_t)(pos * 256u / total * 2u + now / 6u);
+    CRGB c = CHSV(hue, 255, 255);
+    c.nscale8(EXTRACTOR_EFFECT_BRIGHTNESS);
+    leds[i] = c;
+    if (random8() < 6) leds[i] = CRGB(EXTRACTOR_EFFECT_BRIGHTNESS, EXTRACTOR_EFFECT_BRIGHTNESS, EXTRACTOR_EFFECT_BRIGHTNESS);
+}
+
+static uint8_t breakLevel = 0;   // this frame's flash, 0 = none
+static void breakPixel(uint16_t i, uint16_t, uint16_t, uint32_t) {
+    CRGB c = pulleys::color_rgb(pulleys::COLOR_GAME2);
+    c.nscale8(breakLevel);
+    leds[i] |= c;
+}
+
+static void extractorEffect(uint32_t now) {
+    if (!pulleys::settings_fresh()) return;
+    if (pulleys::setting_is("extractors.effect", "party")) {
+        forEachExtractorLed(partyPixel, now);
+    } else if (pulleys::setting_is("extractors.effect", "breaking")) {
+        // A flash is a run of a few frames: on hard, then gone, at random.
+        static uint32_t until = 0;
+        static uint8_t level = 0;
+        if (now >= until) {
+            bool on = level == 0 && random8() < 110;
+            level = on ? (uint8_t)random(EXTRACTOR_EFFECT_BRIGHTNESS / 2, EXTRACTOR_EFFECT_BRIGHTNESS + 1) : 0;
+            until = now + (on ? random(40, 110) : random(60, 260));
+        }
+        breakLevel = (level && random8() < 40) ? level / 3 : level;   // a stutter inside the flash
+        if (breakLevel) forEachExtractorLed(breakPixel, now);
+    }
+}
+
 static void renderExtractor(uint32_t now, float dt) {
     const uint16_t S = EXTRACTOR_STRIP_LEDS;
     uint8_t color = mode - pulleys::SCREEN_EXTRACTOR_RED;
@@ -778,6 +831,8 @@ static void renderExtractor(uint32_t now, float dt) {
             leds[pulleys::extractor_ring_index(x, y, EXTRACTOR_REVERSE_Y)] = c;
         }
     }
+
+    extractorEffect(now);
 
     // Arbiter silent: blink the ring's top-left pixel a dim white -- not red,
     // which is one of the colours an extractor pours.
@@ -1326,6 +1381,9 @@ void setup() {
 #if SCREEN_PARTY_BUILD
     partyInit();
 #endif
+#if SCREEN_EXTRACTOR_BUILD
+    pulleys::settings_init();   // extractors.effect
+#endif
     pulleys::census_set_detail(pulleys::screen_display_name(mode));
     Serial.printf("  display=%s (%s)\n", pulleys::screen_display_name(mode),
                   forcedByBuild ? "built in — reflash to change it"
@@ -1359,6 +1417,9 @@ void loop() {
 #endif
 #if SCREEN_PARTY_BUILD
     partyPoll(now);
+#endif
+#if SCREEN_EXTRACTOR_BUILD
+    pulleys::settings_poll();
 #endif
 
     // No dwell timer: the mode was chosen at boot and holds until the next
