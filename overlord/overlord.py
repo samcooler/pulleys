@@ -73,6 +73,7 @@ def _has_media(root):
 if MEDIA != BUNDLED_MEDIA and not _has_media(MEDIA):
     print(f"no media in {MEDIA}; falling back to the bundled {BUNDLED_MEDIA}", flush=True)
     MEDIA = BUNDLED_MEDIA
+ENTRY_BACKSTOP_S = 1.5  # after a state starts, replay entry videos that never arrived (entry_backstop)
 MESSAGE_GRACE_S = 3.0   # a message this new survives a state change (see on_state_record)
 CAPTION_ID = 12      # osd-overlay id for clip captions (goal band 8, messages 9, banners 11)
 CAPTION_MAX_S = 20
@@ -414,10 +415,31 @@ def main():
         except Exception as e:
             print(f"message: clear failed: {e}", flush=True)
 
+    def entry_backstop(state, at):
+        """The mesh can lose a cue (it once lost the jailbreak video). The state
+        itself reaches us by another road, so ENTRY_BACKSTOP_S after a state
+        starts, play any of its entry video cues that never arrived: a named
+        video_once (the clip) and its video_loop. Wildcards and choose_one are
+        left alone; Janis is not worth a second guess."""
+        st = ((game_cfg or {}).get("states") or {}).get(state) or {}
+        cues = ((st.get("on") or {}).get("enter") or {}).get("cue") or []
+        for cue in cues:
+            if not isinstance(cue, str) or "*" in cue or not cue.startswith(("video_once_", "video_loop_")):
+                continue
+            if cue_heard.get(cue, -1e9) >= at - 5.0:
+                continue
+            print(f"backstop: {state} entry cue {cue} never arrived; playing it", flush=True)
+            fire_cue(cue, enter=True)
+
     def on_state_record(rec):
         """A new state takes down the last one's message. The cue that shows a
         message comes from a state's entry, and may reach us just before the
         state's own record does, so one only just shown is left up."""
+        if rec.get("kind") == "state" and not rec.get("sync"):
+            at = time.monotonic()
+            t = threading.Timer(ENTRY_BACKSTOP_S, entry_backstop, args=(rec.get("name"), at))
+            t.daemon = True
+            t.start()
         if rec.get("kind") == "state" and message_at[0] is not None \
                 and time.monotonic() - message_at[0] > MESSAGE_GRACE_S:
             clear_message()
@@ -450,9 +472,12 @@ def main():
                 return path.name
         return None
 
+    cue_heard = {}   # cue name -> when it last reached fire_cue, for the entry backstop
+
     def fire_cue(cue, enter=False):
         """Play one cue; True if it played. `enter` marks a cue a game state
         fires on entry: its clip plays even if another clip is running."""
+        cue_heard[cue] = time.monotonic()
         # Game-control cues are for the game system, not overlord media.
         if cue.startswith("game_"):
             return False
