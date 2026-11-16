@@ -56,15 +56,23 @@ ssh_overlord() {
         "$OVERLORD_USER@$TARGET" "$@"
 }
 
+# Why one try failed: sshpass says nothing for its own refusals, only an exit code.
+why() {
+    case "$1" in
+        5) echo "wrong password (sshpass 5)" ;;
+        6) echo "host key not known or changed (sshpass 6): if it was reinstalled, run: ssh-keygen -R overlord.local, then ssh overlord@<ip> once and accept the key" ;;
+        *) echo "exit $1: $(echo "$2" | tail -1)" ;;
+    esac
+}
 TARGET="$HOST"
 errs=""
 if ! err=$(ssh_overlord true 2>&1); then
-    errs="  $HOST: $(echo "$err" | tail -1)"
+    errs="  $HOST: $(why $? "$err")"
     TARGET=""
     for ip in $FALLBACK_IPS; do
-        if err=$(TARGET="$ip" ssh_overlord true 2>&1); then TARGET="$ip"; break; fi
+        if err=$(TARGET="$ip" ssh_overlord true 2>&1); then TARGET="$ip"; break; else rc=$?; fi
         errs="$errs
-  $ip: $(echo "$err" | tail -1)"
+  $ip: $(why $rc "$err")"
     done
     [ -n "$TARGET" ] || { echo "cannot reach the Overlord over ssh at $HOST or $FALLBACK_IPS:" >&2; echo "$errs" >&2; exit 1; }
     echo "($HOST did not answer; using $TARGET)"
