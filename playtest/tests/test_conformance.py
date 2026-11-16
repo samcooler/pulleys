@@ -365,11 +365,11 @@ def sc_production(E):
             burst(E, chan(c), until_moved=True)
         seen.append(E.state())
     seen.append(E.marks())                       # the party shows no goals
-    E.wait(11)                                   # 10 s of party, then the diorama opens
+    E.wait(61)                                   # 60 s of party, then final_wait
     E.take_cues()
     E.input("diorama.button_pressed")            # "free the spirits": refused
     seen.append(E.take_cues())
-    E.wait(5)                                    # still inside its 60 s countdown
+    E.wait(5)                                    # still inside its 80 s countdown
     seen.append(E.state())
     for ch in (6, 12, 18):                       # every purple rope with a rope on it
         burst(E, ch)

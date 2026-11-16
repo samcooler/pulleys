@@ -35,7 +35,7 @@ fills (zero is the win), and PURPLE ACTIVITY DISRUPTS EXTRACTION flashing on eve
 pull. Wrong, as far as the machine is concerned; right, as the bar shows.
 
 In the start state the band asks for a move instead ("MOVE ANY LEVER TO
-BEGIN"). In a countdown state (COUNTDOWN_STATES: final_wait, the minute after
+BEGIN"). In a countdown state (COUNTDOWN_STATES: final_wait, the time after
 the party to pull a purple lever, and final, the time to fill the purple bar)
 the band holds only the time left before the state's `after`; under the alarm,
 that time sits in the middle of its top line.

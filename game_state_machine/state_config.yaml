@@ -118,12 +118,12 @@ params:
     min: 2
     max: 5
   party_time:
-    value: 10s
+    value: 60s
     min: 5s
-    max: 30s
+    max: 2m
     note: how long the celebration lasts before Janis threatens and the diorama opens
   first_lever_time:
-    value: 60s
+    value: 80s
     min: 15s
     max: 2m
     note: after the party, how long the players have to pull their first purple lever (a countdown on the Overlord) before it goes back to passive
@@ -319,7 +319,7 @@ messages:
     text: "Thanks for playing!"
     seconds: 29
 
-# Flow: passive -> easy_round -> medium_round -> hard_round -> party (10 s) -> final_wait (60 s) -> passive;
+# Flow: passive -> easy_round -> medium_round -> hard_round -> party (60 s) -> final_wait (80 s) -> passive;
 #       the first purple pull in final_wait -> final (3 m) -> victory2 -> passive (or final times out -> kickout -> passive).
 #       The diorama is always unlocked with its light on (paradise only in victory2).
 #
@@ -530,7 +530,7 @@ states:
       goto: final_wait
 
   # The party is over: Janis threatens and the network loop takes over.
-  # "Don't look in there" every 5 s; the Overlord counts down the 60 s the
+  # "Don't look in there" every 5 s; the Overlord counts down the 80 s the
   # players have to pull a purple lever. The first purple pull starts final;
   # none, and it is back to passive.
   final_wait:
