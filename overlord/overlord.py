@@ -731,7 +731,7 @@ def main():
     if args.control_port:
         try:
             api = ControlServer(control, args.control_bind, args.control_port, firmware=firmware_updater, installation=installation,
-                            sessions=sessions, gains=gains, waves=wave_cache_waves,
+                            sessions=sessions, gains=gains, waves=wave_cache_waves, playlog=playlog,
                             game_file=args.game or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "game_state_machine", "state_config.yaml"))
             api.start()
             print(f"control: http://{api.address[0]}:{api.address[1]}/status", flush=True)

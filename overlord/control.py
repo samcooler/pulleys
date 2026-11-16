@@ -31,7 +31,7 @@ def check_game_yaml(text):
 
 
 class ControlServer:
-    def __init__(self, handle, host="127.0.0.1", port=8080, firmware=None, installation=None, sessions=None, gains=None, waves=None, game_file=None):
+    def __init__(self, handle, host="127.0.0.1", port=8080, firmware=None, installation=None, sessions=None, gains=None, waves=None, game_file=None, playlog=None):
         class Handler(BaseHTTPRequestHandler):
             def _body(self, limit, binary=False):
                 if self.headers.get("Transfer-Encoding"):
@@ -168,6 +168,9 @@ class ControlServer:
                               ("gain.js",): ("gain.js", "application/javascript"),
                               ("sessions",): ("sessions.html", "text/html"),
                               ("sessions.js",): ("sessions.js", "application/javascript"),
+                              ("play",): ("play.html", "text/html"),
+                              ("play.js",): ("play.js", "application/javascript"),
+                              ("play.css",): ("play.css", "text/css"),
                               ("installation_status.js",): ("installation_status.js", "application/javascript"),
                               ("installation",): ("installation.html", "text/html"),
                               ("installation.js",): ("installation.js", "application/javascript"),
@@ -195,6 +198,13 @@ class ControlServer:
                         else:
                             query = parse_qs(urlsplit(self.path).query)
                             status, body = 200, sessions.snapshot(int(query.get("limit", [200])[0]))
+                    elif parts == ["api", "playlog"] and self.command == "GET":
+                        if playlog is None:
+                            status, body = 503, {"error": "the play log is off (--no-playlog)"}
+                        else:
+                            query = parse_qs(urlsplit(self.path).query)
+                            status, body = 200, playlog.since(int(query.get("after", [0])[0]),
+                                                              min(2000, int(query.get("limit", [500])[0])))
                     elif parts == ["api", "gain", "waves"] and self.command == "GET":
                         if waves is None:
                             status, body = 503, {"error": "waveforms unavailable"}

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synchronized Leverage · Play log</title><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/play.css"><script src="/play.js" defer></script></head>
+<body>
+<header class="topbar"><a class="brand" href="/" aria-label="Synchronized Leverage Control Panel">Synchronized Leverage <span class="star">*</span> <span class="sub">Control Panel</span></a><nav aria-label="Main navigation"><a href="/">Firmware</a><a href="/installation">Installation</a><a href="/sessions">Sessions</a><a href="/play" aria-current="page">Play log</a><a href="/gain">Gain</a></nav><span id="connection" class="connection"><span class="dot"></span> Connecting</span></header>
+<main>
+<section class="panel play-now" aria-label="Now">
+  <div class="now-state"><p class="eyebrow">STATE</p><strong id="now-state">—</strong><small id="now-since">—</small></div>
+  <div class="now-goals"><p class="eyebrow">GOALS</p><div id="now-goals" class="chips">—</div></div>
+  <div class="now-pulls"><p class="eyebrow">PULLS · LAST MINUTE</p><div id="now-bars" class="bars"></div></div>
+</section>
+<section class="panel play-log-panel">
+  <div class="toolbar play-toolbar">
+    <label>Show</label>
+    <label class="tog"><input type="checkbox" data-kind="state" checked> States</label>
+    <label class="tog"><input type="checkbox" data-kind="pull" checked> Pulls</label>
+    <label class="tog"><input type="checkbox" data-kind="cue" checked> Cues</label>
+    <label class="tog"><input type="checkbox" data-kind="lever" > Lever sounds</label>
+    <label class="tog"><input type="checkbox" data-kind="other" checked> Goals, inputs, counters</label>
+    <span class="spacer"></span>
+    <button id="follow" class="button small primary" type="button">Following</button>
+  </div>
+  <div id="log" class="play-log" role="log" aria-live="off"><div class="empty">Loading…</div></div>
+</section>
+</main>
+</body></html>

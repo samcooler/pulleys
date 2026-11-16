@@ -36,11 +36,13 @@ import json
 import os
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 COLORS = ("red", "blue", "green", "yellow", "orange", "purple")
 PURPLE = 5
 CHANNELS = 32
+RECENT_MAX = 3000   # records the live view can scroll back through
 
 
 def default_dir():
@@ -66,6 +68,35 @@ class PlayLog:
         self._file = None
         self._day = None
         self._warned = False
+        # The newest records, numbered, for the web GUI's live view (since()).
+        self.recent = deque(maxlen=RECENT_MAX)
+        self.seq = 0
+        self._preload()
+
+    def _preload(self):
+        """Today's records so far, so the live view has history after a restart."""
+        path = self.dir / f"play-{time.strftime('%Y-%m-%d', time.localtime(self.clock()))}.jsonl"
+        try:
+            with open(path) as f:
+                tail = deque(f, maxlen=RECENT_MAX)
+        except OSError:
+            return
+        for line in tail:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            self.seq += 1
+            self.recent.append((self.seq, rec))
+
+    def since(self, after=0, limit=500):
+        """Records numbered after `after`, oldest first, at most `limit` (the
+        newest of them). `seq` is the number to ask after next time."""
+        with self.lock:
+            items = [(n, r) for n, r in self.recent if n > after]
+            seq = self.seq
+        items = items[-limit:]
+        return {"seq": seq, "now": self.clock(), "records": [{**r, "n": n} for n, r in items]}
 
     def listen(self, fn):
         """fn(record) for every record, after it is written."""
@@ -180,6 +211,8 @@ class PlayLog:
                 if not self._warned:
                     print(f"playlog: cannot write to {self.dir}: {e}", flush=True)
                     self._warned = True
+            self.seq += 1
+            self.recent.append((self.seq, rec))
         for fn in self.listeners:
             try:
                 fn(rec)

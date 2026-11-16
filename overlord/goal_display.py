@@ -17,10 +17,10 @@ And big words in the middle of the screen when the game moves:
   EXTRACTION SPEED INCREASED
                2 s, when a round is won (the game moves on to the next round)
   TIME'S UP    2 s, when a round runs out and the game goes back to the start
-  MAXIMUM EXTRACTION ACHIEVED
+  MAXIMUM EXTRACTION ACHIEVED / PARTY! / CELEBRATE YOUR PROGRESS!
                all through a victory state (VICTORY_STATES: party, the three
-               rounds won): a full-screen card with falling confetti, the words
-               fading in once and holding. It waits while a clip plays (Janis's
+               rounds won): a full-screen card with falling confetti, the three
+               taking turns, 4 s each. It waits while a clip plays (Janis's
                congratulations first), so she is seen whenever she speaks.
 
 A state change clears whatever the last state left up. A banner shows only for
@@ -71,7 +71,10 @@ WRONG_FLASH_S = 1.5        # a stray pull's glow, brightest right after it
 BANNER_S = 2.0
 ROUND_WON = "EXTRACTION SPEED\\NINCREASED"
 CARD_FADE_S = 0.6
-CARD_WORDS = "MAXIMUM\\NEXTRACTION\\NACHIEVED"
+# The party card's words, in turn, each held CARD_WORD_S with a fade between.
+CARD_WORDS = ("MAXIMUM\\NEXTRACTION\\NACHIEVED", "PARTY!", "CELEBRATE YOUR\\NPROGRESS!")
+CARD_WORD_S = 4.0
+CARD_WORD_FADE_S = 0.35
 REFRESH_S = 1.0            # an overlay is sent again this often even unchanged, in case mpv lost it
 CLIP_MAX_S = 40.0
 DISRUPT_STATES = ("party", "final_wait", "final")
@@ -335,8 +338,9 @@ class GoalDisplay:
                 ass_banner(text, color, alpha, size)]
 
     def _card(self, now):
-        """The party card: a deep purple screen, the words in gold, confetti
-        falling over it. It fades in and holds."""
+        """The party card: a deep purple screen, confetti falling over it, and
+        the words in gold taking turns (CARD_WORDS), each for CARD_WORD_S. The
+        screen fades in once and holds; only the words fade between turns."""
         if not self._card_up(now):
             self.card_t0 = None
             return []
@@ -348,11 +352,15 @@ class GoalDisplay:
             return []
         a = f"{int((1 - fade) * 255):02X}"
         lines = [ass_rect(0, 0, RES_X, RES_Y, "1E0B3A", alpha=f"{max(0x18, int((1 - fade) * 255)):02X}")]
+        turn, tt = divmod(t, CARD_WORD_S)
+        word = CARD_WORDS[int(turn) % len(CARD_WORDS)]
+        wfade = min(fade, tt / CARD_WORD_FADE_S, (CARD_WORD_S - tt) / CARD_WORD_FADE_S, 1.0)
+        wa = f"{int((1 - max(0.0, wfade)) * 255):02X}"
         # A slow throb on the word, so it feels alive rather than printed.
         scale = 100 + 6 * math.sin(t * 4)
         lines.append(f"{{\\an5\\pos({RES_X // 2},{RES_Y // 2})\\fs190\\b1\\bord10\\shad8"
                      f"\\fscx{scale:.0f}\\fscy{scale:.0f}\\1c{ass_color('FFD60A')}\\3c{ass_color('7A3E00')}"
-                     f"\\4c&H000000&\\1a&H{a}&\\3a&H{a}&\\4a&H80&}}{CARD_WORDS}")
+                     f"\\4c&H000000&\\1a&H{wa}&\\3a&H{wa}&\\4a&H80&}}{word}")
         for x0, y0, speed, sway, freq, phase, color, spin, shape in self.confetti:
             y = (y0 + speed * t) % (RES_Y + 120) - 60
             x = x0 + sway * math.sin(freq * t + phase)
