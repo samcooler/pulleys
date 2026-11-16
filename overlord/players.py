@@ -24,6 +24,7 @@ in media/<player>/<folder>/ first, then media/<folder>/, so a file meant for one
 Pi can sit apart from everyone else's, and a shared one can be used by all.
 """
 
+import os
 import random
 import re
 import signal
@@ -32,6 +33,7 @@ import time
 from pathlib import Path
 
 from mpv_ipc import Mpv, MpvError, SoundPlayer
+import pi_control
 
 PRIMARY = "overlord"
 TARGET_SEP = "__"
@@ -202,9 +204,16 @@ class Satellite:
     def on_line(self, line):
         """A line from the bridge. Only cues matter here: sensor events are the
         arbiter's to turn into a game, and FW- lines belong to the Overlord."""
+        if pi_control.handle(line, self.name, self.quit_app):
+            return
         parsed = parse_cue_line(line)
         if parsed:
             self.fire_cue(parsed[0])   # enter or not makes no difference to a satellite
+
+    def quit_app(self):
+        """End the process; systemd starts it again (pi_control: restart)."""
+        self.stop()
+        os._exit(0)
 
     def control(self, method, parts):
         """The REST API, the Overlord's routes that make sense here."""

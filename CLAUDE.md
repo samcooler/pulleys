@@ -29,6 +29,23 @@ is connected, and any running firmware job.
   sets how long the script waits for the app to answer.
 - Restarting interrupts any running firmware job. Check `--status` first.
 
+## Restarting a Pi over the mesh (Overlord off the network)
+
+When `overlord_restart.sh` cannot reach it, a bridge on this Mac's USB can ask
+over the mesh (any `bridge_esp32` with current firmware; opening the port reboots it):
+
+```sh
+~/.platformio/penv/bin/python tools/pi_control.py restart            # the Overlord's app
+~/.platformio/penv/bin/python tools/pi_control.py update             # git pull, then restart (needs its internet)
+~/.platformio/penv/bin/python tools/pi_control.py reboot             # the whole Pi
+~/.platformio/penv/bin/python tools/pi_control.py restart --target diorama   # a satellite; or all
+```
+
+Nothing answers back; check with `--status` once it is reachable. The Pi's own
+bridge must know `MESH_MSG_PI_CONTROL`, and `reboot` needs `deploy/install.sh`
+rerun once (it adds a sudoers rule for `systemctl reboot` only). The same bridge
+can flash over the mesh too: `tools/laptop_overlord.py`.
+
 ## Reaching the Overlord from Python on macOS
 
 macOS's Local Network privacy blocks non-Apple binaries from the local subnet and

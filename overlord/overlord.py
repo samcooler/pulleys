@@ -42,6 +42,7 @@ import time
 from pathlib import Path
 
 import keys
+import pi_control
 import players
 import settings
 from debug_menu import DebugMenu
@@ -598,6 +599,9 @@ def main():
         if not event_name:
             return
         if installation and installation.handle_line(event_name):
+            return
+        # "PI restart overlord" from the mesh: the way back in when we are off the network.
+        if pi_control.handle(event_name, args.player, lambda: video.command("quit")):
             return
         if firmware_updater and firmware_updater.handle_line(event_name):
             return

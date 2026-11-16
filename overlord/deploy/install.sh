@@ -142,6 +142,13 @@ done
 systemctl daemon-reload
 systemctl enable overlord-update.service overlord.service overlord-ap.service
 
+# "PI reboot <name>" from the mesh (overlord/pi_control.py): the app may reboot
+# the Pi, and nothing else, without a password.
+SUDOERS=/etc/sudoers.d/overlord-reboot
+echo "$USER_NAME ALL=(root) NOPASSWD: /usr/bin/systemctl reboot" > "$SUDOERS.tmp"
+chmod 0440 "$SUDOERS.tmp"
+if visudo -cf "$SUDOERS.tmp" >/dev/null; then mv "$SUDOERS.tmp" "$SUDOERS"; else rm -f "$SUDOERS.tmp"; echo "WARNING: reboot rule not installed"; fi
+
 echo
 if ! grep -q '^OVERLORD_MEDIA_REMOTE=.' /etc/overlord.env; then
     echo "Media sync is off. To turn it on, re-run deploy/bootstrap.sh (it walks you"

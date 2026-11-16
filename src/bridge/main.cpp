@@ -477,6 +477,19 @@ static void onGameInfo(const pulleys::MeshFlood& f, bool /*relayed*/) {
     iHead = next;
 }
 
+// MESH_MSG_PI_CONTROL from another bridge: "PI <action> <target>" to our Pi,
+// which decides whether it is the one named. One slot; these are rare.
+static char piControl[pulleys::MESH_FLOOD_MAX_BODY + 1];
+static volatile bool piControlFresh = false;
+static void onPiControl(const pulleys::MeshFlood& f, bool /*relayed*/) {
+    uint8_t n = f.len < 63 ? f.len : 63;
+    memcpy(piControl, f.body, n);
+    piControl[n] = 0;
+    for (uint8_t i = 0; i < n; i++)
+        if (piControl[i] == '\n' || piControl[i] == '\r') piControl[i] = ' ';
+    piControlFresh = true;
+}
+
 // The arbiter's MeshComponents (every component's charge), for the Overlord's
 // goal display. Only the latest matters, so one slot, overwritten, written out
 // at most every COMP_MIN_MS as
@@ -544,6 +557,11 @@ static void drainQueue() {
         iTail = (iTail + 1) % INFO_LEN;
     }
 
+
+    if (piControlFresh && PI_LINK.availableForWrite() >= 80) {
+        piControlFresh = false;
+        PI_LINK.printf("PI %s\n", piControl);
+    }
 
     while (cTail != cHead) {
         if (PI_LINK.availableForWrite() < 80) break;
@@ -646,6 +664,16 @@ static void handlePiLine(char* buf) {
         size_t n = strlen(body);
         if (n > 0 && n < 32)
             pulleys::mesh_send_flood(pulleys::MESH_MSG_GAME_STATE, body, (uint8_t)n, 2, 60);
+        return;
+    }
+    if (strncmp(buf, "PI-CONTROL ", 11) == 0) {
+        // "PI-CONTROL restart overlord": for the Pis on the other bridges
+        // (tools/pi_control.py). Three copies; the mesh dedupes them.
+        const char* body = buf + 11;
+        size_t n = strlen(body);
+        if (n > 0 && n < 64)
+            pulleys::mesh_send_flood(pulleys::MESH_MSG_PI_CONTROL, body, (uint8_t)n, 3, 120);
+        PI_LINK.printf("PI-CONTROL sent: %s\n", body);
         return;
     }
     if (strncmp(buf, "FW-BENCH ", 9) == 0) { benchmarkFirmware(buf + 9); return; }
@@ -817,6 +845,7 @@ void setup() {
     pulleys::mesh_on_flood(pulleys::MESH_MSG_GAME_INFO, onGameInfo);
     pulleys::mesh_on_components(onComponents);
     pulleys::mesh_on_flood(pulleys::MESH_MSG_INSTALL_RES, onInstallation);
+    pulleys::mesh_on_flood(pulleys::MESH_MSG_PI_CONTROL, onPiControl);
 
     pulleys::census_set_detail(BRIDGE_PI_USB ? "usb" : "uart1");
     pulleys::whoami_reply();

@@ -71,6 +71,11 @@ enum : uint8_t {
     // bridge: the arbiter moves the game to that state at once, as if a
     // transition had led there. Ignored if the loaded game has no such state.
     MESH_MSG_GAME_STATE   = 0xA7,   // bridge (from its Pi): force a game state
+    // Body: ASCII "<action> <target>": restart | update | reboot, and a Pi's
+    // player name (overlord, diorama, ...) or "all". Every bridge hands it to
+    // its Pi as "PI <body>"; the Pi it names acts on it (overlord/pi_control.py).
+    // The way to restart a Pi that is off the network but still on the mesh.
+    MESH_MSG_PI_CONTROL   = 0xA8,   // bridge (from a Pi): restart/update/reboot a Pi
 };
 
 // Clock sync: every node beacons its own mesh clock, and each listener pulls a

@@ -21,6 +21,14 @@ Startup updates remain enabled; manual and API updates share the same queue.
 Local firmware uploads use the release manifest format. See
 [FIRMWARE_API.md](FIRMWARE_API.md) for selective upload/update scripts and API examples.
 
+## Restart over the mesh
+
+Off the network but on the mesh, a Pi can still be restarted: a bridge on a
+laptop sends `tools/pi_control.py restart|update|reboot [--target NAME|all]`,
+every bridge passes it to its Pi as `PI <action> <target>`, and the Pi named acts
+on it (`pi_control.py`). `reboot` relies on the sudoers rule `deploy/install.sh`
+installs (`systemctl reboot` only, no password).
+
 ## Fallback Wi-Fi AP (no phone hotspot)
 
 If the Wi-Fi has joined no network 20 s after boot (`OVERLORD_AP_WAIT` in
