@@ -364,7 +364,7 @@ states:
     on:
       enter:
         set:                          # the game is back at its start
-          diorama.lights: creepy
+          diorama.lights: dark
           diorama.latch: locked
           party.lights: dark
           queue.sign: enter           # nobody inside: let the next group in
@@ -641,7 +641,7 @@ states:
     on:
       enter:
         set:
-          diorama.lights: creepy
+          diorama.lights: dark
           diorama.latch: locked
           party.lights: dark
         cue:
