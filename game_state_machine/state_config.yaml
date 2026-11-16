@@ -74,10 +74,10 @@ params:
     max: 60
     note: percent of full charge one pull adds
   final_charge_per_pull:
-    value: 25
-    min: 10
+    value: 12.5
+    min: 5
     max: 60
-    note: percent of the shared purple pool one purple pull adds, on any purple lever; 25 = four purple pulls (within the decay) wins
+    note: percent of the shared purple pool one purple pull adds, on any purple lever; 12.5 = eight purple pulls (within the decay) wins
   decay_rate:
     value: 6.6667
     min: 3
@@ -315,9 +315,18 @@ cues:
     - video_loop_network_idle       # 5 s, in final
   text_show:                        # a message from `messages:`, shown over the Overlord's video
     - text_show_afterword
+    - text_show_pump
+    - text_show_purple_inactive
 
 # MESSAGES: text for text_show_<name> cues. Overlord only. seconds = how long it stays.
 messages:
+  purple_inactive:                  # a purple pull in a round (round_on final_pull)
+    text: 'PURPLE LEVERS ARE INACTIVE\NDURING PRIMARY EXTRACTION PHASE'   # \N: a line break on screen
+    seconds: 4
+    cooldown: 10                    # at most once every 10 s, however often purple is pulled
+  pump:                             # every 30 s while a game is on (round_every, final_wait, final)
+    text: "PUMP THE LEVERS UP AND DOWN"
+    seconds: 4
   afterword:                        # over the end of the jailbreak video and into the idle loop
     text: "Thanks for playing!"
     seconds: 29
@@ -340,7 +349,7 @@ shared:
     nongoal_green_pull:  { cue: [audio_once_lever_green_error] }
     nongoal_yellow_pull: { cue: [audio_once_lever_yellow_error] }
     nongoal_orange_pull: { cue: [audio_once_lever_orange_error] }
-    final_pull:          { cue: [audio_once_lever_purple_error] }
+    final_pull:          { cue: [audio_once_lever_purple_error, text_show_purple_inactive] }
     # Janis's patience: each non-goal pull is a strike, each goal pull forgives one.
     nongoal_pull:
       add: { stray: 1 }
@@ -361,6 +370,9 @@ shared:
       if: no_goal_charge
       cue:
         - video_once_janis_nag_maintain_*
+    - delay: 30s                      # how to play, for the ones still wondering
+      cue:
+        - text_show_pump
 
 # Janis: encourages correct goals, nags when idle, warn/beg/anger at purple by round;
 # final = threats idle, panic at purple, ignores majors. Placeholder = timing not final.
@@ -564,9 +576,12 @@ states:
       all_final_components_activated:
         goto: victory2
     every:
-      delay: 25s                    # dropped while another clip is playing
-      cue:
-        - video_once_janis_warn_dont_look   # Don't look in there.
+      - delay: 25s                  # dropped while another clip is playing
+        cue:
+          - video_once_janis_warn_dont_look   # Don't look in there.
+      - delay: 30s
+        cue:
+          - text_show_pump
     after:
       delay: $first_lever_time
       goto: passive                 # passive's enter stops the screams
@@ -602,6 +617,10 @@ states:
               - video_once_janis_anger_no_2
       all_final_components_activated:
         goto: victory2
+    every:
+      - delay: 30s
+        cue:
+          - text_show_pump
     idle:
       delay: 20s                    # placeholder
       cue:

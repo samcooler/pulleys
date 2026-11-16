@@ -189,11 +189,13 @@ def validate(cfg):
         errors.append("messages: must be a map of name: {text, seconds}")
         messages = {}
     for name, msg in messages.items():
-        if (not isinstance(msg, dict) or set(msg) - {"text", "seconds"}
+        cooldown = msg.get("cooldown", 0) if isinstance(msg, dict) else 0
+        if (not isinstance(msg, dict) or set(msg) - {"text", "seconds", "cooldown"}
                 or not isinstance(msg.get("text"), str) or not msg["text"]
                 or isinstance(msg.get("seconds"), bool)
-                or not isinstance(msg.get("seconds"), (int, float)) or msg["seconds"] <= 0):
-            errors.append(f"messages.{name}: must be {{text: \"...\", seconds: N}}")
+                or not isinstance(msg.get("seconds"), (int, float)) or msg["seconds"] <= 0
+                or isinstance(cooldown, bool) or not isinstance(cooldown, (int, float)) or cooldown < 0):
+            errors.append(f"messages.{name}: must be {{text: \"...\", seconds: N}} (and optionally cooldown: N)")
     for group, cues in (cfg["cues"] or {}).items():
         for cue in cues or []:
             if (isinstance(cue, str) and cue.startswith("text_show_")

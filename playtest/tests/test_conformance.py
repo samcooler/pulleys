@@ -372,7 +372,7 @@ def sc_production(E):
     E.wait(5)                                    # still inside its 80 s countdown
     seen.append(E.state())
     for ch in (6, 12, 18):                       # every purple rope with a rope on it
-        burst(E, ch)
+        burst(E, ch, 9)                          # 9 x 12.5: each one full on its own
     seen.append(E.state())
     E.wait(40)                                   # the jailbreak and the thanks, then passive
     seen.append(E.state())

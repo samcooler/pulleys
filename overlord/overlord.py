@@ -385,6 +385,7 @@ def main():
 
     message_timer = [None]
     message_at = [None]   # when the message up now was shown, or None
+    message_last = {}     # message name -> when it was last shown (its cooldown)
 
     def show_message(name):
         """text_show_<name>: the game file's messages.<name> over the video for
@@ -393,6 +394,11 @@ def main():
         if not msg:
             print(f"no message {name!r} under messages in the game file", flush=True)
             return False
+        # `cooldown`: shown at most once in that many seconds, however often it is cued.
+        last = message_last.get(name)
+        if last is not None and time.monotonic() - last < float(msg.get("cooldown") or 0):
+            return "skipped"
+        message_last[name] = time.monotonic()
         from simulate import RES_X, RES_Y, ass_rect, ass_text
         lines = [ass_rect(0, RES_Y // 2 - 150, RES_X, 300, "000000", alpha="40"),
                  ass_text(RES_X // 2, RES_Y // 2, msg["text"], 72, align=5)]

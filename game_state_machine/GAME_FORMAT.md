@@ -469,5 +469,5 @@ bridge hands them to its Pi, which keeps them with every pull in the play log
 
 `messages:` (Overlord only, left out of the arbiter's JSON) names text for the
 Overlord to show over its video: `afterword: {text: "...", seconds: 30}`. The cue
-`text_show_afterword` (listed under `cues`) shows it for that many seconds. Every
+`text_show_afterword` (listed under `cues`) shows it for that many seconds. An optional `cooldown: N` shows it at most once in N seconds, however often it is cued. Every
 `text_show_<name>` cue needs a `messages.<name>`.
