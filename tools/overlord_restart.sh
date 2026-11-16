@@ -14,6 +14,9 @@
 #                                        with no internet (the Overlord on its own AP)
 #   tools/overlord_restart.sh --install  git pull, then rerun overlord/deploy/install.sh (apt, units,
 #                                        fallback AP); restarts the app, or says a reboot is needed
+#   tools/overlord_restart.sh --fetch    change nothing, copy its logs here, into field_logs/<time>/:
+#                                        the app's journal, and the play log folder (every pull,
+#                                        state and cue, plus the sessions)
 #   tools/overlord_restart.sh --media    change nothing, list the media files the Overlord has
 #   tools/overlord_restart.sh --logs     change nothing, print the app's recent log
 #                                        (OVERLORD_LOG_LINES, default 80)
@@ -45,7 +48,8 @@ case "${1:-}" in
     --push-install) mode="push-install" ;;
     --logs) mode="logs" ;;
     --media) mode="media" ;;
-    *) echo "usage: $0 [--update|--status|--push|--push-install|--install|--logs|--media]" >&2; exit 2 ;;
+    --fetch) mode="fetch" ;;
+    *) echo "usage: $0 [--update|--status|--push|--push-install|--install|--logs|--media|--fetch]" >&2; exit 2 ;;
 esac
 
 command -v sshpass >/dev/null || { echo "needs sshpass: brew install sshpass" >&2; exit 1; }
@@ -81,6 +85,18 @@ if [ "$rc" != 0 ]; then
     echo "($HOST did not answer; using $TARGET)"
 fi
 
+if [ "$mode" = "fetch" ]; then
+    repo="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+    out="$repo/field_logs/$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$out"
+    ssh_overlord "journalctl -u overlord --since '-2 days' --no-pager 2>&1 || sudo -S journalctl -u overlord --since '-2 days' --no-pager" <<<"$OVERLORD_PASSWORD" 2>&1 \
+        | grep -v '^\[sudo\]' > "$out/overlord_journal.txt"
+    ssh_overlord 'set -a; . /etc/overlord.env 2>/dev/null; set +a; d="${OVERLORD_PLAYLOG:-/var/lib/overlord/playlog}"; [ -d "$d" ] || d="$HOME/pulleys/overlord/playlog"; tar -czf - -C "$d" .' \
+        | tar -xzf - -C "$out" 2>/dev/null || echo "(no play log folder found)"
+    echo "logs saved to $out:"
+    ls -la "$out" | tail -n +2
+    exit 0
+fi
 if [ "$mode" = "media" ]; then
     ssh_overlord 'set -a; . /etc/overlord.env 2>/dev/null; set +a; d="${OVERLORD_MEDIA:-$HOME/pulleys/overlord/media}"; echo "media: $d"; cd "$d" && find . -type f | sort'
     exit 0

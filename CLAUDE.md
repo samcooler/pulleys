@@ -30,6 +30,14 @@ is connected, and any running firmware job.
   sets how long the script waits for the app to answer.
 - Restarting interrupts any running firmware job. Check `--status` first.
 
+## On the Overlord's own Wi-Fi: tools/onsite.sh
+
+At the venue the Overlord has no internet and hosts `overlord-ap`. Sam joins it and
+runs `tools/onsite.sh`: it fetches the logs into `field_logs/<time>/` (the app's
+journal and the play log folder; read these after every trip), deploys this
+working tree (`--push-install`), and flashes `ONSITE_IDS` through the Overlord.
+Keep `ONSITE_IDS` in the script current with the boards that need flashing.
+
 ## Restarting a Pi over the mesh (Overlord off the network)
 
 When `overlord_restart.sh` cannot reach it, a bridge on this Mac's USB can ask
