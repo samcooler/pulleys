@@ -211,9 +211,11 @@ SC_SIMON = (mini({
 
 
 def sc_pull_first(E):
-    E.pull(chan("red"))                          # starts the round; its charge lands after the reset
+    E.pull(chan("red"))                          # starts the round; spent on the reset, no charge
     seen = [E.state()]
-    burst(E, chan("red"), 5)
+    burst(E, chan("red"), 5)                     # 5 x 20, less the drain: not quite full
+    seen.append(E.state())
+    burst(E, chan("red"), 1)                     # had the first pull counted, this was lit already
     seen.append(E.state())
     return seen
 
@@ -222,7 +224,7 @@ SC_PULL_FIRST = (mini({
     "round": {"on": {"enter": {"cue": ["game_reset_components"]},
                      "nongoal_component_activated": {"goto": "lit"}}},
     "lit": {},
-}), sc_pull_first, ["round", "lit"])
+}), sc_pull_first, ["round", "round", "lit"])
 
 
 def sc_counters(E):
@@ -363,16 +365,16 @@ def sc_production(E):
             burst(E, chan(c), until_moved=True)
         seen.append(E.state())
     seen.append(E.marks())                       # the party shows no goals
-    E.wait(11)                                   # 10 s into the party the diorama opens
+    E.wait(11)                                   # 10 s of party, then the diorama opens
     E.take_cues()
     E.input("diorama.button_pressed")            # "free the spirits": refused
     seen.append(E.take_cues())
-    E.wait(50)                                   # the rest of the party, then the final
+    E.wait(5)                                    # still inside its 60 s countdown
     seen.append(E.state())
     for ch in (6, 12, 18):                       # every purple rope with a rope on it
         burst(E, ch)
     seen.append(E.state())
-    E.wait(121 + 121)                            # victory, kickout
+    E.wait(40)                                   # the jailbreak and the thanks, then passive
     seen.append(E.state())
     for _ in range(10):                          # the last goals still dealt: it must still start
         E.pull(chan("red"))
@@ -385,7 +387,7 @@ def sc_production(E):
 SC_PRODUCTION = (None, sc_production,
                  ["easy_round", True, "medium_round", "hard_round", "party", 0,
                   ["audio_once_spirits_denied", "video_once_janis_beg_button"],
-                  "final", "victory2", "passive", "easy_round"])
+                  "final_wait", "victory2", "passive", "easy_round"])
 
 SCENARIOS = {
     "charge": SC_CHARGE, "simon": SC_SIMON, "pull_first": SC_PULL_FIRST,

@@ -38,6 +38,7 @@ import re
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 
 import keys
@@ -71,6 +72,7 @@ def _has_media(root):
 if MEDIA != BUNDLED_MEDIA and not _has_media(MEDIA):
     print(f"no media in {MEDIA}; falling back to the bundled {BUNDLED_MEDIA}", flush=True)
     MEDIA = BUNDLED_MEDIA
+MESSAGE_GRACE_S = 3.0   # a message this new survives a state change (see on_state_record)
 CAPTION_ID = 12      # osd-overlay id for clip captions (goal band 8, messages 9, banners 11)
 CAPTION_MAX_S = 20
 DUCK_PREFIX = "janis"   # clips whose file starts so duck the loop and bed under them
@@ -380,6 +382,7 @@ def main():
         return []
 
     message_timer = [None]
+    message_at = [None]   # when the message up now was shown, or None
 
     def show_message(name):
         """text_show_<name>: the game file's messages.<name> over the video for
@@ -392,13 +395,31 @@ def main():
         lines = [ass_rect(0, RES_Y // 2 - 150, RES_X, 300, "000000", alpha="40"),
                  ass_text(RES_X // 2, RES_Y // 2, msg["text"], 72, align=5)]
         video.command("osd-overlay", 9, "ass-events", "\n".join(lines), RES_X, RES_Y, 20)
+        message_at[0] = time.monotonic()
         if message_timer[0]:
             message_timer[0].cancel()
-        message_timer[0] = threading.Timer(
-            msg["seconds"], lambda: video.command("osd-overlay", 9, "none", ""))
+        message_timer[0] = threading.Timer(msg["seconds"], clear_message)
         message_timer[0].daemon = True
         message_timer[0].start()
         return name
+
+    def clear_message():
+        if message_timer[0]:
+            message_timer[0].cancel()
+            message_timer[0] = None
+        message_at[0] = None
+        try:
+            video.command("osd-overlay", 9, "none", "")
+        except Exception as e:
+            print(f"message: clear failed: {e}", flush=True)
+
+    def on_state_record(rec):
+        """A new state takes down the last one's message. The cue that shows a
+        message comes from a state's entry, and may reach us just before the
+        state's own record does, so one only just shown is left up."""
+        if rec.get("kind") == "state" and message_at[0] is not None \
+                and time.monotonic() - message_at[0] > MESSAGE_GRACE_S:
+            clear_message()
 
     def dispatch(event_name, enter=False):
         """Play the cue. Returns what it played (the media file's name), None if
@@ -635,6 +656,9 @@ def main():
     if firmware_updater:
         from update_overlay import UpdateOverlay
         UpdateOverlay(video, firmware_updater.updating).start()
+
+    if playlog:
+        playlog.listen(on_state_record)
 
     # Goals over the video, for a game that wants them seen (show_goals: true).
     if playlog and game_cfg and game_cfg.get("show_goals"):

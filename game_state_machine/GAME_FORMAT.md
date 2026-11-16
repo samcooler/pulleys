@@ -399,8 +399,10 @@ leaving cancels it. `after` runs alongside and is unaffected.
   `nongoal_red_pull`, `nongoal_blue_pull`, `nongoal_green_pull`,
   `nongoal_yellow_pull` or `nongoal_orange_pull` (purple is `final_pull`), so a
   state can answer each colour its own way. Then the pull's charge goes in, where things stand after any
-  reaction -- so a `pull` that starts a round whose entry resets the
-  components lands its charge in the new round. A pull is activity for `idle`
+  reaction -- unless the reaction reset the components (`game_reset_components`,
+  say a `pull` that starts a round whose entry resets them): that pull is spent
+  on the move. Its later pull events (`nongoal_pull` after `pull`, say) are not
+  delivered, its charge does not go in, and the round starts from nothing. A pull is activity for `idle`
   even when it lights nothing.
 - `<counter>_reached` for a counter with a `reach` (see Counters).
 - Component events: `first_goal_component_activated` (a goal component lit

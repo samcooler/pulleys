@@ -85,6 +85,7 @@ class Engine:
         self.t = 0.0
         self.entered_at = 0.0
         self.enters = 0
+        self.resets = 0           # game_reset_components cues so far
         self._after = None      # (due, goto)
         self._idle = None       # (due, period)
         self._every = []        # [[due, period, block]] one per `every` entry
@@ -140,18 +141,22 @@ class Engine:
     def pull(self, ch):
         """A pull on rope channel `ch`, now. The pull events go first, so a
         state can react before the pull's charge goes in; then the charge, and
-        any activation it causes."""
+        any activation it causes. A pull whose reaction reset the components
+        (a round starting) is spent on that: its remaining pull events are not
+        delivered and its charge does not go in."""
         if ch < 0 or ch >= CHANNEL_COUNT or self.state is None:
             return
         cls = self.classify(ch)
         if cls is None:
             return
         color = COLORS[self.palette[ch]]
+        resets = self.resets
         self._emit("pull", ch=ch, color=color, cls=cls)
-        self._deliver("pull")
-        self._deliver(cls + "_pull")
-        if cls == "nongoal":
-            self._deliver(f"nongoal_{color}_pull")
+        names = ["pull", cls + "_pull"] + ([f"nongoal_{color}_pull"] if cls == "nongoal" else [])
+        for name in names:
+            self._deliver(name)
+            if self.resets != resets:   # spent: no more of its events, and no charge
+                return
 
         # A reaction may have recoloured the ropes or re-dealt the goals:
         # the charge goes where things stand now.
@@ -349,6 +354,7 @@ class Engine:
         if cue == "game_reset_components":
             for c in self.majors + self.finals:
                 c.charge, c.stamp, c.on = 0.0, self.t, False
+            self.resets += 1
             return False
         prefix, suffix = "game_randomize_simon_", "_goals"
         if cue.startswith(prefix) and cue.endswith(suffix):

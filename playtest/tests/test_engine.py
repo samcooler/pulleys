@@ -135,12 +135,26 @@ class ShippedGame(unittest.TestCase):
 
 
 class PullEvents(unittest.TestCase):
-    def test_pull_events_come_before_the_charge(self):
-        # A pull that starts the game lands its charge in the new round, after
-        # the round's reset -- not before it, where the reset would wipe it.
+    def test_a_pull_that_resets_the_components_is_spent(self):
+        # A pull that starts a round whose entry resets the components is used
+        # up by the move: the round starts from nothing.
         cfg = game({
             "idle": {"on": {"pull": {"goto": "round"}}},
             "round": {"on": {"enter": {"cue": ["game_reset_components"]}}},
+        })
+        e, _ = run(cfg)
+        e.pull(RED)
+        self.assertEqual(e.state, "round")
+        self.assertAlmostEqual(e.charge_of_channel(RED), 0.0)
+        e.pull(RED)
+        self.assertAlmostEqual(e.charge_of_channel(RED), 20.0)
+
+    def test_pull_events_come_before_the_charge(self):
+        # Without a reset, a pull that moves the game lands its charge in the
+        # new state, where things stand after the move.
+        cfg = game({
+            "idle": {"on": {"pull": {"goto": "round"}}},
+            "round": {},
         })
         e, _ = run(cfg)
         e.pull(RED)

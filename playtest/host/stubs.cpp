@@ -6,6 +6,7 @@
 #include "devices.h"
 #include "gamestate.h"
 #include "installcfg.h"
+#include "monitor.h"
 
 uint32_t g_millis = 0;
 static std::mt19937 s_rng(1);
@@ -65,6 +66,9 @@ bool devices_is_input(JsonDocument& doc, const char* name) {
 }
 void devices_load(JsonDocument&) {}
 void devices_set(const char* key, const char* value) { printf("set %s=%s\n", key, value); }
+
+// ── monitor.cpp: the arbiter's activity bars, nothing to draw here ─────────────
+void monitor_reset_activity() {}
 
 // ── installcfg.cpp: ropes on channels 1-20, the game's shuffle ───────────────
 static pulleys::MeshConfigRow s_rows[20];

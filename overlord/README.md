@@ -91,7 +91,7 @@ them, repeat that into `/var/lib/overlord/media`. Test it without the game:
 `curl -X POST http://<ip>:8080/cue/audio_once_spirit_distress`.
 
 It shows `images/idle.png` ("COMPLIANCE IS MANDATORY", 1920x1080) constantly and plays
-`audio_loop_spirit_distress` while the game is in `diorama_unlocked`. The idle audio loop
+`audio_loop_spirit_distress` from 5 s into `party` until `final` or `passive`. The idle audio loop
 was moved out of `audio_loops/` on purpose, since it would start at boot. It plays cues addressed `diorama__audio_once_<name>`; list `diorama` under
 `players:` in the game YAML. Its bridge is an ESP32-S3 on USB running
 `bridge_s3` (flashed from the Pi with `esptool` from a venv, `~/espenv`); without

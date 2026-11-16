@@ -37,6 +37,7 @@ struct Component {
 static Component s_major[MAJOR_COUNT];
 static Component s_final[pulleys::CHANNEL_COUNT];   // by channel; only purple ones are used
 static uint8_t s_goalMask = 0; // major component bitset; zero until the first Simon cue
+static uint32_t s_resets = 0;  // game_reset_components cues so far
 
 static void publish(bool urgent);
 
@@ -224,6 +225,7 @@ void components_reset() {
 bool components_on_cue(const char* cue) {
     if (cue && strcmp(cue, "game_reset_components") == 0) {
         resetAll();
+        s_resets++;
         monitor_reset_activity();   // each round's activity starts from zero
         publish(true);
         return false;
@@ -260,21 +262,28 @@ static bool pull(Component& c, uint32_t now, float amount) {
 void components_on_mesh_event(const pulleys::MeshEvent& ev) {
     if (!gamestate_ready() || ev.channel >= pulleys::CHANNEL_COUNT) return;
 
-    // The pull itself first, so a state can react before the charge goes in:
-    // a pull that starts a round lands its charge in the new round, after the
-    // round's reset rather than before it.
+    // The pull itself first, so a state can react before the charge goes in.
+    // A pull whose reaction reset the components (a round starting) is spent
+    // on that: the round starts from nothing, its charge does not go in.
+    // Its remaining pull events are not delivered either.
+    uint32_t resets = s_resets;
+    GameEvent events[3];
+    uint8_t n = 0;
+    events[n++] = GE_PULL;
     if (isFinalChannel(ev.channel)) {
-        gamestate_event(GE_PULL);
-        gamestate_event(GE_FINAL_PULL);
+        events[n++] = GE_FINAL_PULL;
     } else {
         int idx = gamestate_major_for_channel(ev.channel);
         if (idx < 0) return;
         bool goal = (s_goalMask & (1u << idx)) != 0;
-        gamestate_event(GE_PULL);
-        gamestate_event(goal ? GE_GOAL_PULL : GE_NONGOAL_PULL);
+        events[n++] = goal ? GE_GOAL_PULL : GE_NONGOAL_PULL;
         uint8_t color = gamestate_major_color((uint8_t)idx);
         if (!goal && color < GAME_MAJOR_COMPONENTS)   // game1 colours are 0-4, in event order
-            gamestate_event((GameEvent)(GE_NONGOAL_RED_PULL + color));
+            events[n++] = (GameEvent)(GE_NONGOAL_RED_PULL + color);
+    }
+    for (uint8_t i = 0; i < n; i++) {
+        gamestate_event(events[i]);
+        if (s_resets != resets) return;   // spent on the move
     }
 
     // Then the charge, where things stand now: a reaction may have recoloured

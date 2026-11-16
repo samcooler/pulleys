@@ -48,8 +48,8 @@ components:
 devices:
   diorama:                          # its tubes, door latch, door switch, and the button inside
     set:
-      lights: [dark, creepy, paradise]   # paradise: slow rainbow fades, for the spirits freed
-      latch: [locked, open]
+      lights: [creepy, dark, paradise]   # creepy all the time; paradise: slow rainbow fades, for the spirits freed
+      latch: [open, locked]              # always open: the diorama is never locked
     emits: [door_opened, door_closed, button_pressed]
   party:                            # the four AC light switches
     set:
@@ -118,19 +118,20 @@ params:
     min: 2
     max: 5
   party_time:
+    value: 10s
+    min: 5s
+    max: 30s
+    note: how long the celebration lasts before Janis threatens and the diorama opens
+  first_lever_time:
     value: 60s
-    min: 30s
-    max: 90s
-  diorama_time:
+    min: 15s
+    max: 2m
+    note: after the party, how long the players have to pull their first purple lever (a countdown on the Overlord) before it goes back to passive
+  final_time:
     value: 3m
     min: 1m
-    max: 10m
-    note: how long the spirits scream (diorama_unlocked) before giving up and going back to passive, for groups who think the party was the win
-  final_time:
-    value: 2m
-    min: 1m
-    max: 3m
-    note: how long the purple phase lasts before the kickout
+    max: 5m
+    note: how long the players have in final (a countdown on the Overlord) to fill the purple bar, before the kickout
 
 # Whole numbers the states keep. One with a reach sends <name>_reached at that count.
 counters:
@@ -314,14 +315,16 @@ cues:
 
 # MESSAGES: text for text_show_<name> cues. Overlord only. seconds = how long it stays.
 messages:
-  afterword:
+  afterword:                        # over the end of the jailbreak video and into the idle loop
     text: "Thanks for playing, please relatch the diorama on your way out!"
-    seconds: 30
+    seconds: 29
 
-# Flow: passive -> easy_round -> medium_round -> hard_round -> party -> diorama_unlocked -> final -> victory2 -> kickout -> passive
+# Flow: passive -> easy_round -> medium_round -> hard_round -> party (10 s) -> final_wait (60 s) -> passive;
+#       the first purple pull in final_wait -> final (3 m) -> victory2 -> passive (or final times out -> kickout -> passive).
+#       The diorama is always unlocked with its light on (paradise only in victory2).
 #
-# Story: ropes are levers extracting spirit souls for Janis. Party opens the diorama at
-# 10 s; its "free the spirits" button is fake (purple flash, bad noise, Janis disables it).
+# Story: ropes are levers extracting spirit souls for Janis. The diorama is always open;
+# its "free the spirits" button is fake (purple flash, bad noise, Janis disables it).
 # Real way out: light all purple ropes in the final.
 # Fragments the three rounds share (YAML anchors: `<<: *round_on` merges a map in).
 # The arbiter never sees this section; the anchors are already resolved in its JSON.
@@ -364,23 +367,18 @@ states:
     on:
       enter:
         set:                          # the game is back at its start
-          diorama.lights: dark
-          diorama.latch: locked
+          diorama.lights: creepy      # back from victory2's paradise; on all the time
           party.lights: dark
           queue.sign: enter           # nobody inside: let the next group in
         cue:
-          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
-          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
+          - diorama__audio_loop_off   # the spirits' distress stops, however we got here
           - game_reset_components     # the round's lit components go dark
           - audio_loop_idle
           - audio_bed_clock_ambient   # stays on until victory2
           - video_loop_idle
-      # First pull starts the game (not purple); its charge lands in easy_round. No powerup sound.
-      goal_pull:
-        cue:
-          - video_once_janis_encouragement_*
-        goto: easy_round
-      nongoal_pull:
+      # The first time any lever moves (purple too), round 1 starts. That pull is
+      # spent starting it: easy_round's reset means every component begins empty.
+      pull:
         cue:
           - video_once_janis_encouragement_*
         goto: easy_round
@@ -393,7 +391,7 @@ states:
         set: { queue.sign: wait }     # a group is in; it stays wait until passive
         goals: $easy_goals            # deal this many goal colours
         cue:
-          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
+          - diorama__audio_loop_off   # the spirits' distress stops, however we got here
           - game_reset_components
           - video_loop_game1
       goal_component_activated:
@@ -424,7 +422,7 @@ states:
         clear: [stray]
         goals: $medium_goals
         cue:
-          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
+          - diorama__audio_loop_off   # the spirits' distress stops, however we got here
           - game_reset_components
           - audio_once_level_up
           - video_loop_game1
@@ -461,7 +459,7 @@ states:
         clear: [stray]
         goals: $hard_goals
         cue:
-          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
+          - diorama__audio_loop_off   # the spirits' distress stops, however we got here
           - game_reset_components
           - audio_once_level_up
           - video_loop_game1
@@ -491,14 +489,15 @@ states:
       delay: $round_time
       goto: passive
 
-  # Celebration; enter cues cut each other off, so chatter comes from idle.
+  # Celebration: the fanfare and Janis's congratulations, under the Overlord's
+  # MAXIMUM EXTRACTION ACHIEVED card, then she turns (final_wait).
   party:
     on:
       enter:
         set:
           party.lights: lit
         cue:
-          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
+          - diorama__audio_loop_off   # the spirits' distress stops, however we got here
           - audio_once_victory_fanfare
           - choose_one:
               - video_once_janis_progress_confirmation_congrats_1
@@ -513,7 +512,7 @@ states:
         cue:
           - audio_once_spirits_denied
           - video_once_janis_beg_button   # That button has been disabled. Now get back to work.
-      # Purple is the one goal from here to victory (party, diorama_unlocked,
+      # Purple is the one goal from here to victory (party, final_wait,
       # final): its charge carries across all three, and lighting every purple
       # channel wins from any of them. The Overlord shows it as the machine's
       # alarm: PURPLE ACTIVITY DISRUPTS EXTRACTION, and an EXTRACTION FAILING bar.
@@ -526,26 +525,20 @@ states:
       5s:                           # the spirits start screaming 5 s into the celebration
         cue:
           - diorama__audio_loop_spirit_distress
-      10s:                          # the diorama comes on 10 s into the celebration
-        set:
-          diorama.lights: creepy
-          diorama.latch: open
-    idle:
-      delay: 12s                    # placeholder
-      cue:
-        - choose_one:
-            - video_once_janis_progress_confirmation_celebration_1
-            - video_once_janis_progress_confirmation_celebration_2
-            - video_once_janis_progress_confirmation_pizza_1
-            - video_once_janis_progress_confirmation_pizza_2
     after:
       delay: $party_time
-      goto: diorama_unlocked
+      goto: final_wait
 
-  # The diorama is open and the spirits cry out (overlord2, started 5 s into party)
-  # until someone pulls a purple rope.
-  diorama_unlocked:
+  # The party is over: Janis threatens and the network loop takes over.
+  # "Don't look in there" every 5 s; the Overlord counts down the 60 s the
+  # players have to pull a purple lever. The first purple pull starts final;
+  # none, and it is back to passive.
+  final_wait:
     on:
+      enter:
+        cue:
+          - video_once_janis_threatening_disciplinary_1   # an entry clip: it cuts off the congratulations
+          - video_loop_network_idle                       # takes over when her clip ends
       diorama.door_opened:
         cue:
           - choose_one:
@@ -559,12 +552,12 @@ states:
         goto: final
       all_final_components_activated:
         goto: victory2
-    idle:
-      delay: 12s                    # placeholder
+    every:
+      delay: 5s                     # dropped while another clip is playing
       cue:
-        - video_once_janis_threatening_*
+        - video_once_janis_warn_dont_look   # Don't look in there.
     after:
-      delay: $diorama_time          # nobody pulled purple: the group thought the party was the win
+      delay: $first_lever_time
       goto: passive                 # passive's enter stops the screams
 
 
@@ -578,7 +571,7 @@ states:
           - video_loop_network_idle
           - diorama__audio_loop_off   # the distress stops
           # no game_reset_components: the purple charge built in party and
-          # diorama_unlocked carries on toward the win
+          # final_wait carries on toward the win
           - video_once_janis_threatening_*
       final_component_activated:
         cue:
@@ -606,17 +599,19 @@ states:
       delay: $final_time
       goto: kickout
 
+  # The jailbreak video; 7 s in, the thanks-for-playing text comes up and stays
+  # over the rest of it and a few seconds of the idle loop, then back to passive.
   victory2:
     on:
       enter:
         set:
           diorama.lights: paradise    # the spirits have made it to paradise
-          diorama.latch: locked
           party.lights: lit
         cue:
-          - diorama__audio_loop_off   # leaving diorama_unlocked, however we got here: the distress stops
+          - diorama__audio_loop_off   # the spirits' distress stops, however we got here
           - audio_bed_off
           - video_once_puppet_escape_party
+          - video_loop_idle           # the happy idle loop, once the jailbreak video ends
     at:                            # sounds over the jailbreak video; tune to the picture
       4s:
         cue:
@@ -624,25 +619,15 @@ states:
       7s:
         cue:
           - audio_once_victory_liberation
+          - text_show_afterword       # up until passive (messages.afterword.seconds)
     after:
-      delay: 32s                   # the jailbreak video is 31 s
-      goto: afterword
-
-  afterword:
-    on:
-      enter:
-        cue:
-          - text_show_afterword
-    after:
-      delay: 30s
-      goto: kickout
+      delay: 36s                   # the jailbreak video is 31 s, then 5 s of the idle loop
+      goto: passive
 
   kickout:
     on:
       enter:
         set:
-          diorama.lights: dark
-          diorama.latch: locked
           party.lights: dark
         cue:
           - audio_loop_off

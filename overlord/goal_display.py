@@ -14,24 +14,31 @@ gets a band across the top of the video:
 
 And big words in the middle of the screen when the game moves:
 
-  SUCCESS!     2 s, when a round is won (it leaves for anything but the start)
+  EXTRACTION SPEED INCREASED
+               2 s, when a round is won (the game moves on to the next round)
   TIME'S UP    2 s, when a round runs out and the game goes back to the start
-  PARTY! / VICTORY!
+  MAXIMUM EXTRACTION ACHIEVED
                all through a victory state (VICTORY_STATES: party, the three
-               rounds won): a full-screen card with falling confetti that
-               pulses in and out, the word alternating each pulse. It waits
-               while a clip plays (Janis's congratulations first), so she is
-               seen whenever she speaks.
+               rounds won): a full-screen card with falling confetti, the words
+               fading in once and holding. It waits while a clip plays (Janis's
+               congratulations first), so she is seen whenever she speaks.
+
+A state change clears whatever the last state left up. A banner shows only for
+a round's own ending (won, or its time run out); a state forced by hand from
+the debug page gets none.
 
 From the third round's win to victory, purple is the one goal (DISRUPT_STATES:
-party, diorama_unlocked, final). The first purple pull there replaces all of
+party, final_wait, final). The first purple pull there replaces all of
 the above with the machine's alarm: a red band, EXTRACTION INTEGRITY ...
 FAILING, over a purple bar that drains toward zero as the shared purple pool
 fills (zero is the win), and PURPLE ACTIVITY DISRUPTS EXTRACTION flashing on every purple
 pull. Wrong, as far as the machine is concerned; right, as the bar shows.
 
 In the start state the band asks for a move instead ("MOVE ANY LEVER TO
-BEGIN").
+BEGIN"). In a countdown state (COUNTDOWN_STATES: final_wait, the minute after
+the party to pull a purple lever, and final, the time to fill the purple bar)
+the band holds only the time left before the state's `after`; under the alarm,
+that time sits in the middle of its top line.
 
 Goals and states come from the play log, so they work the same whether they
 come from the arbiter's telemetry or from overlord's own engine (--game). The
@@ -62,16 +69,17 @@ BLOCK_Y = (BAND_H - BLOCK_H) // 2
 WRONG = "FF3B30"
 WRONG_FLASH_S = 1.5        # a stray pull's glow, brightest right after it
 BANNER_S = 2.0
-CARD_CYCLE_S = 4.0         # one pulse: fade in, hold, fade out, a moment of video
+ROUND_WON = "EXTRACTION SPEED\\NINCREASED"
 CARD_FADE_S = 0.6
-CARD_GAP_S = 0.5           # the video between pulses
-CARD_WORDS = ("PARTY!", "VICTORY!")
+CARD_WORDS = "MAXIMUM\\NEXTRACTION\\NACHIEVED"
+REFRESH_S = 1.0            # an overlay is sent again this often even unchanged, in case mpv lost it
 CLIP_MAX_S = 40.0
-DISRUPT_STATES = ("party", "diorama_unlocked", "final")
+DISRUPT_STATES = ("party", "final_wait", "final")
 DISRUPT_FLASH_S = 1.8
 PURPLE = "BF5AF2"
 ALARM = "FF3B30"
 VICTORY_STATES = ("party",)
+COUNTDOWN_STATES = ("final_wait", "final")
 FPS = 8
 CARD_FPS = 20              # while the victory card's confetti falls
 CONFETTI_N = 110
@@ -85,8 +93,8 @@ def ass_box(x, y, w, h, color, bord, alpha="00", blur=0):
             f"m 0 0 l {w} 0 {w} {h} 0 {h}{{\\p0}}")
 
 
-def ass_banner(text, color, alpha="00"):
-    return (f"{{\\an5\\pos({RES_X // 2},{RES_Y // 2})\\fs190\\bord8\\shad4\\b1"
+def ass_banner(text, color, alpha="00", size=190):
+    return (f"{{\\an5\\pos({RES_X // 2},{RES_Y // 2})\\fs{size}\\bord8\\shad4\\b1"
             f"\\1c{ass_color(color)}\\3c&H000000&\\1a&H{alpha}&\\3a&H{alpha}&}}{text}")
 
 
@@ -103,13 +111,31 @@ class GoalDisplay:
         self.rounds = [s for s in states if s in gs and s != self.start]
         try:
             p = load_params(cfg)
-            v = p["round_time"].value if "round_time" in p else None
-            self.round_time = (float(v) if isinstance(v, (int, float)) else parse_duration(v)) if v is not None else None
         except (ValueError, KeyError, TypeError):
-            self.round_time = None
+            p = {}
+
+        def seconds(v):
+            if isinstance(v, str) and v.startswith("$"):
+                v = p[v[1:]].value if v[1:] in p else None
+            if v is None:
+                return None
+            try:
+                return float(v) if isinstance(v, (int, float)) else parse_duration(v)
+            except (ValueError, TypeError):
+                return None
+
+        self.round_time = seconds("$round_time")
+        # A countdown state's length: (param name or None, seconds).
+        self.countdown = {}
+        for name in COUNTDOWN_STATES:
+            delay = ((cfg["states"].get(name) or {}).get("after") or {}).get("delay")
+            if delay is not None:
+                param = delay[1:] if isinstance(delay, str) and delay.startswith("$") else None
+                self.countdown[name] = (param, seconds(delay))
         self.goals = []
         self.state = None
         self.entered = clock()
+        self.prev_entered = self.entered
         # From the bridge's CO lines: per component, its colour name, charge and when.
         self.charge = {}          # colour -> (percent, at)
         self.decay = 0.0          # percent per second
@@ -129,6 +155,7 @@ class GoalDisplay:
                           rnd.choice(CONFETTI_COLORS), rnd.uniform(-400, 400), rnd.choice((0, 1)))
                          for _ in range(CONFETTI_N)]
         self.shown = (None, None)
+        self.shown_at = [0.0, 0.0]
         threading.Thread(target=self._run, daemon=True, name="goal-display").start()
 
     # ── inputs ───────────────────────────────────────────────────────────────
@@ -141,7 +168,7 @@ class GoalDisplay:
             elif kind == "state":
                 prev = rec.get("prev") or self.state
                 self.state = rec["name"]
-                self.entered = now
+                self.prev_entered, self.entered = self.entered, now
                 self._on_state(prev, self.state, now)
             elif kind == "pull" and rec.get("cls") == "nongoal":
                 self.stray_at[rec["color"]] = now
@@ -150,17 +177,28 @@ class GoalDisplay:
                 self.purple_at = now
             elif kind == "param" and rec.get("name") == "round_time":
                 self.round_time = float(rec["value"])
+            elif kind == "param":
+                for name, (param, _) in self.countdown.items():
+                    if param == rec.get("name"):
+                        self.countdown[name] = (param, float(rec["value"]))
 
     def _on_state(self, prev, new, now):
-        if new not in DISRUPT_STATES:
+        # Whatever the last state had up goes: its banner, its alarm, its flashes.
+        # Only the alarm carries on, through the purple endgame's own states.
+        if new not in DISRUPT_STATES or prev not in DISRUPT_STATES:
             self.disrupted = False
-        if new in VICTORY_STATES:
-            self.banner = None
-        elif prev in self.rounds and new != prev:
-            if new == self.start:
-                self.banner = ("TIME'S UP", "FF9500", now + BANNER_S)
-            else:
-                self.banner = ("SUCCESS!", "34C759", now + BANNER_S)
+        self.banner = None
+        self.purple_at = -1e9
+        self.stray_at.clear()
+        self.card_t0 = None
+        if prev not in self.rounds or new == prev or new in VICTORY_STATES:
+            return
+        # Only a round's own ending gets a banner. A jump forced by hand is neither.
+        i = self.rounds.index(prev)
+        if i + 1 < len(self.rounds) and new == self.rounds[i + 1]:
+            self.banner = (ROUND_WON, "34C759", now + BANNER_S, 150)
+        elif new == self.start and self.round_time and now - self.prev_entered >= self.round_time - 2:
+            self.banner = ("TIME'S UP", "FF9500", now + BANNER_S, 190)
 
     def set_clip(self, playing):
         """overlord.py: a clip started (True) or ended (False)."""
@@ -213,9 +251,20 @@ class GoalDisplay:
         q, at = self.charge.get(name, (0, now))
         return max(0.0, q - self.decay * (now - at))
 
+    def _clock(self, left, color="FFFFFF"):
+        return ass_text(RES_X - 40, BAND_H // 2, f"{int(left) // 60}:{int(left) % 60:02d}", 70, color, align=6)
+
+    def _left(self, now):
+        """Seconds left in a countdown state, or None."""
+        _, total = self.countdown.get(self.state, (None, None))
+        return max(0, total - (now - self.entered)) if total else None
+
     def _band(self, now):
         state = self.state
-        if state not in self.goal_states:
+        left = self._left(now)
+        if left is not None:
+            return [ass_rect(0, 0, RES_X, BAND_H, "000000", alpha="50"), self._clock(left)]
+        if state not in self.goal_states and state != self.start:
             return []
         lines = [ass_rect(0, 0, RES_X, BAND_H, "000000", alpha="50")]
         if state == self.start or not self.goals:
@@ -260,47 +309,42 @@ class GoalDisplay:
         if self.round_time and state in self.rounds:
             left = max(0, self.round_time - (now - self.entered))
             urgent = left <= 20
-            lines.append(ass_text(RES_X - 40, BAND_H // 2, f"{int(left) // 60}:{int(left) % 60:02d}",
-                                  70, "FF3B30" if urgent else "FFFFFF", align=6))
+            lines.append(self._clock(left, "FF3B30" if urgent else "FFFFFF"))
         return lines
 
     def _banner(self, now):
         if not self.banner:
             return []
-        text, color, until = self.banner
+        text, color, until, size = self.banner
         if now >= until:
             self.banner = None
             return []
         # Fade out over the last half second.
         left = until - now
         alpha = "00" if left > 0.5 else f"{int((0.5 - left) / 0.5 * 255):02X}"
-        return [ass_rect(0, RES_Y // 2 - 150, RES_X, 300, "000000", alpha="60"),
-                ass_banner(text, color, alpha)]
+        h = 300 if "\\N" not in text else 440
+        return [ass_rect(0, RES_Y // 2 - h // 2, RES_X, h, "000000", alpha="60"),
+                ass_banner(text, color, alpha, size)]
 
     def _card(self, now):
-        """The party card: a deep purple screen, the word in gold, confetti
-        falling over it, pulsing in and out every CARD_CYCLE_S."""
+        """The party card: a deep purple screen, the words in gold, confetti
+        falling over it. It fades in and holds."""
         if not self._card_up(now):
             self.card_t0 = None
             return []
         if self.card_t0 is None:
             self.card_t0 = now
         t = now - self.card_t0
-        cycle, ct = divmod(t, CARD_CYCLE_S)
-        word = CARD_WORDS[int(cycle) % len(CARD_WORDS)]
-        show = CARD_CYCLE_S - CARD_GAP_S
-        fade = 0.0 if ct >= show else min(1.0, ct / CARD_FADE_S, (show - ct) / CARD_FADE_S)
+        fade = min(1.0, t / CARD_FADE_S)
         if fade <= 0:
             return []
         a = f"{int((1 - fade) * 255):02X}"
         lines = [ass_rect(0, 0, RES_X, RES_Y, "1E0B3A", alpha=f"{max(0x18, int((1 - fade) * 255)):02X}")]
         # A slow throb on the word, so it feels alive rather than printed.
         scale = 100 + 6 * math.sin(t * 4)
-        lines.append(f"{{\\an5\\pos({RES_X // 2},{RES_Y // 2 - 40})\\fs300\\b1\\bord12\\shad10"
+        lines.append(f"{{\\an5\\pos({RES_X // 2},{RES_Y // 2})\\fs190\\b1\\bord10\\shad8"
                      f"\\fscx{scale:.0f}\\fscy{scale:.0f}\\1c{ass_color('FFD60A')}\\3c{ass_color('7A3E00')}"
-                     f"\\4c&H000000&\\1a&H{a}&\\3a&H{a}&\\4a&H80&}}{word}")
-        lines.append(f"{{\\an5\\pos({RES_X // 2},{RES_Y // 2 + 190})\\fs80\\b1\\bord4\\shad0"
-                     f"\\1c&HFFFFFF&\\3c&H000000&\\1a&H{a}&\\3a&H{a}&}}PRODUCTIVITY ACHIEVED")
+                     f"\\4c&H000000&\\1a&H{a}&\\3a&H{a}&\\4a&H80&}}{CARD_WORDS}")
         for x0, y0, speed, sway, freq, phase, color, spin, shape in self.confetti:
             y = (y0 + speed * t) % (RES_Y + 120) - 60
             x = x0 + sway * math.sin(freq * t + phase)
@@ -335,6 +379,10 @@ class GoalDisplay:
         # where a percentage reads as a score that should climb.
         lines.append(ass_text(40, 18, "EXTRACTION INTEGRITY", 58))
         lines.append(ass_text(RES_X - 40, 18, "FAILING", 58, ALARM if blink else "FFFFFF", align=9))
+        time_left = self._left(now)
+        if time_left is not None:
+            lines.append(ass_text(RES_X // 2, 14, f"{int(time_left) // 60}:{int(time_left) % 60:02d}", 64,
+                                  ALARM if time_left <= 20 else "FFFFFF", align=8))
         x, y, w, h = 40, 92, RES_X - 80, 52
         lines.append(ass_rect(x, y, w, h, "000000", alpha="20"))
         if left > 0:
@@ -360,8 +408,10 @@ class GoalDisplay:
 
     def _show(self, oid, lines, index):
         text = "\n".join(lines)
-        if text == self.shown[index]:
+        now = self.clock()
+        if text == self.shown[index] and (not text or now - self.shown_at[index] < REFRESH_S):
             return
+        self.shown_at[index] = now
         if text:
             self.video.command("osd-overlay", oid, "ass-events", text, RES_X, RES_Y, 20 + index)
         else:
