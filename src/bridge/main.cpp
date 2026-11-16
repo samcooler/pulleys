@@ -782,11 +782,12 @@ static LineReader consoleIn;
 static LineReader piIn;
 #endif
 
-// The console -- and in USB mode the Pi too, on the same port: FW- and GAME-
-// lines are the Pi's, everything else a console command.
+// The console -- and in USB mode the Pi too, on the same port: FW-, GAME-,
+// INSTALL and PI-CONTROL lines are the Pi's, everything else a console command.
 static void handleSerial() {
     consoleIn.poll(Serial, [](char* line) {
-        if (PI_SHARES_CONSOLE && (strncmp(line, "FW-", 3) == 0 || strncmp(line, "GAME-", 5) == 0 || strncmp(line, "INSTALL ", 8) == 0))
+        if (PI_SHARES_CONSOLE && (strncmp(line, "FW-", 3) == 0 || strncmp(line, "GAME-", 5) == 0 ||
+                                  strncmp(line, "INSTALL ", 8) == 0 || strncmp(line, "PI-CONTROL ", 11) == 0))
             handlePiLine(line);
         else handleConsoleLine(line);
     });
