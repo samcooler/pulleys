@@ -27,7 +27,7 @@ ACTIONS = ("restart", "update", "reboot")
 SETTLE_S = 30.0
 REPO = Path(__file__).resolve().parent.parent
 
-_last = [0.0]
+_last = [None]   # when the last one was acted on; None = never
 
 
 def parse(line):
@@ -49,7 +49,7 @@ def handle(line, me, quit_app, clock=time.monotonic, run=subprocess.run):
         print(f"pi-control: {action} for {target}, not us ({me})", flush=True)
         return True
     now = clock()
-    if now - _last[0] < SETTLE_S:
+    if _last[0] is not None and now - _last[0] < SETTLE_S:
         print(f"pi-control: {action} ignored, one was just done", flush=True)
         return True
     _last[0] = now

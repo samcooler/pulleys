@@ -11,7 +11,7 @@ import pi_control  # noqa: E402
 
 class PiControl(unittest.TestCase):
     def setUp(self):
-        pi_control._last[0] = -1e9
+        pi_control._last[0] = None
         self.quits = []
         self.ran = []
         self.done = threading.Event()
@@ -58,6 +58,11 @@ class PiControl(unittest.TestCase):
         self.send("PI reboot overlord")
         self.assertTrue(self.done.wait(2))
         self.assertEqual(self.ran, [["sudo", "-n", "systemctl", "reboot"]])
+
+    def test_soon_after_boot_still_acts(self):
+        self.t = 5.0
+        self.send("PI restart overlord")
+        self.assertTrue(self.done.wait(2))
 
     def test_a_repeat_soon_after_is_ignored(self):
         self.send("PI restart overlord")
