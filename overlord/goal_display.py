@@ -298,25 +298,32 @@ class GoalDisplay:
         x += 260
         active = [c for c in COLORS[:5] if self._level(c, now) > 0.5]
         active.sort(key=lambda c: -self.last_rise.get(c, 0))
+        # Every active colour gets a block, sharing the room up to the clock:
+        # full size while they fit, narrower when they do not. None is hidden.
+        room = (RES_X - 220) - x
+        bw = BLOCK_W
+        if active and len(active) * BLOCK_W + (len(active) - 1) * GAP > room:
+            gap = min(GAP, 10)
+            bw = max(24, (room - (len(active) - 1) * gap) // len(active))
+        else:
+            gap = GAP
         for c in active:
-            if x + BLOCK_W > RES_X - 200:
-                break
             color = COLOR_RGB.get(c, "FFFFFF")
             if c not in self.goals:
                 since = now - self.stray_at.get(c, -1e9)
                 hot = since < WRONG_FLASH_S
                 pulse = (int(now * 4) % 2 == 0) if hot else False
                 # A soft red halo, and a hard red frame inside it: "not this one".
-                lines.append(ass_box(x, BLOCK_Y, BLOCK_W, BLOCK_H, WRONG,
+                lines.append(ass_box(x, BLOCK_Y, bw, BLOCK_H, WRONG,
                                      22 if hot else 14, "00" if hot and pulse else "20", blur=16))
             level = self._level(c, now)
             fill = int(BLOCK_H * min(level, 100) / 100)
-            lines.append(ass_rect(x, BLOCK_Y, BLOCK_W, BLOCK_H, "000000", alpha="30"))
+            lines.append(ass_rect(x, BLOCK_Y, bw, BLOCK_H, "000000", alpha="30"))
             if fill:
-                lines.append(ass_rect(x, BLOCK_Y + BLOCK_H - fill, BLOCK_W, fill, color))
-            lines.append(ass_box(x, BLOCK_Y, BLOCK_W, BLOCK_H, WRONG if c not in self.goals else color,
+                lines.append(ass_rect(x, BLOCK_Y + BLOCK_H - fill, bw, fill, color))
+            lines.append(ass_box(x, BLOCK_Y, bw, BLOCK_H, WRONG if c not in self.goals else color,
                                  6 if c not in self.goals else 4))
-            x += BLOCK_W + GAP
+            x += bw + gap
         if self.round_time and state in self.rounds:
             left = max(0, self.round_time - (now - self.entered))
             urgent = left <= 20
