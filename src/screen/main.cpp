@@ -1090,7 +1090,7 @@ static void renderDioramaParadise(uint32_t now, float fade) {
     }
 }
 
-static void renderDiorama(uint32_t now, float dt) {
+static void renderDioramaLights(uint32_t now, float dt) {
     fill_solid(leds, LED_COUNT, CRGB::Black);   // the gaps between fixtures
     if (dioramaPurple(now)) {
         pulleys::diorama_step(diorama, dt);      // the tubes keep their own time underneath
@@ -1121,6 +1121,24 @@ static void renderDiorama(uint32_t now, float dt) {
             return c;
         });
     }
+}
+
+// With the door shut, everything above at DIORAMA_SHUT_SCALE of its brightness
+// (a glow through the cracks); opening it brings the light up over
+// DIORAMA_DOOR_FADE_MS, and shutting it eases back down.
+#ifndef DIORAMA_SHUT_SCALE
+  #define DIORAMA_SHUT_SCALE 0.2f
+#endif
+#ifndef DIORAMA_DOOR_FADE_MS
+  #define DIORAMA_DOOR_FADE_MS 300
+#endif
+static void renderDiorama(uint32_t now, float dt) {
+    static float doorLevel = 1.0f;
+    float want = (doorOpen || dioramaBench) ? 1.0f : DIORAMA_SHUT_SCALE;
+    float step = dt * 1000.0f / DIORAMA_DOOR_FADE_MS;
+    doorLevel = doorLevel < want ? fminf(want, doorLevel + step) : fmaxf(want, doorLevel - step);
+    renderDioramaLights(now, dt);
+    if (doorLevel < 0.999f) nscale8_video(leds, DIORAMA_LEDS, (uint8_t)(doorLevel * 255.0f));
 }
 #endif
 
