@@ -190,7 +190,7 @@ def validate(cfg):
         messages = {}
     for name, msg in messages.items():
         cooldown = msg.get("cooldown", 0) if isinstance(msg, dict) else 0
-        if (not isinstance(msg, dict) or set(msg) - {"text", "seconds", "cooldown"}
+        if (not isinstance(msg, dict) or set(msg) - {"text", "seconds", "cooldown", "overlay"}
                 or not isinstance(msg.get("text"), str) or not msg["text"]
                 or isinstance(msg.get("seconds"), bool)
                 or not isinstance(msg.get("seconds"), (int, float)) or msg["seconds"] <= 0

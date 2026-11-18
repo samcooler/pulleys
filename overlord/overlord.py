@@ -400,8 +400,15 @@ def main():
             return "skipped"
         message_last[name] = time.monotonic()
         from simulate import RES_X, RES_Y, ass_rect, ass_text
-        lines = [ass_rect(0, RES_Y // 2 - 150, RES_X, 300, "000000", alpha="40"),
-                 ass_text(RES_X // 2, RES_Y // 2, msg["text"], 72, align=5)]
+        if msg.get("overlay"):
+            # Straight over the video, no band: heavy outline and shadow so it
+            # reads on any picture, in the upper third, clear of the goal band
+            # and the captions.
+            lines = [f"{{\\an5\\pos({RES_X // 2},{RES_Y * 3 // 10})\\fs84\\b1\\bord7\\shad5"
+                     f"\\1c&HFFFFFF&\\3c&H000000&\\4c&H000000&\\4a&H60&}}{msg['text']}"]
+        else:
+            lines = [ass_rect(0, RES_Y // 2 - 150, RES_X, 300, "000000", alpha="40"),
+                     ass_text(RES_X // 2, RES_Y // 2, msg["text"], 72, align=5)]
         video.command("osd-overlay", 9, "ass-events", "\n".join(lines), RES_X, RES_Y, 20)
         message_at[0] = time.monotonic()
         if message_timer[0]:

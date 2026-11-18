@@ -121,7 +121,7 @@ params:
     min: 2
     max: 5
   party_time:
-    value: 60s
+    value: 40s
     min: 5s
     max: 2m
     note: how long the celebration lasts before Janis threatens and the diorama opens
@@ -324,14 +324,16 @@ messages:
     text: 'PURPLE LEVERS ARE INACTIVE\NDURING PRIMARY EXTRACTION PHASE'   # \N: a line break on screen
     seconds: 4
     cooldown: 10                    # at most once every 10 s, however often purple is pulled
+    overlay: true                   # straight over the video, no band behind it
   pump:                             # every 30 s while a game is on (round_every, final_wait, final)
     text: "PUMP THE LEVERS UP AND DOWN"
     seconds: 4
+    overlay: true
   afterword:                        # over the end of the jailbreak video and into the idle loop
     text: "Thanks for playing!"
     seconds: 29
 
-# Flow: passive -> easy_round -> medium_round -> hard_round -> party (60 s) -> final_wait (80 s) -> passive;
+# Flow: passive -> easy_round -> medium_round -> hard_round -> party (40 s) -> final_wait (80 s) -> passive;
 #       the first purple pull in final_wait -> final (3 m) -> victory2 -> passive (or final times out -> kickout -> passive).
 #       The diorama is always unlocked with its light on (paradise only in victory2).
 #

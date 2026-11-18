@@ -365,7 +365,7 @@ def sc_production(E):
             burst(E, chan(c), until_moved=True)
         seen.append(E.state())
     seen.append(E.marks())                       # the party shows no goals
-    E.wait(61)                                   # 60 s of party, then final_wait
+    E.wait(41)                                   # 40 s of party, then final_wait
     E.take_cues()
     E.input("diorama.button_pressed")            # "free the spirits": refused
     seen.append(E.take_cues())
